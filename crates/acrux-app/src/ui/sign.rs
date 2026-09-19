@@ -40,6 +40,7 @@ use acrux_graphics::{FillRule, Rasterizer};
 
 use crate::platform::{Frame, Key};
 use crate::ui::input::{InputAction, TextInput};
+use crate::ui::lang::tr;
 use crate::ui::paint::{round_rect, round_rect_outline, shadow, veil};
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
@@ -268,9 +269,9 @@ impl Capture {
     #[must_use]
     pub fn title(&self) -> &'static str {
         if self.initials {
-            "Votre paraphe"
+            tr("Votre paraphe")
         } else {
-            "Votre signature"
+            tr("Votre signature")
         }
     }
 
@@ -490,9 +491,9 @@ impl Capture {
         let tab_h = (28.0 * dpi) as i32;
         let mut tx = x + pad;
         for (tab, label) in [
-            (Tab::Draw, "Tracer"),
-            (Tab::Type, "Taper"),
-            (Tab::Import, "Importer"),
+            (Tab::Draw, tr("Tracer")),
+            (Tab::Type, tr("Taper")),
+            (Tab::Import, tr("Importer")),
         ] {
             let w = (text.measure(size, label) + 24.0 * dpi) as i32;
             if tab == self.tab {
@@ -555,7 +556,10 @@ impl Capture {
         // Boutons du bas.
         let bh = (30.0 * dpi) as i32;
         let mut bx = x + width - pad;
-        for (label, button) in [("Appliquer", Button::Apply), ("Annuler", Button::Cancel)] {
+        for (label, button) in [
+            (tr("Appliquer"), Button::Apply),
+            (tr("Annuler"), Button::Cancel),
+        ] {
             let w = (text.measure(size, label) + 28.0 * dpi) as i32;
             bx -= w;
             let strong = button == Button::Apply;
@@ -587,9 +591,9 @@ impl Capture {
             this.buttons.push((lx, bottom, w, bh, button));
             lx += w + (8.0 * dpi) as i32;
         };
-        left_button("Effacer", Button::Clear, self);
+        left_button(tr("Effacer"), Button::Clear, self);
         if self.tab == Tab::Draw {
-            left_button("Annuler le trait", Button::Undo, self);
+            left_button(tr("Annuler le trait"), Button::Undo, self);
         }
     }
 
@@ -666,7 +670,7 @@ impl Capture {
         }
         cx += (8.0 * dpi) as i32;
         for nib in Nib::all() {
-            let label = nib.label();
+            let label = tr(nib.label());
             let w = (text.measure(size, label) + 18.0 * dpi) as i32;
             if cx + w > x + width {
                 break;
@@ -732,7 +736,7 @@ impl Capture {
                         (ax + (18.0 * dpi) as i32) as f32,
                         line as f32 + text.ascent(size) + 6.0 * dpi,
                         size,
-                        "Tracez votre signature ici — Ctrl+Z défait le dernier trait",
+                        tr("Tracez votre signature ici — Ctrl+Z défait le dernier trait"),
                         (0x9A, 0x9E, 0xA6),
                     );
                 } else {
@@ -757,13 +761,13 @@ impl Capture {
                     ax as f32,
                     (ay + field) as f32 + text.ascent(size) + 12.0 * dpi,
                     size,
-                    "Votre nom sera écrit dans une police manuscrite du système.",
+                    tr("Votre nom sera écrit dans une police manuscrite du système."),
                     theme.text_dim,
                 );
             }
             Tab::Import => {
                 let bh = (30.0 * dpi) as i32;
-                let label = "Choisir une image…";
+                let label = tr("Choisir une image…");
                 let w = (text.measure(size, label) + 28.0 * dpi) as i32;
                 round_rect(frame, ax, ay, w, bh, 9.0 * dpi, theme.hover);
                 text.draw(

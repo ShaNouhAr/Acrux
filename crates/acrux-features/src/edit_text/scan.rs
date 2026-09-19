@@ -138,6 +138,10 @@ pub(crate) struct Site {
     /// Le glyphe vient d'un XObject de formulaire : son flux à lui porte le
     /// texte, et c'est celui-là qu'il faudra réécrire.
     pub in_form: bool,
+    /// Balise de contenu marqué en vigueur (`/Acrux… BMC`), s'il y en a une.
+    /// C'est l'ancre qui permet de retrouver un bloc **écrit par nous**, quoi
+    /// qu'en dise l'extraction.
+    pub tag: Option<Name>,
     /// Le formulaire d'où il vient : sa référence et la matrice en vigueur au
     /// moment du `Do` (matrice `/Matrix` comprise). De quoi rouvrir ce flux
     /// **comme s'il était une page** et y retrouver les mêmes glyphes.
@@ -177,6 +181,9 @@ pub(crate) struct Scan {
     pub glyphs: Vec<Located>,
     /// Contenu concaténé de la page (ce que réécrit `rewrite_content`).
     pub content: Vec<u8>,
+    /// Ressources du flux balayé : celles de la page, ou celles du XObject.
+    /// C'est là qu'il faut chercher les polices citées par ce flux.
+    pub resources: Dict,
 }
 
 /// Dictionnaire d'une police de ressource.
@@ -208,6 +215,8 @@ struct Scanner<'a> {
     glyphs: Vec<Located>,
     count: usize,
     depth: usize,
+    /// Pile des balises de contenu marqué ouvertes.
+    tags: Vec<Name>,
 }
 
 impl Scanner<'_> {
@@ -242,6 +251,19 @@ impl Scanner<'_> {
             let nums: Vec<f64> = op.operands.iter().filter_map(Object::as_f64).collect();
             let n = |i: usize| nums.get(i).copied().unwrap_or(0.0);
             match op.operator.as_slice() {
+                b"BMC" | b"BDC" => {
+                    // Une balise à nous ouvre une ancre ; celles des autres
+                    // producteurs n'en sont pas moins empilées, pour que les
+                    // `EMC` se correspondent.
+                    let tag = match op.operands.first() {
+                        Some(Object::Name(n)) => Some(n.clone()),
+                        _ => None,
+                    };
+                    self.tags.push(tag.unwrap_or_else(|| Name::new("")));
+                }
+                b"EMC" => {
+                    self.tags.pop();
+                }
                 b"q" => stack.push(st.clone()),
                 b"Q" => {
                     if let Some(s) = stack.pop() {
@@ -395,6 +417,7 @@ impl Scanner<'_> {
                         end: offset + width,
                         tm_before: st.tm,
                         in_form: !top,
+                        tag: self.tags.last().cloned(),
                         form: None,
                     },
                 });
@@ -507,12 +530,14 @@ pub(crate) fn scan_form(doc: &Document, site: &FormSite, page: &Page) -> Result<
         glyphs: Vec::new(),
         count: 0,
         depth: 0,
+        tags: Vec::new(),
     };
     sc.run(&content.data, &resources, site.ctm, true);
     Ok(Scan {
         ops: sc.ops,
         glyphs: sc.glyphs,
         content: content.data,
+        resources,
     })
 }
 
@@ -529,11 +554,13 @@ pub(crate) fn scan(doc: &Document, page: &Page) -> Result<Scan> {
         glyphs: Vec::new(),
         count: 0,
         depth: 0,
+        tags: Vec::new(),
     };
     sc.run(&content, &resources, Matrix::IDENTITY, true);
     Ok(Scan {
         ops: sc.ops,
         glyphs: sc.glyphs,
         content,
+        resources,
     })
 }

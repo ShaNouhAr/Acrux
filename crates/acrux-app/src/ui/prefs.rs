@@ -166,6 +166,8 @@ pub const MAX_SIGNATURES: usize = 3;
 pub struct Prefs {
     /// Thème sombre (faux = clair).
     pub dark_theme: bool,
+    /// Langue de l'interface : `auto` (celle du système), `fr` ou `en`.
+    pub language: String,
     /// Disposition des pages.
     pub view_mode: ViewMode,
     /// Panneau latéral ouvert.
@@ -206,6 +208,7 @@ impl Default for Prefs {
     fn default() -> Self {
         Self {
             dark_theme: true,
+            language: "auto".into(),
             view_mode: ViewMode::default(),
             panel_open: false,
             tools_open: true,
@@ -310,6 +313,7 @@ impl Prefs {
                         }
                     }
                 }
+                "langue" => p.language = value.to_string(),
                 "mises-a-jour" => p.check_updates = value == "1" || value == "true",
                 "derniere-verification" => {
                     if let Ok(day) = value.parse::<u64>() {
@@ -347,6 +351,7 @@ impl Prefs {
         let _ = writeln!(out, "zoom={}", self.zoom);
         let _ = writeln!(out, "two-up-cover={}", u8::from(self.two_up_cover));
         let _ = writeln!(out, "window={}x{}", self.window.0, self.window.1);
+        let _ = writeln!(out, "langue={}", self.language);
         let _ = writeln!(out, "mises-a-jour={}", u8::from(self.check_updates));
         let _ = writeln!(out, "derniere-verification={}", self.last_update_check);
         for value in self.signatures.iter().take(MAX_SIGNATURES) {
@@ -392,6 +397,7 @@ mod tests {
     fn round_trip_keeps_every_setting() {
         let mut p = Prefs {
             dark_theme: false,
+            language: "en".into(),
             view_mode: ViewMode::TwoUp,
             panel_open: true,
             tools_open: true,

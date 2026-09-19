@@ -382,6 +382,28 @@ pub trait WindowHandle {
     }
 }
 
+/// Langue de l'interface du système, en deux lettres (`fr`, `en`, `de`…).
+///
+/// Sert à choisir la langue d'Acrux au premier lancement : l'utilisateur ne
+/// devrait pas avoir à la régler pour lire son logiciel dans sa langue.
+#[must_use]
+pub fn system_language() -> String {
+    #[cfg(windows)]
+    {
+        win32::system_language()
+    }
+    #[cfg(not(windows))]
+    {
+        // Convention POSIX : `fr_FR.UTF-8`, `en_GB`…
+        std::env::var("LC_ALL")
+            .or_else(|_| std::env::var("LC_MESSAGES"))
+            .or_else(|_| std::env::var("LANG"))
+            .ok()
+            .and_then(|v| v.get(..2).map(str::to_lowercase))
+            .unwrap_or_else(|| "en".into())
+    }
+}
+
 /// Application pilotée par la plateforme.
 pub trait App {
     /// Traite un événement.

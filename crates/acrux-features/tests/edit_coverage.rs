@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use acrux_document::{collect_pages, Document};
-use acrux_features::edit_text::{line_unit, open_unit, text_units};
+use acrux_features::edit_text::{line_unit, normalized, open_unit, set_paragraph_text, text_units};
 use acrux_features::text::extract_page_text;
 
 /// Tous les PDF du corpus, sans les fichiers volontairement corrompus.
@@ -94,5 +94,72 @@ fn presque_tout_le_texte_se_laisse_modifier() {
     assert!(
         couverture >= 93,
         "seulement {couverture} % des blocs se modifient"
+    );
+}
+
+/// Taper dans un bloc, lettre après lettre, ne doit jamais être refusé en
+/// cours de route : c'est exactement ce que fait l'éditeur.
+#[test]
+fn chaque_bloc_ouvert_se_tape_jusquau_bout() {
+    let mut tries = 0;
+    let mut refus: Vec<String> = Vec::new();
+    for path in corpus_files() {
+        let Ok(first) = Document::load(&path) else {
+            continue;
+        };
+        let Ok(pages) = collect_pages(&first) else {
+            continue;
+        };
+        let Ok(page_text) = extract_page_text(&first, &pages[0]) else {
+            continue;
+        };
+        // Deux blocs par fichier suffisent : le test doit rester rapide.
+        for unit in text_units(&page_text).into_iter().take(2) {
+            // Chaque bloc part du fichier d'origine : un bloc recomposé peut
+            // déborder sur son voisin, et l'on ne mesure pas cela ici.
+            let Ok(doc) = Document::load(&path) else {
+                continue;
+            };
+            let Ok(pages) = collect_pages(&doc) else {
+                continue;
+            };
+            let Ok(text) = extract_page_text(&doc, &pages[0]) else {
+                continue;
+            };
+            let Ok(opened) = open_unit(&doc, &pages[0], &text, &unit) else {
+                continue;
+            };
+            tries += 1;
+            let mut drawn = opened.drawn.clone();
+            let mut typed = opened.text.clone();
+            for c in " Xyz".chars() {
+                typed.push(c);
+                let Ok(pages) = collect_pages(&doc) else {
+                    break;
+                };
+                match set_paragraph_text(&doc, &pages[0], &opened.frame, &drawn, &typed) {
+                    Ok(_) => drawn = normalized(&typed),
+                    Err(e) => {
+                        refus.push(format!(
+                            "{} : « {} » refusé après « {} » — {e}",
+                            path.file_name().unwrap_or_default().to_string_lossy(),
+                            c,
+                            opened.text.chars().take(24).collect::<String>()
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    println!("blocs tapés jusqu'au bout : {tries} essais");
+    for r in &refus {
+        println!("  {r}");
+    }
+    assert!(tries > 20, "corpus trop maigre : {tries} essais");
+    assert!(
+        refus.is_empty(),
+        "{} frappes refusées en cours de saisie",
+        refus.len()
     );
 }

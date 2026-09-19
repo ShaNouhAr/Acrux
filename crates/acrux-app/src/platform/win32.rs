@@ -329,6 +329,7 @@ extern "system" {
         flags: UINT,
     ) -> *mut c_void;
     fn GetSystemMetrics(index: i32) -> i32;
+    fn GetUserDefaultUILanguage() -> u16;
     fn SetWindowLongPtrW(hwnd: HWND, index: i32, value: LONG_PTR) -> LONG_PTR;
     fn GetWindowLongPtrW(hwnd: HWND, index: i32) -> LONG_PTR;
     fn GetWindowRect(hwnd: HWND, rect: *mut RECT) -> BOOL;
@@ -364,6 +365,25 @@ impl super::Waker for Win32Waker {
         unsafe {
             PostMessageW(self.0 as HWND, WM_APP_WAKE, 0, 0);
         }
+    }
+}
+
+/// Langue de l'interface de l'utilisateur, en deux lettres.
+///
+/// `GetUserDefaultUILanguage` rend un identifiant de langue dont les dix
+/// bits de poids faible donnent la langue principale (§ LANGID) : 0x0C pour
+/// le français, 0x09 pour l'anglais.
+#[must_use]
+pub fn system_language() -> String {
+    // SAFETY : sans précondition, sans argument.
+    let id = unsafe { GetUserDefaultUILanguage() };
+    match id & 0x3FF {
+        0x0C => "fr".into(),
+        0x07 => "de".into(),
+        0x0A => "es".into(),
+        0x10 => "it".into(),
+        // Anglais, et tout ce qu'Acrux ne sait pas encore parler.
+        _ => "en".into(),
     }
 }
 

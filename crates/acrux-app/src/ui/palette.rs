@@ -19,6 +19,7 @@
 
 use crate::platform::{Frame, Key};
 use crate::ui::input::{InputAction, TextInput};
+use crate::ui::lang::tr;
 use crate::ui::paint::round_rect;
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
@@ -29,6 +30,8 @@ pub enum Command {
     /// Revenir à l'accueil : les documents récents, sans fermer ce qui est
     /// ouvert.
     Home,
+    /// Ouvrir les paramètres.
+    Settings,
     /// Ouvrir un document.
     Open,
     /// Enregistrer.
@@ -151,11 +154,18 @@ pub fn describe(command: Command) -> Option<(&'static str, &'static str)> {
     ENTRIES
         .iter()
         .find(|e| e.command == command)
-        .map(|e| (e.label, e.shortcut))
+        .map(|e| (tr(e.label), e.shortcut))
 }
 
 /// Toutes les commandes, dans l'ordre d'affichage quand rien n'est filtré.
 const ENTRIES: &[Entry] = &[
+    Entry {
+        label: "Paramètres",
+        shortcut: "",
+        keywords: "paramètres réglages langue settings options",
+        command: Command::Settings,
+        needs_document: false,
+    },
     Entry {
         label: "Accueil",
         shortcut: "",
@@ -749,7 +759,7 @@ impl Palette {
                 (x + pad) as f32,
                 baseline,
                 size,
-                e.label,
+                tr(e.label),
                 color,
                 (width - 2 * pad - (110.0 * dpi) as i32) as f32,
             );

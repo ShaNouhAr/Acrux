@@ -27,6 +27,7 @@ use acrux_features::fillsign::marks::{outline_of, Mark};
 use acrux_graphics::Rasterizer;
 
 use crate::platform::Frame;
+use crate::ui::lang::tr;
 use crate::ui::paint::{round_rect, round_rect_outline};
 use crate::ui::sign::{fill_outline, ink_rgb, Item, Saved, INKS};
 use crate::ui::text::TextRenderer;
@@ -188,7 +189,7 @@ impl SignPanel {
         let pad = (14.0 * dpi) as i32;
         let mut y = pad - self.scroll as i32;
         // 1. Les signatures : ce qu'on a, tel qu'il sera posé.
-        y = Self::paint_heading(frame, text, theme, size, pad, y, "Signatures");
+        y = Self::paint_heading(frame, text, theme, size, pad, y, tr("Signatures"));
         for (index, saved) in signatures.iter().enumerate() {
             y = self.paint_card(
                 frame, text, raster, theme, dpi, pad, y, fw, saved, index, false,
@@ -196,9 +197,9 @@ impl SignPanel {
         }
         if signatures.len() < full {
             let label = if signatures.is_empty() {
-                "Créer une signature"
+                tr("Créer une signature")
             } else {
-                "Ajouter une signature"
+                tr("Ajouter une signature")
             };
             y = self.paint_button(
                 frame,
@@ -214,7 +215,7 @@ impl SignPanel {
             );
             y += (6.0 * dpi) as i32;
         }
-        y = Self::paint_heading(frame, text, theme, size, pad, y, "Paraphe");
+        y = Self::paint_heading(frame, text, theme, size, pad, y, tr("Paraphe"));
         if let Some(saved) = initials {
             y = self.paint_card(frame, text, raster, theme, dpi, pad, y, fw, saved, 0, true);
         } else {
@@ -227,7 +228,7 @@ impl SignPanel {
                     pad,
                     y,
                     fw - 2 * pad,
-                    "Créer un paraphe",
+                    tr("Créer un paraphe"),
                     &Action::Create(true),
                     true,
                 );
@@ -235,15 +236,15 @@ impl SignPanel {
             }
         }
         // 2. Ce qu'on ajoute soi-même.
-        y = Self::paint_heading(frame, text, theme, size, pad, y, "Ajouter");
+        y = Self::paint_heading(frame, text, theme, size, pad, y, tr("Ajouter"));
         for (item, hint) in [
-            (Item::Text, "Cliquez sur la page et tapez"),
-            (Item::Draw, "Tracez à main levée"),
+            (Item::Text, tr("Cliquez sur la page et tapez")),
+            (Item::Draw, tr("Tracez à main levée")),
         ] {
             y = self.paint_row(frame, text, theme, dpi, pad, y, fw, item, hint);
         }
         y += (4.0 * dpi) as i32;
-        y = Self::paint_heading(frame, text, theme, size, pad, y, "Marques");
+        y = Self::paint_heading(frame, text, theme, size, pad, y, tr("Marques"));
         let cell = (fw - 2 * pad) / MARKS.len() as i32;
         let cell_h = (38.0 * dpi) as i32;
         for (index, mark) in MARKS.iter().enumerate() {
@@ -279,7 +280,7 @@ impl SignPanel {
         }
         y += cell_h + (10.0 * dpi) as i32;
         // 3. L'encre, commune à tout ce qu'on pose.
-        y = Self::paint_heading(frame, text, theme, size, pad, y, "Encre");
+        y = Self::paint_heading(frame, text, theme, size, pad, y, tr("Encre"));
         let swatch = (22.0 * dpi) as i32;
         for index in 0..INKS.len() {
             let x = pad + (swatch + (10.0 * dpi) as i32) * index as i32;
@@ -355,7 +356,7 @@ impl SignPanel {
             } else {
                 theme.text_dim
             };
-            let label = nib.label();
+            let label = tr(nib.label());
             let w = text.measure(size, label);
             text.draw(
                 frame,
@@ -382,7 +383,7 @@ impl SignPanel {
             pad,
             y,
             fw - 2 * pad,
-            "Terminer",
+            tr("Terminer"),
             &Action::Close,
             false,
         );
@@ -483,7 +484,7 @@ impl SignPanel {
             (pad + (12.0 * dpi) as i32) as f32,
             y as f32 + text.ascent(size) + (8.0 * dpi),
             size,
-            item.label(),
+            tr(item.label()),
             color,
         );
         text.draw_clipped(
@@ -603,8 +604,8 @@ impl SignPanel {
         let bh = (24.0 * dpi) as i32;
         let bx = pad + width - bw - (8.0 * dpi) as i32;
         for (row, (label, action)) in [
-            ("Refaire", Action::Edit(index, initials)),
-            ("Retirer", Action::Delete(index, initials)),
+            (tr("Refaire"), Action::Edit(index, initials)),
+            (tr("Retirer"), Action::Delete(index, initials)),
         ]
         .into_iter()
         .enumerate()

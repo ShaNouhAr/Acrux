@@ -33,6 +33,7 @@ use acrux_graphics::Rasterizer;
 
 use crate::platform::Frame;
 use crate::ui::icons::{self, Icon};
+use crate::ui::lang::tr;
 use crate::ui::paint::round_rect;
 use crate::ui::palette::Command;
 use crate::ui::text::TextRenderer;
@@ -261,7 +262,7 @@ impl ToolsPanel {
                         (PAD * dpi) as f32,
                         baseline,
                         size,
-                        label,
+                        tr(label),
                         theme.text_dim,
                     );
                 }
@@ -317,7 +318,7 @@ impl ToolsPanel {
                         gx as f32 + side + (10.0 * dpi) as f32,
                         baseline,
                         corps,
-                        label,
+                        tr(label),
                         colour,
                     );
                 }

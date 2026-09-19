@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "acrux-app"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "acrux-codecs",
  "acrux-core",
@@ -18,7 +18,7 @@ dependencies = [
 
 [[package]]
 name = "acrux-cli"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "acrux-core",
  "acrux-document",
@@ -30,7 +30,7 @@ dependencies = [
 
 [[package]]
 name = "acrux-codecs"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "acrux-core",
  "acrux-graphics",
@@ -38,11 +38,11 @@ dependencies = [
 
 [[package]]
 name = "acrux-core"
-version = "0.10.0"
+version = "0.11.0"
 
 [[package]]
 name = "acrux-document"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "acrux-codecs",
  "acrux-core",
@@ -50,7 +50,7 @@ dependencies = [
 
 [[package]]
 name = "acrux-features"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "acrux-codecs",
  "acrux-core",
@@ -62,21 +62,21 @@ dependencies = [
 
 [[package]]
 name = "acrux-fonts"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "acrux-core",
 ]
 
 [[package]]
 name = "acrux-graphics"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "acrux-core",
 ]
 
 [[package]]
 name = "acrux-render"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "acrux-codecs",
  "acrux-core",
@@ -87,7 +87,7 @@ dependencies = [
 
 [[package]]
 name = "acrux-setup"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "acrux-codecs",
  "acrux-winres",
@@ -95,4 +95,4 @@ dependencies = [
 
 [[package]]
 name = "acrux-winres"
-version = "0.10.0"
+version = "0.11.0"

@@ -95,7 +95,40 @@ pub(crate) fn prepare(
     text: &str,
     style: Option<&StyleOverride>,
 ) -> Result<Prepared> {
-    let dict = super::font_dict_of(doc, page, name)?;
+    prepare_with(doc, page, None, name, text, style)
+}
+
+/// Comme [`prepare`], mais la police est cherchée dans des ressources
+/// données — celles d'un XObject de formulaire, par exemple.
+///
+/// # Errors
+/// Police absente de ces ressources, ou illisible.
+pub(crate) fn prepare_in(
+    doc: &Document,
+    page: &Page,
+    resources: &acrux_document::Dict,
+    name: &Name,
+    text: &str,
+    style: Option<&StyleOverride>,
+) -> Result<Prepared> {
+    prepare_with(doc, page, Some(resources), name, text, style)
+}
+
+/// Corps commun : `resources` dit où chercher la police — dans un XObject
+/// de formulaire, ou dans la page quand c'est `None`.
+fn prepare_with(
+    doc: &Document,
+    page: &Page,
+    resources: Option<&acrux_document::Dict>,
+    name: &Name,
+    text: &str,
+    style: Option<&StyleOverride>,
+) -> Result<Prepared> {
+    let lookup = |doc: &Document| match resources {
+        Some(r) => super::font_dict_in(doc, r, name),
+        None => super::font_dict_of(doc, page, name),
+    };
+    let dict = lookup(doc)?;
     let font = LoadedFont::load(doc, &dict)?;
     if let Some(s) = style {
         if s.font.is_some() || s.bold == Some(true) || s.italic == Some(true) {
@@ -129,7 +162,7 @@ pub(crate) fn prepare(
     }
     match extend_font(doc, &dict, &font, &missing) {
         Ok(()) => {
-            let font = LoadedFont::load(doc, &super::font_dict_of(doc, page, name)?)?;
+            let font = LoadedFont::load(doc, &lookup(doc)?)?;
             let table = reverse_table(&font);
             let still: String = missing.iter().filter(|c| !table.contains_key(c)).collect();
             let mut warnings = Vec::new();

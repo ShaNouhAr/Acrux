@@ -8,6 +8,7 @@
 use super::{log_line, EditOp, Viewer};
 use crate::platform::{Cursor, Event, Frame, WindowHandle};
 use crate::ui::dialog::{Dialog, Tone};
+use crate::ui::lang::{tr, trf};
 
 /// Ce qu'on fait quand l'utilisateur accepte.
 #[derive(Debug, Clone)]
@@ -24,6 +25,8 @@ pub(super) enum Then {
     DeletePage(usize),
     /// Télécharger et lancer l'installateur (adresse, version).
     InstallUpdate(String, String),
+    /// Choisir la langue de l'interface : le rang du bouton dit laquelle.
+    Language,
 }
 
 /// Forme de la question, qui dit ce que veut chaque bouton.
@@ -35,6 +38,9 @@ enum Kind {
     Confirm,
     /// « Enregistrer », « Ne pas enregistrer », « Annuler ».
     SaveFirst,
+    /// Un choix parmi plusieurs : c'est le rang du bouton qui compte, et le
+    /// dernier annule.
+    Choice,
 }
 
 /// Une question en attente de réponse.
@@ -53,6 +59,15 @@ impl Viewer {
             dialog: Dialog::alert(title, message),
             kind: Kind::Alert,
             then: Then::Nothing,
+        });
+    }
+
+    /// Pose une question à plusieurs réponses ; le dernier bouton annule.
+    pub(super) fn push_choice(&mut self, title: &str, message: &str, labels: &[&str], then: Then) {
+        self.dialogs.push(Asking {
+            dialog: Dialog::choice(title, message, Tone::Question, labels),
+            kind: Kind::Choice,
+            then,
         });
     }
 
@@ -132,21 +147,22 @@ impl Viewer {
                 self.document_name()
             )
         } else {
-            format!(
-                "{total} documents ouverts ont été modifiés. Les enregistrer avant de quitter ?"
+            trf(
+                "{} documents ouverts ont été modifiés. Les enregistrer avant de quitter ?",
+                &[&total.to_string()],
             )
         };
         let save = if total == 1 {
-            "Enregistrer"
+            tr("Enregistrer")
         } else {
-            "Tout enregistrer"
+            tr("Tout enregistrer")
         };
         self.dialogs.push(Asking {
             dialog: Dialog::choice(
                 "Enregistrer les modifications ?",
                 &message,
                 Tone::Question,
-                &[save, "Quitter sans enregistrer", "Annuler"],
+                &[save, tr("Quitter sans enregistrer"), tr("Annuler")],
             ),
             kind: Kind::SaveFirst,
             then: Then::Quit,
@@ -206,8 +222,24 @@ impl Viewer {
                 .get(index)
                 .map_or("?", |b| b.label.as_str())
         ));
+        if asking.kind == Kind::Choice {
+            if matches!(asking.then, Then::Language) {
+                let choice = match index {
+                    0 => Some(crate::ui::lang::Lang::Auto),
+                    1 => Some(crate::ui::lang::Lang::French),
+                    2 => Some(crate::ui::lang::Lang::English),
+                    _ => None,
+                };
+                if let Some(choice) = choice {
+                    self.set_language(choice, window);
+                }
+            }
+            return;
+        }
         let go = match asking.kind {
-            Kind::Alert => false,
+            // `Choice` est traité plus haut : le rang du bouton porte la
+            // réponse. `Alert` n'a rien à faire non plus.
+            Kind::Choice | Kind::Alert => false,
             Kind::Confirm => index == 0,
             Kind::SaveFirst => match index {
                 0 => self.save_before(&asking.then, window),
@@ -219,7 +251,8 @@ impl Viewer {
             return;
         }
         match asking.then.clone() {
-            Then::Nothing => {}
+            // Rien à faire : un message, ou un choix déjà appliqué.
+            Then::Nothing | Then::Language => {}
             Then::CloseTab => {
                 let active = self.active_tab;
                 self.close_tab_now(active);

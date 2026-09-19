@@ -11,6 +11,7 @@
 //! | `modebar` | barre fine d'un outil en cours : nom, consigne, sortie |
 //! | `text`    | rendu de texte d'interface avec une police système    |
 //! | `theme`   | couleurs et dimensions                                |
+//! | `lang`    | langue de l'interface : français ou anglais           |
 //! | `input`   | champ de saisie sur une ligne                         |
 //! | `icons`   | icônes vectorielles rasterisées à la demande          |
 //! | `toolbar` | barre d'outils (boutons, champ de page, zoom)         |
@@ -33,6 +34,7 @@ pub mod dialog;
 pub mod editpdf;
 pub mod icons;
 pub mod input;
+pub mod lang;
 pub mod modebar;
 pub mod objects;
 pub mod paint;

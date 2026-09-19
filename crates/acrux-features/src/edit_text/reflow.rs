@@ -44,7 +44,7 @@ use super::{
     encode, fmt, out_str, restore_matrices, rewrite_show_op, scan, write_matrix, write_tj, Cut,
     GlyphIndex, Item, Replacement,
 };
-use crate::text::{extract_page_text, Alignment, PageText, Paragraph};
+use crate::text::{extract_page_text, Alignment, Line, PageText, Paragraph};
 use std::fmt::Write as _;
 
 /// Options de recomposition.
@@ -460,6 +460,34 @@ pub fn set_paragraph_text(
         }
         return append_block(doc, page, frame, new_text);
     }
+    // Un bloc déjà écrit par nous porte son ancre : on le retrouve par elle,
+    // sans rien demander à l'extraction. C'est ce qui permet de continuer à
+    // taper quand le bloc s'est mis à toucher son voisin.
+    if let Some(target) = Target::by_tag(doc, page, &frame_tag(frame))? {
+        let unit = TextUnit {
+            bbox: Rect::new(
+                frame.x0,
+                frame.baseline - frame.size,
+                frame.x0 + frame.width,
+                frame.baseline + frame.size,
+            ),
+            pieces: Vec::new(),
+            alignment: frame.alignment,
+            first_line_indent: frame.first_line_indent,
+            line_spacing: frame.line_spacing,
+            size: frame.size,
+        };
+        let laid = write_to(
+            doc,
+            page,
+            &unit,
+            new_text,
+            Some(frame),
+            &ReflowOptions::default(),
+            &target,
+        )?;
+        return Ok(caret_from_layout(&laid, frame.size));
+    }
     let unit = locate(&text, frame, &expected).ok_or_else(|| {
         Error::Unsupported(
             "le paragraphe ne se retrouve plus seul sur la page : il touche un autre texte".into(),
@@ -847,6 +875,30 @@ fn first_baseline(unit: &TextUnit, text: &PageText) -> f64 {
         .map_or(unit.bbox.y0, crate::text::Line::baseline)
 }
 
+/// Balise de contenu marqué qui ancre un bloc écrit par nous.
+///
+/// Elle se déduit de la **boîte**, qui est figée pendant toute une édition :
+/// pas besoin de la retenir ailleurs, et deux blocs différents ne partagent
+/// pas la leur. C'est ce qui permet de retrouver le bloc même quand le texte
+/// qu'il porte se mêle, à l'extraction, à ce qui l'entoure — une ligne qui
+/// déborde sur celle du dessous, par exemple.
+fn frame_tag(frame: &ParagraphFrame) -> Name {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let key = ((frame.x0 * 4.0).round() as i64 & 0xFFFF) as u64
+        | ((((frame.baseline * 4.0).round() as i64) & 0xFFFF) as u64) << 16;
+    Name::new(&format!("Acrux{key:08X}"))
+}
+
+/// Glyphes d'un flux portant une balise donnée.
+fn sites_by_tag(scan: &scan::Scan, tag: &Name) -> Vec<usize> {
+    scan.glyphs
+        .iter()
+        .enumerate()
+        .filter(|(_, g)| g.site.tag.as_ref() == Some(tag))
+        .map(|(i, _)| i)
+        .collect()
+}
+
 /// Retrouve le paragraphe logé dans une boîte et portant un texte donné.
 ///
 /// Si aucun bloc entier ne convient, on regarde **la part de chaque bloc qui
@@ -856,43 +908,96 @@ fn first_baseline(unit: &TextUnit, text: &PageText) -> f64 {
 /// recompose, le libellé restant à sa place.
 fn locate(text: &PageText, frame: &ParagraphFrame, expected: &str) -> Option<TextUnit> {
     let units = text_units(text);
-    locate_whole(&units, text, frame, expected).or_else(|| {
-        units
-            .iter()
-            .filter_map(|u| clip_to_frame(u, text, frame))
-            .find(|u| {
-                (first_baseline(u, text) - frame.baseline).abs() <= frame.size * 0.35
-                    && normalized(&glyph_text(u, text)) == expected
-            })
-    })
+    locate_whole(&units, text, frame, expected).or_else(|| locate_run(text, frame, expected))
 }
 
-/// Part d'un bloc logée dans une boîte : les mots qui commencent dans sa
-/// largeur, sur les lignes qui ne sont pas au-dessus de sa première ligne.
-fn clip_to_frame(unit: &TextUnit, text: &PageText, frame: &ParagraphFrame) -> Option<TextUnit> {
+/// Suite de mots qui porte **exactement** le texte attendu, à partir de la
+/// ligne de base du cadre.
+///
+/// C'est le rattrapage quand aucun bloc entier ne convient : une zone ajoutée
+/// dans une page déjà pleine se retrouve mêlée, à l'extraction, au texte qui
+/// l'entoure — un libellé à gauche, un filigrane par-dessus, une autre
+/// colonne à droite. On ne cherche donc pas un bloc : on lit les mots depuis
+/// le cadre, ligne par ligne vers le bas, et l'on s'arrête dès que ce qu'on a
+/// lu fait le texte attendu. Ce qui n'est pas dans la largeur du cadre est
+/// ignoré, ce qui diverge arrête la recherche.
+fn locate_run(text: &PageText, frame: &ParagraphFrame, expected: &str) -> Option<TextUnit> {
+    if expected.is_empty() {
+        return None;
+    }
+    let tol = frame.size * 0.35;
     let (left, right) = (frame.x0 - frame.size * 0.3, frame.x0 + frame.width + 1.0);
-    let mut pieces = Vec::new();
-    for piece in &unit.pieces {
-        let Some(line) = text.lines.get(piece.line) else {
-            continue;
-        };
-        if line.baseline() > frame.baseline + frame.size * 0.35 {
-            continue;
+    // Les lignes du cadre et celles d'en dessous, de haut en bas.
+    let mut lines: Vec<usize> = (0..text.lines.len())
+        .filter(|&i| {
+            let line = &text.lines[i];
+            !line.words.is_empty() && line.baseline() <= frame.baseline + tol
+        })
+        .collect();
+    lines.sort_by(|&a, &b| {
+        text.lines[b]
+            .baseline()
+            .total_cmp(&text.lines[a].baseline())
+    });
+    // La première ligne lue doit être celle du cadre.
+    let first = *lines.first()?;
+    if (text.lines[first].baseline() - frame.baseline).abs() > tol {
+        return None;
+    }
+    let mut pieces: Vec<Piece> = Vec::new();
+    let mut read = String::new();
+    for index in lines {
+        let line = &text.lines[index];
+        let mut range: Option<(usize, usize)> = None;
+        for (wi, word) in line.words.iter().enumerate() {
+            if word.bbox.x0 < left || word.bbox.x0 > right {
+                // Hors du cadre : avant le premier mot lu on passe, après on
+                // s'arrête (le reste de la ligne appartient à un voisin).
+                if range.is_some() {
+                    break;
+                }
+                continue;
+            }
+            let glyphs: String = word.glyphs.iter().map(|g| g.text.as_str()).collect();
+            let grown = format!("{read}{}", normalized(&glyphs));
+            if !expected.starts_with(&grown) {
+                break;
+            }
+            read = grown;
+            range = Some(match range {
+                Some((a, _)) => (a, wi + 1),
+                None => (wi, wi + 1),
+            });
+            if read == expected {
+                break;
+            }
         }
-        let words = piece_words(piece, text);
-        let inside: Vec<usize> = (0..words.len())
-            .filter(|&i| words[i].bbox.x0 >= left && words[i].bbox.x0 <= right)
-            .collect();
-        let (Some(&a), Some(&b)) = (inside.first(), inside.last()) else {
-            continue;
-        };
-        if b - a + 1 != inside.len() {
-            continue;
+        if let Some((a, b)) = range {
+            pieces.push(Piece {
+                line: index,
+                words: (a, b),
+            });
         }
-        pieces.push(Piece {
-            line: piece.line,
-            words: (piece.words.0 + a, piece.words.0 + b + 1),
-        });
+        if read == expected {
+            break;
+        }
+        // Une ligne vide de notre texte ne coupe pas forcément le bloc : sur
+        // une page à deux colonnes, une ligne de la colonne voisine peut
+        // s'intercaler. C'est l'**écart vertical** qui tranche — au-delà de
+        // deux interlignes, on n'est plus dans le même bloc.
+        if !pieces.is_empty() {
+            let last = pieces
+                .last()
+                .and_then(|p| text.lines.get(p.line))
+                .map_or(frame.baseline, Line::baseline);
+            let gap = last - text.lines[index].baseline();
+            if gap > 2.2 * frame.line_spacing.max(frame.size) {
+                break;
+            }
+        }
+    }
+    if read != expected || pieces.is_empty() {
+        return None;
     }
     let bbox = pieces
         .iter()
@@ -1366,6 +1471,79 @@ impl Target {
     }
 
     /// Construit la cible dans un flux déjà balayé.
+    /// Cible d'un bloc **balisé** : celui qu'une édition précédente a écrit.
+    ///
+    /// On ne passe plus par l'extraction : les glyphes sont ceux que porte la
+    /// balise, quoi qu'ils soient devenus à la lecture (mêlés au texte du
+    /// dessous, par exemple). C'est ce qui permet de continuer à taper quand
+    /// un bloc déborde sur son voisin.
+    fn by_tag(doc: &Document, page: &Page, tag: &Name) -> Result<Option<Target>> {
+        let scan = scan::scan(doc, page)?;
+        let tagged = sites_by_tag(&scan, tag);
+        if tagged.is_empty() {
+            return Ok(None);
+        }
+        // Dans la page même : les opérations du balayage sont les bonnes.
+        if tagged.iter().all(|i| !scan.glyphs[*i].site.in_form) {
+            return Ok(Some(Self::from_sites(&tagged, scan, Stream::Page)?));
+        }
+        // Dans un XObject : c'est **son** flux qu'il faut rouvrir, sans quoi
+        // les opérations pointeraient sur le `Do` de la page, qui ne porte ni
+        // police ni matrice de texte.
+        let Some(site) = tagged.iter().find_map(|i| scan.glyphs[*i].site.form) else {
+            return Ok(None);
+        };
+        let form = scan::scan_form(doc, &site, page)?;
+        let sites = sites_by_tag(&form, tag);
+        if sites.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(Self::from_sites(
+            &sites,
+            form,
+            Stream::Form(site.reference),
+        )?))
+    }
+
+    /// Cible construite depuis des glyphes déjà choisis.
+    fn from_sites(sites: &[usize], scan: scan::Scan, stream: Stream) -> Result<Target> {
+        let mut by_op: BTreeMap<usize, usize> = BTreeMap::new();
+        for i in sites {
+            *by_op.entry(scan.glyphs[*i].site.op).or_default() += 1;
+        }
+        let first_op = *by_op
+            .keys()
+            .next()
+            .ok_or_else(|| Error::Corrupt("bloc balisé sans glyphe".into()))?;
+        let first_site = &scan.glyphs[sites[0]].site;
+        let state = &scan.ops[first_op].after;
+        let ctm = state.ctm;
+        let trm = first_site.tm_before.then(&ctm);
+        let scale = trm.a.hypot(trm.b);
+        if scale < 1e-9 {
+            return Err(Error::Unsupported("bloc dégénéré".into()));
+        }
+        let inverse = ctm
+            .invert()
+            .ok_or_else(|| Error::Corrupt("matrice courante non inversible".into()))?;
+        let font = state
+            .font
+            .clone()
+            .ok_or_else(|| Error::Corrupt("aucune police active".into()))?;
+        let size_text = state.size;
+        Ok(Target {
+            scan,
+            by_op,
+            first_op,
+            trm,
+            inverse,
+            scale,
+            font,
+            size_text,
+            stream,
+        })
+    }
+
     fn build(text: &PageText, unit: &TextUnit, scan: scan::Scan, stream: Stream) -> Result<Target> {
         let glyph_index = GlyphIndex::new(&scan);
         // 1. Tous les glyphes du bloc, et les opérations qui les ont produits.
@@ -1504,8 +1682,23 @@ fn write_paragraph(
     options: &ReflowOptions,
 ) -> Result<Vec<LaidLine>> {
     let t = Target::find(doc, page, text, para)?;
+    write_to(doc, page, para, new_text, frame, options, &t)
+}
+
+/// Écrit le texte dans une cible déjà trouvée.
+#[allow(clippy::too_many_arguments)]
+fn write_to(
+    doc: &Document,
+    page: &Page,
+    para: &TextUnit,
+    new_text: &str,
+    frame: Option<&ParagraphFrame>,
+    options: &ReflowOptions,
+    t: &Target,
+) -> Result<Vec<LaidLine>> {
     let chars: Vec<char> = new_text.chars().collect();
-    let prepared = encode::prepare(doc, page, &t.font, new_text, None)?;
+    // La police est citée par le flux qu'on réécrit : page ou XObject.
+    let prepared = encode::prepare_in(doc, page, &t.scan.resources, &t.font, new_text, None)?;
     // 4. Boîte et corps.
     let mut geometry = match frame {
         Some(f) => Geometry::from(f),
@@ -1533,6 +1726,11 @@ fn write_paragraph(
     let size_text = geometry.size / t.scale;
     // 5. Écriture du bloc à la place de la première opération.
     let mut out = Vec::new();
+    // Ancre : le bloc se retrouvera à la frappe suivante sans dépendre de ce
+    // que l'extraction en dira.
+    if let Some(f) = frame {
+        let _ = write!(out_str(&mut out), "/{} BMC ", frame_tag(f).as_str());
+    }
     let changed = (size_text - t.size_text).abs() > 1e-9 || prepared.resource != t.font;
     if changed {
         let _ = write!(
@@ -1557,6 +1755,9 @@ fn write_paragraph(
             t.font.as_str(),
             fmt(t.size_text)
         );
+    }
+    if frame.is_some() {
+        out.extend_from_slice(b"EMC ");
     }
     let state = &t.scan.ops[t.first_op].after;
     restore_matrices(&mut out, state, super::needs_advance(&t.scan, t.first_op));
@@ -1650,7 +1851,11 @@ fn append_block(
     let mut content = Vec::with_capacity(scanned.content.len() + 256);
     content.extend_from_slice(b"q\n");
     content.extend_from_slice(&scanned.content);
-    content.extend_from_slice(b"\nQ\nq BT ");
+    let _ = write!(
+        out_str(&mut content),
+        "\nQ\nq /{} BMC BT ",
+        frame_tag(frame).as_str()
+    );
     let [r, g, b] = frame.color;
     let _ = write!(
         out_str(&mut content),
@@ -1671,7 +1876,7 @@ fn append_block(
             &line_items(&prepared, &chars, line, frame.size),
         );
     }
-    content.extend_from_slice(b"ET Q\n");
+    content.extend_from_slice(b"ET EMC Q\n");
     super::set_page_content(doc, page, content)?;
     Ok(caret_from_layout(&laid, frame.size))
 }

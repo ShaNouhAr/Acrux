@@ -49,6 +49,7 @@ use crate::render_worker::{EditOp, RenderWorker};
 use crate::selection::{SelectableText, Selection, TextPos};
 use crate::ui::anim::{ease_out, Anim, Clock};
 use crate::ui::input::{InputAction, TextInput};
+use crate::ui::lang::{self, Lang};
 use crate::ui::objects::{self as objects_ui, Handle, ViewRect};
 use crate::ui::paint::{round_rect, round_rect_alpha, round_rect_outline, shadow};
 use crate::ui::palette::{Command, Palette};
@@ -747,6 +748,9 @@ impl Viewer {
     #[must_use]
     pub fn new(initial: Vec<PathBuf>) -> Self {
         let prefs = Prefs::load();
+        // La langue avant tout le reste : ce qui se construit ensuite peut
+        // déjà avoir des libellés.
+        lang::apply(Lang::from_key(&prefs.language), system_lang());
         let signatures: Vec<Saved> = prefs
             .signatures
             .iter()
@@ -1238,12 +1242,12 @@ impl Viewer {
             x as f32,
             y as f32 + text.ascent(size),
             size,
-            "Lire, modifier, remplir et signer un PDF.",
+            lang::tr("Lire, modifier, remplir et signer un PDF."),
             t.text_dim,
         );
         y += (size * 2.6) as i32;
         // Le geste principal : un bouton, pas un raccourci à retenir.
-        let label = "Ouvrir un document…";
+        let label = lang::tr("Ouvrir un document…");
         let bw = (text.measure(size, label) + 40.0 * dpi) as i32;
         let bh = (38.0 * dpi) as i32;
         let over_open =
@@ -1272,7 +1276,7 @@ impl Viewer {
             (x + bw + (18.0 * dpi) as i32) as f32,
             y as f32 + f32::midpoint(bh as f32, text.ascent(size)) - 1.0,
             size,
-            "ou déposez un PDF sur la fenêtre · Ctrl+Maj+P pour toutes les commandes",
+            lang::tr("ou déposez un PDF sur la fenêtre · Ctrl+Maj+P pour toutes les commandes"),
             t.text_dim,
         );
         y += bh + (34.0 * dpi) as i32;
@@ -1287,7 +1291,7 @@ impl Viewer {
             x as f32,
             y as f32 + text.ascent(size),
             size,
-            "Documents récents",
+            lang::tr("Documents récents"),
             t.text_dim,
         );
         y += (size * 2.0) as i32;
@@ -1478,6 +1482,38 @@ impl Viewer {
         Some(if at >= self.active_tab { at + 1 } else { at })
     }
 
+    /// Ouvre les paramètres : pour l'instant, la langue de l'interface.
+    fn open_settings(&mut self, window: &mut dyn WindowHandle) {
+        let current = Lang::from_key(&self.prefs.language);
+        let system = system_lang();
+        let message = lang::trf(
+            "Acrux suit la langue du système ({}). Vous pouvez en imposer une autre ; le choix est retenu.",
+            &[system.label()],
+        );
+        let choice = lang::trf("Choix actuel : {}.", &[current.label()]);
+        self.push_choice(
+            lang::tr("Langue de l'interface"),
+            &format!("{message}\n{choice}"),
+            &[
+                lang::tr("Système"),
+                lang::tr("Français"),
+                lang::tr("English"),
+                lang::tr("Annuler"),
+            ],
+            Then::Language,
+        );
+        window.request_redraw();
+    }
+
+    /// Applique et retient une langue.
+    fn set_language(&mut self, choice: Lang, window: &mut dyn WindowHandle) {
+        self.prefs.language = choice.key().to_string();
+        self.prefs.save();
+        lang::apply(choice, system_lang());
+        self.title_dirty = true;
+        window.request_redraw();
+    }
+
     /// Montre l'accueil, sans rien fermer.
     fn show_home(&mut self, window: &mut dyn WindowHandle) {
         self.home = !self.home || self.loaded.is_none();
@@ -1488,7 +1524,7 @@ impl Viewer {
             self.sign_panel = None;
             self.capture = None;
             self.wake_anim();
-            self.set_notice("accueil".into());
+            self.set_notice(lang::tr("accueil").into());
         }
         self.title_dirty = true;
         window.request_redraw();
@@ -3196,6 +3232,7 @@ impl Viewer {
         log_line(&format!("palette : {command:?}"));
         match command {
             Command::Home => self.show_home(window),
+            Command::Settings => self.open_settings(window),
             Command::Open => {
                 if let Some(p) = window.open_file_dialog() {
                     self.open(&p, window);
@@ -5341,9 +5378,9 @@ impl Viewer {
                 zoom * 100.0,
                 match self.fit.label() {
                     "" => String::new(),
-                    mode => format!(" ({mode})"),
+                    mode => format!(" ({})", lang::tr(mode)),
                 },
-                self.view_mode.label(),
+                lang::tr(self.view_mode.label()),
                 self.last_render_ms
             );
             (notice.unwrap_or(name), right)
@@ -5353,13 +5390,15 @@ impl Viewer {
             let count = self.prefs.recent.len().min(MAX_WELCOME);
             let right = match count {
                 0 => String::new(),
-                1 => "1 document récent".into(),
-                n => format!("{n} documents récents"),
+                1 => lang::tr("1 document récent").to_string(),
+                n => lang::trf("{} documents récents", &[&n.to_string()]),
             };
-            let left = "Accueil — Échap ou la maison pour revenir au document".to_string();
+            let left =
+                lang::tr("Accueil — Échap ou la maison pour revenir au document").to_string();
             (notice.unwrap_or(left), right)
         } else {
-            let left = "Aucun document — Ctrl+O pour ouvrir, ou déposez un PDF ici".to_string();
+            let left =
+                lang::tr("Aucun document — Ctrl+O pour ouvrir, ou déposez un PDF ici").to_string();
             (notice.unwrap_or(left), String::new())
         };
         let Some(text) = &mut self.text else { return };
@@ -6258,6 +6297,14 @@ fn day_label(secs: u64) -> String {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
     format!("{d:02}/{m:02}/{y}")
+}
+
+/// Langue de l'interface du système, telle que la comprend Acrux.
+fn system_lang() -> Lang {
+    match crate::platform::system_language().as_str() {
+        "fr" => Lang::French,
+        _ => Lang::English,
+    }
 }
 
 #[cfg(test)]

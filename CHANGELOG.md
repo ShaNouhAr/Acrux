@@ -7,6 +7,33 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
+## 0.11.0 — 20 septembre 2026
+
+### On peut taper plus d'une lettre
+
+- **Une zone de texte neuve se tapait lettre par lettre… et s'arrêtait à la
+  première.** Le bloc était retrouvé, à chaque frappe, par le texte qu'il
+  porte ; dès qu'il touchait un voisin — un libellé à gauche, un filigrane
+  par-dessus, la ligne du dessous quand le texte déborde — l'extraction les
+  lisait ensemble et la frappe était refusée. Deux corrections :
+  - une **ancre** est posée dans le flux autour de chaque bloc qu'Acrux
+    écrit ; il se retrouve par elle, quoi qu'en dise l'extraction ;
+  - à défaut d'ancre (première frappe), les mots sont **appariés un à un**
+    depuis la boîte, ce qui ignore le texte voisin.
+- **La police d'un XObject** n'était pas cherchée au bon endroit : modifier
+  un texte qui y vit échouait dès la deuxième frappe (« police /F4
+  introuvable »). Les polices se cherchent maintenant dans les ressources du
+  flux réécrit.
+- Un test tape « Xyz » **dans chaque bloc du corpus**, lettre à lettre, et
+  échoue au moindre refus : 43 blocs, aucun refus.
+
+### Langue
+
+- **Acrux parle français ou anglais**, selon la langue du système au premier
+  lancement. Le choix se change dans **Paramètres** (palette de commandes,
+  `Ctrl+Maj+P`) : Système, Français, English — et il est retenu.
+- Ce qui n'est pas encore traduit reste en français, ce qui se lit toujours.
+
 ## 0.10.0 — 20 septembre 2026
 
 ### L'accueil se tient

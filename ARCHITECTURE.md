@@ -348,6 +348,10 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   sombre (`DWMWA_USE_IMMERSIVE_DARK_MODE`) puis, quand le système sait les prendre, la couleur
   exacte de la barre de titre, de son texte et de la bordure. Les attributs inconnus d'un système
   plus ancien sont refusés sans dommage : on demande, on ne teste pas la version.
+- `ui/lang` : **langue de l'interface**. Les textes sont écrits en français dans le code et
+  traduits à l'affichage par une table `français → anglais` (`tr`, `trf` pour les phrases à trous) :
+  la clé se lit, et ce qui manque à la table reste lisible au lieu d'afficher un identifiant. La
+  langue effective est un entier partagé, donc `tr` s'appelle même dans une boucle de dessin.
 - `ui/paint` : coins arrondis, contours et **ombres douces**, par une fonction de distance — le
   lissage est donc exact aux angles comme sur les côtés, sans cas particulier. Toutes les surfaces
   de l'interface passent par là.

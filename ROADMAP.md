@@ -204,6 +204,9 @@ Livrable : version 0.2, parité avec Acrobat Standard hors édition de texte.
   qui viennent du bord, fenêtres de question en fondu, vignettes d'accueil en fondu. Un fil bat à
   60 Hz et ne réveille la fenêtre que pendant un mouvement.
   À faire : fondu du survol d'un élément à l'autre, transition entre deux pages en mode paginé.
+- [x] **Français et anglais** (`acrux-app/src/ui/lang.rs`) : langue du système détectée au premier
+  lancement, réglable dans « Paramètres ». À faire : compléter la table (messages d'erreur,
+  panneaux), et d'autres langues.
 - [ ] Menus classiques, info-bulles détaillées, personnalisation de la colonne d'outils.
 
 ## Phase 5 — Édition de niveau Acrobat (le cœur du « mieux qu'Acrobat »)

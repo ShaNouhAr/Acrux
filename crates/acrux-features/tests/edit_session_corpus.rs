@@ -567,3 +567,46 @@ fn le_texte_dun_xobject_de_formulaire_se_modifie() {
         .iter()
         .any(|l| l.text().contains("Diffusion libre")));
 }
+
+#[test]
+fn une_zone_neuve_se_tape_au_milieu_dune_page_chargee() {
+    // Le cas qui coinçait : une zone posée sur une page déjà pleine (texte
+    // autour, filigrane par-dessus). Après la première lettre, le bloc ne se
+    // retrouvait plus « seul » et la frappe suivante était refusée.
+    let doc = Document::load(corpus("synthese/filigrane-entete-bates.pdf")).unwrap();
+    let pages = collect_pages(&doc).unwrap();
+    let text = extract_page_text(&doc, &pages[0]).unwrap();
+    // Sur la ligne d'un paragraphe existant, à sa droite.
+    let line = text
+        .lines
+        .iter()
+        .find(|l| l.text().contains("Ce document"))
+        .unwrap_or_else(|| panic!("le paragraphe témoin est absent"));
+    let frame = text_frame_at(
+        &doc,
+        &pages[0],
+        &text,
+        line.bbox.x1 + 12.0,
+        line.baseline() + 2.0,
+        NewTextStyle::default(),
+    );
+    let mut drawn = String::new();
+    let mut typed = String::new();
+    for c in "Bonjour tout le monde".chars() {
+        typed.push(c);
+        let pages = collect_pages(&doc).unwrap();
+        set_paragraph_text(&doc, &pages[0], &frame, &drawn, &typed)
+            .unwrap_or_else(|e| panic!("frappe « {c} » refusée après « {drawn} » : {e}"));
+        drawn = normalized(&typed);
+    }
+    // La zone est étroite (elle commence à droite d'une ligne existante), le
+    // texte y coule donc sur plusieurs lignes : on le cherche sans les blancs.
+    // La zone commence à droite d'une ligne existante : elle est étroite, le
+    // texte y coule sur deux lignes, et l'extraction les lit dans l'ordre de
+    // la page. On vérifie donc les deux morceaux, pas une chaîne d'un tenant.
+    let apres = page_text(&doc, 0);
+    assert!(apres.contains("Bonjourtout"), "{apres}");
+    assert!(apres.contains("lemonde"), "{apres}");
+    // Le texte d'origine n'a pas bougé.
+    assert!(page_text(&doc, 0).contains("Cedocumentdesynthèse"));
+}

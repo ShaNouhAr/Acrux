@@ -262,7 +262,15 @@ fn font_dict_of(doc: &Document, page: &Page, name: &Name) -> Result<Dict> {
         .dict_get(&dict, "Resources")?
         .and_then(|r| r.as_dict().cloned())
         .unwrap_or_default();
-    scan::font_dict(doc, &resources, name)
+    font_dict_in(doc, &resources, name)
+}
+
+/// Dictionnaire d'une police, cherché dans des ressources données.
+///
+/// Un texte dessiné dans un XObject de formulaire cite les polices **de cet
+/// objet** : les chercher dans la page ne donnerait rien.
+fn font_dict_in(doc: &Document, resources: &Dict, name: &Name) -> Result<Dict> {
+    scan::font_dict(doc, resources, name)
         .ok_or_else(|| Error::Corrupt(format!("police /{} introuvable", name.as_str())))
 }
 
@@ -832,7 +840,8 @@ fn rewrite_show_op(
         .font
         .clone()
         .ok_or_else(|| Error::Corrupt("aucune police active".into()))?;
-    let font = LoadedFont::load(doc, &font_dict_of(doc, page, &name)?)?;
+    // La police est celle du flux balayé : page ou XObject de formulaire.
+    let font = LoadedFont::load(doc, &font_dict_in(doc, &scan.resources, &name)?)?;
     let items = items_of(op);
     let end: Pos = (items.len(), 0);
     let mut out = Vec::new();
