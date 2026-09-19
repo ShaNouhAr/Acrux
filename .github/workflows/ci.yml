@@ -32,6 +32,10 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets
       - name: Tests
+        # Windows a les polices : les tests de composition doivent y trouver
+        # de quoi travailler, et non passer en s'abstenant.
+        env:
+          ACRUX_REQUIRE_FONTS: "1"
         run: cargo test --workspace
       - name: Build release
         run: cargo build --release --workspace

@@ -35,6 +35,24 @@ fn gids(glyphs: &[ShapedGlyph]) -> Vec<u16> {
 
 /// Ligature `fi`, `fl`, `ff` et `ffi` de Calibri : un seul glyphe là où il y
 /// avait deux ou trois caractères, et la grappe du premier caractère.
+
+/// Signale qu'un test n'avait rien à éprouver, au lieu d'échouer.
+///
+/// Ces tests-ci mesurent la composition sur les **vraies polices de la
+/// machine** : c'est tout leur intérêt, et c'est aussi pourquoi ils ne
+/// prouvent rien là où la police voulue n'est pas installée — un exécuteur
+/// d'intégration continue, par exemple. Échouer dans ce cas ferait passer une
+/// machine mal équipée pour un moteur cassé.
+fn skip_if_none(tested: usize, quoi: &str) {
+    assert!(
+        tested > 0 || std::env::var_os("ACRUX_REQUIRE_FONTS").is_none(),
+        "aucune {quoi} installée, alors que ACRUX_REQUIRE_FONTS l'exige"
+    );
+    if tested == 0 {
+        eprintln!("aucune {quoi} installée : test ignoré");
+    }
+}
+
 #[test]
 fn calibri_forms_the_f_ligatures() {
     let Some(data) = system_font("calibri.ttf") else {
@@ -123,7 +141,7 @@ fn kerning_tightens_av_and_to() {
         }
         tested += 1;
     }
-    assert!(tested > 0, "aucune police de crénage installée");
+    skip_if_none(tested, "police de crénage");
 }
 
 /// Désactiver `kern` rend exactement la largeur brute.
@@ -209,7 +227,7 @@ fn arabic_contextual_forms_differ() {
         );
         tested += 1;
     }
-    assert!(tested > 0, "aucune police arabe installée");
+    skip_if_none(tested, "police arabe");
 }
 
 /// Arial : les formes initiale et médiane de beh ont le même contour, donc
@@ -295,7 +313,7 @@ fn arabic_marks_are_anchored() {
         );
         tested += 1;
     }
-    assert!(tested > 0, "aucune police arabe installée");
+    skip_if_none(tested, "police arabe");
 }
 
 /// Accent combinant latin : « e » + accent aigu se compose en deux glyphes
@@ -449,7 +467,7 @@ fn vertical_cjk_substitutes_and_measures() {
         }
         tested += 1;
     }
-    assert!(tested > 0, "aucune police CJC installée");
+    skip_if_none(tested, "police CJC");
 }
 
 /// Le compositeur ne panique jamais, même sur des textes hostiles.
