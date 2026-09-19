@@ -7,7 +7,9 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
-## Non publié
+## 0.6.0 — 19 septembre 2026
+
+Remplir un formulaire imprimé, comme on le ferait au stylo.
 
 ### Remplir et signer, revu de fond en comble
 
