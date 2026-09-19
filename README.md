@@ -274,7 +274,7 @@ dans la barre d'outils et « page iii (3 / 240) » dans la barre d'état, et sai
 | `F3` | barre des outils, à droite (modifier, commenter, signer, pages, biffer) |
 | `Ctrl+Maj+E` | **modifier le PDF** : on clique dans un texte et on tape ; ailleurs, on pose une zone |
 | `O` | modifier les objets : sélection, poignées, ordre, suppression |
-| `S` | remplir et signer : signature tracée, tapée ou importée, texte, marques |
+| `S` | remplir et signer : signature, paraphe, texte tapé sur la page, stylo, marques (encre au choix) |
 | `M`, `Maj+M` | biffure : marquer (réversible), puis appliquer définitivement |
 | onglet « Fichiers » du panneau | pièces jointes : clic pour enregistrer, bouton pour en joindre une |
 | clic sur un champ de formulaire | le remplir ; `Tab` / `Entrée` : champ suivant et activation |

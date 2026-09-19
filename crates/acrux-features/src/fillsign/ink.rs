@@ -90,6 +90,113 @@ pub struct Pen {
     pub taper: f64,
 }
 
+/// Sorte de pointe : ce qui distingue un stylo d'un feutre.
+///
+/// Deux choses seulement les séparent vraiment, et ce sont celles qu'on voit :
+/// **la largeur varie-t-elle** avec la vitesse du geste, et **les bouts
+/// s'effilent-ils** ? Une plume amincit beaucoup et effile longuement, un
+/// stylo à bille presque pas, un feutre pas du tout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Nib {
+    /// Stylo à bille : trait presque régulier, bouts courts.
+    #[default]
+    Ball,
+    /// Plume : trait nerveux, bouts effilés.
+    Fountain,
+    /// Feutre : trait large et régulier, bouts francs.
+    Marker,
+}
+
+impl Nib {
+    /// Nom affiché.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Nib::Ball => "Stylo",
+            Nib::Fountain => "Plume",
+            Nib::Marker => "Feutre",
+        }
+    }
+
+    /// Les trois pointes, dans l'ordre d'affichage.
+    #[must_use]
+    pub fn all() -> [Nib; 3] {
+        [Nib::Ball, Nib::Fountain, Nib::Marker]
+    }
+
+    /// Place dans cet ordre, pour les préférences.
+    #[must_use]
+    pub fn index(self) -> u8 {
+        match self {
+            Nib::Ball => 0,
+            Nib::Fountain => 1,
+            Nib::Marker => 2,
+        }
+    }
+
+    /// Pointe d'un indice ; au-delà, la première.
+    #[must_use]
+    pub fn from_index(index: u8) -> Nib {
+        *Self::all().get(index as usize).unwrap_or(&Nib::Ball)
+    }
+}
+
+/// Épaisseur choisie, indépendante de la taille du dessin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Weight {
+    /// Fin.
+    Thin,
+    /// Moyen.
+    #[default]
+    Medium,
+    /// Épais.
+    Thick,
+}
+
+impl Weight {
+    /// Nom affiché.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Weight::Thin => "Fin",
+            Weight::Medium => "Moyen",
+            Weight::Thick => "Épais",
+        }
+    }
+
+    /// Facteur appliqué à la largeur.
+    #[must_use]
+    pub fn factor(self) -> f64 {
+        match self {
+            Weight::Thin => 0.6,
+            Weight::Medium => 1.0,
+            Weight::Thick => 1.7,
+        }
+    }
+
+    /// Les trois épaisseurs, dans l'ordre d'affichage.
+    #[must_use]
+    pub fn all() -> [Weight; 3] {
+        [Weight::Thin, Weight::Medium, Weight::Thick]
+    }
+
+    /// Place dans cet ordre, pour les préférences.
+    #[must_use]
+    pub fn index(self) -> u8 {
+        match self {
+            Weight::Thin => 0,
+            Weight::Medium => 1,
+            Weight::Thick => 2,
+        }
+    }
+
+    /// Épaisseur d'un indice ; au-delà, moyenne.
+    #[must_use]
+    pub fn from_index(index: u8) -> Weight {
+        *Self::all().get(index as usize).unwrap_or(&Weight::Medium)
+    }
+}
+
 impl Pen {
     /// Plume proportionnée à un dessin de cette taille.
     ///
@@ -108,6 +215,98 @@ impl Pen {
             taper: diagonal * 0.035,
             ..Pen::default()
         }
+    }
+
+    /// Comme [`Pen::for_extent`], avec une pointe et une épaisseur choisies.
+    #[must_use]
+    pub fn styled(width: f64, height: f64, nib: Nib, weight: Weight) -> Pen {
+        let diagonal = width.hypot(height).max(1.0);
+        let k = weight.factor();
+        match nib {
+            Nib::Ball => Pen {
+                width: (diagonal * 0.012 * k).max(0.05),
+                thinning: 0.18,
+                speed_ref: diagonal * 0.05,
+                smoothing: 0.62,
+                taper: diagonal * 0.010,
+            },
+            Nib::Fountain => Pen {
+                width: (diagonal * 0.016 * k).max(0.05),
+                thinning: 0.55,
+                speed_ref: diagonal * 0.05,
+                smoothing: 0.6,
+                taper: diagonal * 0.035,
+            },
+            Nib::Marker => Pen {
+                width: (diagonal * 0.026 * k).max(0.05),
+                thinning: 0.0,
+                speed_ref: diagonal * 0.05,
+                smoothing: 0.75,
+                taper: 0.0,
+            },
+        }
+    }
+
+    /// Plume qui écrit **sur la page**, en points PDF.
+    ///
+    /// Ici la largeur ne se déduit pas du dessin : on écrit sur une feuille,
+    /// et un trait de stylo fait la même épaisseur qu'on trace un trait de
+    /// deux centimètres ou qu'on raye toute la page. `unit` vaut 1 pour des
+    /// points PDF, l'échelle d'affichage pour un aperçu à l'écran.
+    #[must_use]
+    pub fn on_page(nib: Nib, weight: Weight, unit: f64) -> Pen {
+        let unit = unit.max(0.01);
+        let width = match nib {
+            Nib::Ball => 1.5,
+            Nib::Fountain => 1.9,
+            Nib::Marker => 3.4,
+        } * weight.factor()
+            * unit;
+        Pen {
+            width,
+            thinning: match nib {
+                Nib::Ball => 0.18,
+                Nib::Fountain => 0.55,
+                Nib::Marker => 0.0,
+            },
+            speed_ref: 7.0 * unit,
+            smoothing: match nib {
+                Nib::Marker => 0.75,
+                _ => 0.62,
+            },
+            taper: match nib {
+                Nib::Ball => width * 0.8,
+                Nib::Fountain => width * 2.5,
+                Nib::Marker => 0.0,
+            },
+        }
+    }
+
+    /// Plume proportionnée à l'étendue d'une suite de traits, pointe et
+    /// épaisseur choisies.
+    #[must_use]
+    pub fn styled_for_strokes(strokes: &[Stroke], nib: Nib, weight: Weight) -> Pen {
+        match Self::extent_of(strokes) {
+            Some((w, h)) => Pen::styled(w, h, nib, weight),
+            None => Pen::default(),
+        }
+    }
+
+    /// Étendue d'une suite de traits (largeur, hauteur).
+    fn extent_of(strokes: &[Stroke]) -> Option<(f64, f64)> {
+        let mut bounds: Option<(f64, f64, f64, f64)> = None;
+        for point in strokes.iter().flat_map(|s| s.points.iter()) {
+            match &mut bounds {
+                Some(b) => {
+                    b.0 = b.0.min(point.x);
+                    b.1 = b.1.min(point.y);
+                    b.2 = b.2.max(point.x);
+                    b.3 = b.3.max(point.y);
+                }
+                None => bounds = Some((point.x, point.y, point.x, point.y)),
+            }
+        }
+        bounds.map(|(x0, y0, x1, y1)| (x1 - x0, y1 - y0))
     }
 
     /// Plume proportionnée à l'étendue d'une suite de traits.
@@ -625,5 +824,64 @@ fn catmull(points: &[(f64, f64)], segs: &mut Vec<Seg>) {
             p2.0,
             p2.1,
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Nib, Pen, Stroke, Weight};
+
+    #[test]
+    fn lepaisseur_choisie_change_la_largeur_du_trait() {
+        let widths: Vec<f64> = Weight::all()
+            .iter()
+            .map(|w| Pen::on_page(Nib::Ball, *w, 1.0).width)
+            .collect();
+        assert!(widths[0] < widths[1] && widths[1] < widths[2], "{widths:?}");
+    }
+
+    #[test]
+    fn chaque_pointe_a_son_caractere() {
+        let ball = Pen::on_page(Nib::Ball, Weight::Medium, 1.0);
+        let fountain = Pen::on_page(Nib::Fountain, Weight::Medium, 1.0);
+        let marker = Pen::on_page(Nib::Marker, Weight::Medium, 1.0);
+        // La plume amincit et effile ; le feutre ne fait ni l'un ni l'autre.
+        assert!(fountain.thinning > ball.thinning);
+        assert!(fountain.taper > ball.taper);
+        assert!(marker.thinning.abs() < 1e-9);
+        assert!(marker.taper.abs() < 1e-9);
+        assert!(marker.width > fountain.width);
+    }
+
+    #[test]
+    fn un_trait_sur_la_page_ne_depend_pas_de_sa_longueur() {
+        // Deux gestes, l'un court l'autre long : même stylo, même épaisseur.
+        let court = Pen::on_page(Nib::Ball, Weight::Medium, 1.0);
+        let long = Pen::on_page(Nib::Ball, Weight::Medium, 1.0);
+        assert!((court.width - long.width).abs() < 1e-9);
+        // Alors qu'une signature, elle, se met à l'échelle de son dessin.
+        let petite = Pen::styled_for_strokes(
+            &[Stroke::from_points(&[(0.0, 0.0), (10.0, 10.0)])],
+            Nib::Ball,
+            Weight::Medium,
+        );
+        let grande = Pen::styled_for_strokes(
+            &[Stroke::from_points(&[(0.0, 0.0), (100.0, 100.0)])],
+            Nib::Ball,
+            Weight::Medium,
+        );
+        assert!(grande.width > petite.width * 5.0);
+    }
+
+    #[test]
+    fn les_reglages_font_laller_retour_par_leur_indice() {
+        for nib in Nib::all() {
+            assert_eq!(Nib::from_index(nib.index()), nib);
+        }
+        for weight in Weight::all() {
+            assert_eq!(Weight::from_index(weight.index()), weight);
+        }
+        assert_eq!(Nib::from_index(9), Nib::Ball);
+        assert_eq!(Weight::from_index(9), Weight::Medium);
     }
 }

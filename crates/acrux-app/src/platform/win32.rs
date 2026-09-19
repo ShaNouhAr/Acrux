@@ -1620,6 +1620,8 @@ pub fn run(title: &str, width: u32, height: u32, app: Box<dyn App>) -> Result<()
         drawn(Shape::Note),
         drawn(Shape::Redact),
         drawn(Shape::Move),
+        drawn(Shape::Pen),
+        drawn(Shape::Place),
     ];
     let cursor = cursors[0];
     let icon = program_icon(instance, SM_CXICON, SM_CYICON);

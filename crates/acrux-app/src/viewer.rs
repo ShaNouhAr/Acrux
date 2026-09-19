@@ -60,6 +60,7 @@ use crate::ui::toolbar::{ToolAction, Toolbar, ToolbarInfo};
 use crate::ui::tools::{ToolsInfo, ToolsPanel};
 use crate::ui::video::{self as video_ui, Box2, Hit as VideoHit};
 use acrux_features::edit_objects::{self, Edit as ObjectEdit, PageObject};
+use acrux_features::fillsign::ink::{InkPoint, Nib, Pen, Stroke, Weight};
 
 mod dialogs;
 mod editmode;
@@ -330,6 +331,15 @@ impl AnnotTool {
     }
 }
 
+/// Un trait en train d'être tracé au stylo, sur une page.
+#[derive(Debug)]
+struct Inking {
+    /// Page dessinée.
+    page: usize,
+    /// Points relevés, en coordonnées de page.
+    points: Vec<InkPoint>,
+}
+
 /// Paliers de zoom.
 const ZOOM_STEPS: [f64; 16] = [
     0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 6.0,
@@ -423,7 +433,6 @@ enum PromptKind {
     /// Commentaire à joindre à un surlignage déjà découpé en zones.
     Highlight { zones: Vec<(usize, Rect)> },
     /// Texte de remplissage à poser sur `page`, dans `rect`.
-    SignText { page: usize, rect: Rect },
     /// Nouveau texte pour une plage de glyphes d'une ligne.
     EditText {
         page: usize,
@@ -625,6 +634,8 @@ pub struct Viewer {
     update_started: bool,
     /// Outil « remplir et signer » : la barre est affichée quand il est actif.
     sign_bar: Option<SignBar>,
+    /// Tracé au stylo en cours, en coordonnées de page.
+    inking: Option<Inking>,
     /// Fenêtre de capture d'une signature, ouverte par-dessus tout.
     capture: Option<Capture>,
     /// Signature enregistrée, conservée entre deux sessions.
@@ -748,6 +759,7 @@ impl Viewer {
             update_asked: false,
             update_started: false,
             sign_bar: None,
+            inking: None,
             capture: None,
             signature,
             initials,
@@ -1360,25 +1372,6 @@ impl Viewer {
                             name,
                             value: FieldValue::parse(kind, &value),
                         });
-                    }
-                    PromptKind::SignText { page, rect } => {
-                        let (page, rect) = (*page, *rect);
-                        self.prompt = None;
-                        if !value.trim().is_empty() {
-                            // La hauteur du rectangle fixe le corps du texte ;
-                            // la largeur s'ajuste au texte, proportions gardées.
-                            let wide = Rect::new(
-                                rect.x0,
-                                rect.y0,
-                                rect.x0 + rect.height() * 60.0,
-                                rect.y1,
-                            );
-                            self.apply_fillsign(
-                                page,
-                                wide,
-                                acrux_features::fillsign::Item::Text { text: value },
-                            );
-                        }
                     }
                     PromptKind::Highlight { zones } => {
                         let zones = zones.clone();
@@ -4167,9 +4160,9 @@ impl Viewer {
             self.capture = None;
             self.set_notice("remplir et signer : terminé".into());
         } else {
-            self.sign_bar = Some(SignBar::default());
+            self.sign_bar = Some(self.new_sign_bar());
             if self.signature.is_none() {
-                self.capture = Some(Capture::new(false));
+                self.capture = Some(self.new_capture(false));
             } else {
                 self.pick_sign_item(SignItem::Signature);
             }
@@ -4180,13 +4173,17 @@ impl Viewer {
 
     /// Choisit ce qui sera posé au prochain clic.
     fn pick_sign_item(&mut self, item: SignItem) {
+        // Changer d'élément arrête l'écriture en cours sur la page.
+        if self.edit_overlay() {
+            self.leave_edit();
+        }
         let missing = match item {
             SignItem::Signature => self.signature.is_none(),
             SignItem::Initials => self.initials.is_none(),
             _ => false,
         };
         if missing {
-            self.capture = Some(Capture::new(item == SignItem::Initials));
+            self.capture = Some(self.new_capture(item == SignItem::Initials));
             return;
         }
         if let Some(bar) = &mut self.sign_bar {
@@ -4201,6 +4198,20 @@ impl Viewer {
             sign::Action::None => return,
             sign::Action::Redraw => {}
             sign::Action::Pick(item) => self.pick_sign_item(item),
+            sign::Action::Ink(index) => {
+                self.prefs.sign_color = u8::try_from(index).unwrap_or(0);
+                self.prefs.save();
+                self.set_notice(format!(
+                    "encre : {}",
+                    sign::INKS[index.min(sign::INKS.len() - 1)].0
+                ));
+            }
+            sign::Action::Style(nib, weight) => {
+                self.prefs.sign_nib = nib.index();
+                self.prefs.sign_weight = weight.index();
+                self.prefs.save();
+                self.set_notice(format!("{} {}", nib.label(), weight.label().to_lowercase()));
+            }
             sign::Action::Import(initials) => {
                 let _ = initials;
                 if let Some(path) = window.open_file_dialog() {
@@ -4218,7 +4229,7 @@ impl Viewer {
                     SignItem::Signature
                 };
                 if self.sign_bar.is_none() {
-                    self.sign_bar = Some(SignBar::default());
+                    self.sign_bar = Some(self.new_sign_bar());
                 }
                 self.pick_sign_item(item);
             }
@@ -4254,13 +4265,22 @@ impl Viewer {
     /// **supérieur gauche** de l'élément, comme dans Acrobat, sauf pour les
     /// marques qui se centrent sur le curseur — on vise une case à cocher.
     #[allow(clippy::many_single_char_names)] // coordonnées et dimensions
-    fn place_sign(&mut self, x: i32, y: i32) -> bool {
+    fn place_sign(&mut self, x: i32, y: i32, window: &mut dyn WindowHandle) -> bool {
         let Some(item) = self.sign_bar.as_ref().and_then(|b| b.item) else {
             return false;
         };
         let Some((page, point)) = self.page_at(x, y) else {
             return false;
         };
+        if item == SignItem::Draw {
+            // Le stylo ne pose rien : il commence un trait, que le
+            // relâchement du bouton écrira.
+            self.inking = Some(Inking {
+                page,
+                points: vec![InkPoint::new(point.x, point.y)],
+            });
+            return true;
+        }
         let (w, h) = item.default_size();
         let rect = if matches!(item, SignItem::Mark(_)) {
             Rect::new(
@@ -4280,15 +4300,18 @@ impl Viewer {
         let fill_item = match item {
             SignItem::Mark(mark) => acrux_features::fillsign::Item::Mark(mark),
             SignItem::Text => {
-                self.start_sign_text(page, rect);
+                let color = self.sign_rgb();
+                self.type_on_page(page, point, color, window);
                 return true;
             }
             _ => match source {
                 Some(Saved::Drawn(strokes)) => {
                     // La plume suit la taille du tracé : le même geste donne
                     // le même trait, qu'il ait été fait dans une petite ou
-                    // une grande fenêtre.
-                    let pen = acrux_features::fillsign::Pen::for_strokes(&strokes);
+                    // une grande fenêtre. La pointe et l'épaisseur, elles,
+                    // sont celles choisies dans la barre.
+                    let pen =
+                        Pen::styled_for_strokes(&strokes, self.sign_nib(), self.sign_weight());
                     acrux_features::fillsign::Item::Drawn { strokes, pen }
                 }
                 Some(Saved::Typed(text)) => acrux_features::fillsign::Item::Typed { text },
@@ -4309,6 +4332,123 @@ impl Viewer {
         true
     }
 
+    /// Fenêtre de capture, avec l'encre retenue.
+    fn new_capture(&self, initials: bool) -> Capture {
+        Capture::with_ink(
+            initials,
+            self.prefs.sign_color as usize,
+            self.sign_nib(),
+            self.sign_weight(),
+        )
+    }
+
+    /// Pointe choisie.
+    fn sign_nib(&self) -> Nib {
+        Nib::from_index(self.prefs.sign_nib)
+    }
+
+    /// Épaisseur choisie.
+    fn sign_weight(&self) -> Weight {
+        Weight::from_index(self.prefs.sign_weight)
+    }
+
+    /// Barre de l'outil, avec l'encre retenue de la dernière fois.
+    fn new_sign_bar(&self) -> SignBar {
+        SignBar::with_ink(
+            self.prefs.sign_color as usize,
+            self.sign_nib(),
+            self.sign_weight(),
+        )
+    }
+
+    /// Couleur d'encre choisie.
+    fn sign_rgb(&self) -> [f64; 3] {
+        self.sign_bar
+            .as_ref()
+            .map_or_else(|| sign::INKS[0].1, SignBar::rgb)
+    }
+
+    /// Le trait suit le pointeur.
+    fn ink_move(&mut self, x: i32, y: i32) {
+        let Some((page, point)) = self.page_at(x, y) else {
+            return;
+        };
+        if let Some(ink) = &mut self.inking {
+            // Un geste qui sort de la page continue sur la page commencée :
+            // changer de page au milieu d'un trait n'aurait pas de sens.
+            if ink.page == page {
+                ink.points.push(InkPoint::new(point.x, point.y));
+            }
+        }
+    }
+
+    /// Fin du geste : le trait devient une annotation d'encre.
+    fn ink_finish(&mut self) {
+        let Some(ink) = self.inking.take() else {
+            return;
+        };
+        if ink.points.len() < 2 {
+            // Un simple clic ne laisse pas de trace.
+            return;
+        }
+        let strokes = vec![Stroke { points: ink.points }];
+        let pen = Pen::on_page(self.sign_nib(), self.sign_weight(), 1.0);
+        let outline = acrux_features::fillsign::ink::outline(&strokes, &pen);
+        if outline.is_empty() {
+            return;
+        }
+        let rect = outline.bbox;
+        self.apply_fillsign(
+            ink.page,
+            rect,
+            acrux_features::fillsign::Item::Drawn { strokes, pen },
+        );
+    }
+
+    /// Dessine le trait en cours, tel qu'il sera écrit.
+    fn paint_inking(&mut self, frame: &mut Frame<'_>) {
+        let Some(ink) = &self.inking else { return };
+        if ink.points.len() < 2 {
+            return;
+        }
+        let layout = self.layout();
+        let Some((ox, top)) = self.page_screen(&layout, ink.page) else {
+            return;
+        };
+        let Some(loaded) = self.loaded.as_ref() else {
+            return;
+        };
+        let Some(area) = layout.get(ink.page) else {
+            return;
+        };
+        let Some(page) = loaded.pages.get(ink.page) else {
+            return;
+        };
+        let matrix = base_matrix(
+            &page.crop_box(&loaded.doc),
+            self.scale(),
+            page.rotate(&loaded.doc),
+            area.w,
+            area.h,
+        )
+        .then(&Matrix::new(1.0, 0.0, 0.0, 1.0, ox, top));
+        // Le trait est calculé dans l'espace de la page puis transporté :
+        // l'aperçu est le dessin lui-même, à l'échelle de l'affichage.
+        let pen = Pen::on_page(self.sign_nib(), self.sign_weight(), 1.0);
+        let strokes = [Stroke {
+            points: ink.points.clone(),
+        }];
+        let outline = acrux_features::fillsign::ink::outline(&strokes, &pen);
+        let [red, green, blue] = self.sign_rgb();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let rgb = (
+            (red * 255.0) as u8,
+            (green * 255.0) as u8,
+            (blue * 255.0) as u8,
+        );
+        sign::fill_outline(frame, &mut self.raster, &outline, &matrix, rgb);
+    }
+
     /// Envoie la pose au fil de rendu.
     fn apply_fillsign(&mut self, page: usize, rect: Rect, item: acrux_features::fillsign::Item) {
         let label = item.kind().to_string();
@@ -4317,23 +4457,13 @@ impl Viewer {
             page,
             rect,
             author: None,
+            color: self.sign_rgb(),
             ..acrux_features::fillsign::Options::default()
         };
         self.apply_edit(EditOp::FillSign {
             options: Box::new(options),
         });
         self.set_notice(format!("posé : {label} en page {}", page + 1));
-    }
-
-    /// Demande le texte à écrire, puis le pose là où l'on a cliqué.
-    fn start_sign_text(&mut self, page: usize, rect: Rect) {
-        self.prompt = Some(Prompt {
-            title: "Texte".into(),
-            label: format!("À écrire en page {} :", page + 1),
-            input: TextInput::new("Nom, date, numéro…"),
-            error: None,
-            kind: PromptKind::SignText { page, rect },
-        });
     }
 
     /// Dessine la barre de l'outil, sous la barre d'onglets.
@@ -4762,6 +4892,15 @@ impl App for Viewer {
                     self.sign_action(action, window);
                 }
             }
+            Event::Char(c, m)
+                if self.capture.is_some() && m.ctrl && matches!(c, 'z' | 'Z' | '\u{1a}') =>
+            {
+                let action = self
+                    .capture
+                    .as_mut()
+                    .map_or(sign::Action::None, Capture::undo);
+                self.sign_action(action, window);
+            }
             Event::Char(c, m) if self.capture.is_some() && !m.ctrl => {
                 let action = self
                     .capture
@@ -4966,7 +5105,7 @@ impl App for Viewer {
                     if self.mode_bar.closes(x, y) {
                         self.annot_tool = None;
                     }
-                } else if y < top && self.edit_on() {
+                } else if y < top && self.edit_on() && !self.edit_overlay() {
                     // Barre du mode « Modifier le PDF ».
                     if self.prompt.is_none() {
                         self.edit_bar_click(x, y, window);
@@ -4975,7 +5114,7 @@ impl App for Viewer {
                     // Barre « remplir et signer ».
                     if self.prompt.is_none() {
                         if let Some(action) =
-                            self.sign_bar.as_ref().and_then(|b| b.mouse_down(x, y))
+                            self.sign_bar.as_mut().and_then(|b| b.mouse_down(x, y))
                         {
                             self.sign_action(action, window);
                         }
@@ -5037,7 +5176,7 @@ impl App for Viewer {
                         } else if self.objects.is_some() {
                             self.objects_mouse_down(x, y, modifiers.shift);
                             window.request_redraw();
-                        } else if self.place_sign(x, y) {
+                        } else if self.place_sign(x, y, window) {
                             // L'outil a posé quelque chose : ni sélection, ni lien.
                         } else if let Some((fi, wi)) = self.widget_at(x, y) {
                             self.selection = None;
@@ -5086,6 +5225,10 @@ impl App for Viewer {
                     .as_mut()
                     .map_or(sign::Action::None, |c| c.mouse_move(x, y, dragging));
                 self.sign_action(action, window);
+            }
+            Event::MouseUp { .. } if self.inking.is_some() => {
+                self.ink_finish();
+                window.request_redraw();
             }
             Event::MouseUp { .. } => {
                 self.edit_mouse_up();
@@ -5149,6 +5292,11 @@ impl App for Viewer {
                     }
                     return;
                 }
+                if self.inking.is_some() && dragging {
+                    self.ink_move(x, y);
+                    window.request_redraw();
+                    return;
+                }
                 if self.sel_dragging && dragging {
                     if let Some((pos, _)) = self.text_pos_at(x, y) {
                         if let Some(sel) = &mut self.selection {
@@ -5175,7 +5323,14 @@ impl App for Viewer {
                     }
                     let in_view =
                         self.prompt.is_none() && x >= 0 && y >= 0 && y < self.view_height() as i32;
-                    let cursor = if in_view && self.annot_tool.is_some() {
+                    let sign_item = self.sign_bar.as_ref().and_then(|b| b.item);
+                    let cursor = if in_view && sign_item == Some(SignItem::Draw) {
+                        Cursor::Pen
+                    } else if in_view && sign_item == Some(SignItem::Text) {
+                        Cursor::AddText
+                    } else if in_view && sign_item.is_some() {
+                        Cursor::Place
+                    } else if in_view && self.annot_tool.is_some() {
                         match self.annot_tool {
                             Some(AnnotTool::Note) => Cursor::Note,
                             Some(AnnotTool::Redact) => Cursor::Redact,
@@ -5241,6 +5396,7 @@ impl App for Viewer {
             self.paint_selection(&mut view);
             self.paint_edit(&mut view);
             self.paint_objects(&mut view);
+            self.paint_inking(&mut view);
             self.paint_media(&mut view);
             self.paint_field_focus(&mut view);
             self.paint_search(&mut view);

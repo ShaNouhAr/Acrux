@@ -30,6 +30,10 @@ pub enum Shape {
     Redact,
     /// Déplacer : quatre flèches.
     Move,
+    /// Stylo : on écrit sur la page.
+    Pen,
+    /// Poser : croix de visée fine.
+    Place,
 }
 
 /// Image d'un pointeur : pixels BGRA (alpha non prémultiplié), côté, et
@@ -200,6 +204,41 @@ fn describe(shape: Shape) -> (Vec<Op>, (f32, f32)) {
             ops.push(Op::Fill(pave, BLACK));
             (12.0, 12.0)
         }
+        Shape::Pen => {
+            // Un stylo tenu en biais, la pointe sur le point actif.
+            let body = vec![(9.0, 10.0), (12.5, 6.5), (25.0, 19.0), (21.5, 22.5)];
+            let tip = vec![(3.0, 29.0), (9.0, 10.0), (12.5, 13.5)];
+            let outline = [
+                ((9.0, 10.0), (12.5, 6.5)),
+                ((12.5, 6.5), (25.0, 19.0)),
+                ((25.0, 19.0), (21.5, 22.5)),
+                ((21.5, 22.5), (9.0, 10.0)),
+            ];
+            for &(a, b) in &outline {
+                ops.push(Op::Line(a, b, 3.4, WHITE));
+            }
+            ops.push(Op::Line((3.0, 29.0), (11.0, 12.0), 4.6, WHITE));
+            ops.push(Op::Fill(tip, BLACK));
+            ops.push(Op::Fill(body, [0x5A, 0x8C, 0xE0]));
+            for &(a, b) in &outline {
+                ops.push(Op::Line(a, b, 1.1, BLACK));
+            }
+            ops.push(Op::Line((15.0, 9.0), (22.5, 16.5), 1.0, BLACK));
+            (3.0, 29.0)
+        }
+        Shape::Place => {
+            outlined(
+                &mut ops,
+                &[
+                    ((16.0, 4.0), (16.0, 13.0)),
+                    ((16.0, 19.0), (16.0, 28.0)),
+                    ((4.0, 16.0), (13.0, 16.0)),
+                    ((19.0, 16.0), (28.0, 16.0)),
+                ],
+                1.2,
+            );
+            (16.0, 16.0)
+        }
         Shape::Move => {
             let c = 16.0;
             outlined(
@@ -302,12 +341,14 @@ fn contains(points: &[(f32, f32)], p: (f32, f32)) -> bool {
 mod tests {
     use super::*;
 
-    const ALL: [Shape; 5] = [
+    const ALL: [Shape; 7] = [
         Shape::AddText,
         Shape::Highlight,
         Shape::Note,
         Shape::Redact,
         Shape::Move,
+        Shape::Pen,
+        Shape::Place,
     ];
 
     #[test]

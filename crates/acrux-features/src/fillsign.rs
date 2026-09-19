@@ -77,7 +77,7 @@ use crate::annotations::{encode_text, pdf_date_now, Rgb};
 use crate::fontembed::{embed_preferring, fits_winansi, FontStyle};
 use crate::stamp::{encode_win_ansi, pdf_literal, StandardFont};
 
-pub use ink::{InkPoint, Outline, Pen, Seg, Stroke};
+pub use ink::{InkPoint, Nib, Outline, Pen, Seg, Stroke, Weight};
 pub use marks::Mark;
 
 /// Clé privée qui signe nos annotations, et valeur de chaque sorte.
@@ -193,9 +193,10 @@ impl Default for Options {
             page: 0,
             rect: Rect::new(0.0, 0.0, 72.0, 24.0),
             fit: Fit::Contain,
-            // Le bleu d'encre des stylos : se distingue d'un document imprimé
-            // en noir, ce qui est exactement ce qu'on attend d'une signature.
-            color: [0.09, 0.13, 0.44],
+            // Noir : c'est avec quoi l'on signe un papier, et c'est ce qui
+            // sort d'une imprimante ensuite. Les autres couleurs sont un
+            // choix, pas un défaut.
+            color: [0.0, 0.0, 0.0],
             author: None,
         }
     }

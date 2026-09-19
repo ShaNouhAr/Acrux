@@ -328,12 +328,14 @@ fn laplatissement_ne_change_pas_un_pixel() {
             "fondre le dessin ne doit rien déplacer ({})",
             path.display()
         );
-        // Quelques centaines de composantes sur deux millions changent d'un
-        // pas, toutes sur les bords anticrénelés du dessin : un déplacement
-        // réel, lui, en toucherait des dizaines de milliers.
+        // Quelques composantes changent d'un pas, toutes sur les bords
+        // anticrénelés du dessin — d'autant plus nombreuses que l'encre
+        // tranche sur le fond, et l'encre par défaut est noire. Un
+        // déplacement réel, lui, toucherait des dizaines de milliers de
+        // composantes, soit bien plus d'un demi-pour-cent de la page.
         let drift = differences(&before, &after, 0);
         assert!(
-            drift * 1_000 < before.len(),
+            drift * 200 < before.len(),
             "{drift} composantes décalées sur {} ({})",
             before.len(),
             path.display()

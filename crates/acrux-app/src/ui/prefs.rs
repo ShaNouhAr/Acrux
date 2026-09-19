@@ -183,6 +183,12 @@ pub struct Prefs {
     pub signature: Option<String>,
     /// Paraphe enregistré, même forme.
     pub initials: Option<String>,
+    /// Pointe choisie pour l'encre (`stylo`, `plume`, `feutre`).
+    pub sign_nib: u8,
+    /// Épaisseur choisie (0 fin, 1 moyen, 2 épais).
+    pub sign_weight: u8,
+    /// Couleur d'encre choisie, indice dans la palette de l'outil.
+    pub sign_color: u8,
     /// Documents ouverts récemment, du plus récent au plus ancien.
     pub recent: Vec<PathBuf>,
 }
@@ -202,6 +208,9 @@ impl Default for Prefs {
             last_update_check: 0,
             signature: None,
             initials: None,
+            sign_nib: 0,
+            sign_weight: 1,
+            sign_color: 0,
             recent: Vec::new(),
         }
     }
@@ -298,6 +307,9 @@ impl Prefs {
                         p.last_update_check = day;
                     }
                 }
+                "encre-pointe" => p.sign_nib = value.parse().unwrap_or(0).min(2),
+                "encre-epaisseur" => p.sign_weight = value.parse().unwrap_or(1).min(2),
+                "encre-couleur" => p.sign_color = value.parse().unwrap_or(0),
                 "signature" if !value.is_empty() => p.signature = Some(value.to_string()),
                 "initials" if !value.is_empty() => p.initials = Some(value.to_string()),
                 "recent" if !value.is_empty() && p.recent.len() < MAX_RECENT => {
@@ -326,6 +338,9 @@ impl Prefs {
         let _ = writeln!(out, "window={}x{}", self.window.0, self.window.1);
         let _ = writeln!(out, "mises-a-jour={}", u8::from(self.check_updates));
         let _ = writeln!(out, "derniere-verification={}", self.last_update_check);
+        let _ = writeln!(out, "encre-pointe={}", self.sign_nib);
+        let _ = writeln!(out, "encre-epaisseur={}", self.sign_weight);
+        let _ = writeln!(out, "encre-couleur={}", self.sign_color);
         if let Some(value) = &self.signature {
             let _ = writeln!(out, "signature={value}");
         }
@@ -377,6 +392,9 @@ mod tests {
             last_update_check: 20_350,
             signature: Some("typed:Élise Marchand".into()),
             initials: Some("drawn:1.0,2.0 3.0,4.0".into()),
+            sign_nib: 2,
+            sign_weight: 0,
+            sign_color: 3,
             recent: vec![PathBuf::from(r"C:\docs\a.pdf"), PathBuf::from(r"C:\b.pdf")],
         };
         p.push_recent(Path::new(r"C:\b.pdf"));

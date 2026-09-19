@@ -7,6 +7,33 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
+## Non publié
+
+### Remplir et signer, revu de fond en comble
+
+- **L'encre est noire par défaut** — c'est avec quoi l'on signe un papier —
+  avec le bleu, le rouge et le vert à un clic.
+- **Trois pointes et trois épaisseurs** : stylo, plume, feutre, en fin, moyen
+  ou épais. Le choix se voit dans l'aperçu de la signature avant d'être posé,
+  et il est retenu d'une session à l'autre.
+- **Un stylo pour écrire directement sur la page** : on choisit « Dessiner »
+  et l'on trace — une croix dans une case, un trait dans la marge, un
+  paraphe. Le trait se dessine sous le pointeur tel qu'il sera enregistré.
+- **Le texte se tape sur la page**, à l'endroit cliqué, au lieu de passer par
+  une boîte de dialogue : on clique sur une ligne du formulaire, on tape, on
+  clique sur la suivante. Le texte prend la police du document et se pose sur
+  le trait du champ.
+- **La fenêtre de signature** garde la ligne de base, montre le trait dans
+  l'encre choisie, et sait défaire le dernier trait (bouton ou Ctrl+Z).
+  Entrée applique.
+- **Des pointeurs** pour le stylo et pour la pose.
+
+### Modifier le PDF
+
+- **Un clic dans une zone vide se voit** : le trait sur lequel le texte va
+  s'écrire apparaît sous le curseur. Sans lui, cliquer dans du blanc semblait
+  ne rien faire.
+
 ## 0.5.0 — 19 septembre 2026
 
 Acrux ne demande plus rien au système : ses questions, ses pointeurs et ses

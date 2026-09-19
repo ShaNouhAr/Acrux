@@ -276,6 +276,22 @@ impl Buffer {
     }
 }
 
+/// Indice de la couleur la plus proche dans [`COLORS`], pour reprendre une
+/// encre choisie ailleurs.
+#[must_use]
+pub fn color_index(color: [f64; 3]) -> usize {
+    COLORS
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| {
+            let d = |c: &[f64; 3]| {
+                (c[0] - color[0]).powi(2) + (c[1] - color[1]).powi(2) + (c[2] - color[2]).powi(2)
+            };
+            d(a).total_cmp(&d(b))
+        })
+        .map_or(0, |(i, _)| i)
+}
+
 /// Barre du mode, sous la barre d'outils.
 #[derive(Debug)]
 pub struct EditBar {

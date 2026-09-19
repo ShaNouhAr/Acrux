@@ -302,7 +302,13 @@ Livrable : version 0.3, édition au moins équivalente à Acrobat Pro sur le cor
   système incorporée en sous-ensemble ; signature **importée** avec détourage du papier par
   estimation **locale** de l'éclairage (maximum glissant puis flou en caisson, tous deux linéaires),
   rognage à l'encre, recoloration facultative ; texte libre et cinq marques (coche, croix, rond,
-  trait, point) dessinées par la même chaîne que l'encre. Chaque élément est une annotation
+  trait, point) dessinées par la même chaîne que l'encre. **Encre choisie dans la barre** : noir
+  par défaut (bleu, rouge, vert), trois pointes (stylo, plume, feutre) et trois épaisseurs,
+  retenues d'une session à l'autre. **Stylo** : on trace directement sur la page, le trait suit le
+  pointeur et s'écrit au relâchement (`Pen::on_page`, largeur absolue en points). **Texte tapé sur
+  la page** à l'endroit cliqué, dans la police du document, au lieu d'une boîte de dialogue.
+  Fenêtre de capture : aperçu dans l'encre choisie, Ctrl+Z défait le dernier trait, Entrée
+  applique. Chaque élément est une annotation
   `/Stamp` ou `/FreeText` avec son apparence, repérée par la clé privée `/AKFillSign` : inventaire,
   retrait et **aplatissement** qui ne déplace pas un pixel. Interface : barre des éléments, fenêtre
   de capture à trois onglets, signature et paraphe conservés entre deux sessions.

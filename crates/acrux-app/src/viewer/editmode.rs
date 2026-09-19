@@ -49,6 +49,9 @@ pub(super) struct EditMode {
     pub ticking: Arc<AtomicBool>,
     /// Blocs éditables par page, recalculés quand la page change.
     pub units: HashMap<usize, std::rc::Rc<Vec<TextUnit>>>,
+    /// Écriture au service d'un autre outil (« remplir et signer ») : pas de
+    /// barre à soi, et c'est l'autre outil qui commande.
+    pub overlay: bool,
 }
 
 /// Paragraphe en cours d'édition.
@@ -132,6 +135,7 @@ impl Viewer {
             blink: Instant::now(),
             ticking,
             units: HashMap::new(),
+            overlay: false,
         });
         self.set_notice(match tool {
             EditTool::Select => "cliquez dans un texte pour le modifier".into(),
@@ -145,9 +149,58 @@ impl Viewer {
         self.title_dirty = true;
     }
 
+    /// Vrai si l'on écrit au service d'un autre outil.
+    pub(super) fn edit_overlay(&self) -> bool {
+        self.edit.as_ref().is_some_and(|e| e.overlay)
+    }
+
+    /// Ouvre l'écriture sur la page pour un autre outil : une zone de texte
+    /// neuve à l'endroit cliqué, sans barre ni cadre à soi.
+    ///
+    /// C'est ce que fait « remplir et signer » d'Acrobat : on clique sur le
+    /// formulaire, on tape, on clique ailleurs, on tape. Passer par une boîte
+    /// de dialogue pour chaque valeur ferait perdre le fil.
+    pub(super) fn type_on_page(
+        &mut self,
+        page: usize,
+        pt: Point,
+        color: [f64; 3],
+        window: &mut dyn WindowHandle,
+    ) {
+        if self.edit.is_none() {
+            let ticking = Arc::new(AtomicBool::new(true));
+            let waker = window.waker();
+            let flag = Arc::clone(&ticking);
+            let _ = std::thread::Builder::new()
+                .name("curseur".into())
+                .spawn(move || {
+                    while flag.load(Ordering::Relaxed) {
+                        std::thread::sleep(Duration::from_millis(
+                            u64::try_from(BLINK_MS).unwrap_or(530),
+                        ));
+                        waker.wake();
+                    }
+                });
+            self.edit = Some(EditMode {
+                bar: EditBar::with_tool(EditTool::AddText),
+                active: None,
+                hover: None,
+                blink: Instant::now(),
+                ticking,
+                units: HashMap::new(),
+                overlay: true,
+            });
+        }
+        if let Some(mode) = &mut self.edit {
+            mode.bar.color_set = true;
+            mode.bar.color = crate::ui::editpdf::color_index(color);
+        }
+        self.open_new_box(page, pt, window);
+    }
+
     /// Hauteur de la barre du mode, nulle quand il dort.
     pub(super) fn edit_bar_height(&self) -> u32 {
-        if self.edit.is_some() && !self.fullscreen && !self.reading {
+        if self.edit.as_ref().is_some_and(|e| !e.overlay) && !self.fullscreen && !self.reading {
             EditBar::height(self.dpi_scale as f32).max(0) as u32
         } else {
             0
@@ -156,6 +209,10 @@ impl Viewer {
 
     /// Dessine la barre du mode sous la barre d'outils.
     pub(super) fn paint_edit_bar(&mut self, frame: &mut Frame<'_>) {
+        // Au service d'un autre outil, c'est sa barre à lui qui reste.
+        if self.edit_overlay() {
+            return;
+        }
         let y = Toolbar::height(&self.theme, self.dpi_scale as f32) + self.tabs_height() as i32;
         let (theme, dpi) = (self.theme, self.dpi_scale as f32);
         let active_size = self
@@ -338,7 +395,20 @@ impl Viewer {
                 }
             },
         );
-        outline(frame, &m.transform_rect(&bounds), 3.0 * dpi, thin, accent);
+        // Une zone encore vide n'a pas de texte à montrer : sans repère, un
+        // clic dans le blanc semble n'avoir rien fait. On pose donc, sous le
+        // curseur, le trait sur lequel le texte va s'écrire.
+        if a.buffer.text.is_empty() {
+            let line = Rect::new(
+                a.frame.x0,
+                a.frame.baseline - a.frame.size * 0.12,
+                a.frame.x0 + (a.frame.size * 9.0).min(a.frame.width),
+                a.frame.baseline - a.frame.size * 0.04,
+            );
+            tint(frame, &m.transform_rect(&line), accent, 120);
+        } else {
+            outline(frame, &m.transform_rect(&bounds), 3.0 * dpi, thin, accent);
+        }
         let (s0, s1) = a.buffer.range();
         for r in a.map.selection_rects(s0, s1) {
             tint(frame, &m.transform_rect(&r), accent, 90);

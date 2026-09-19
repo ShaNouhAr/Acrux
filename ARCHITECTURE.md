@@ -280,6 +280,12 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   **tapée** (police manuscrite du système incorporée), **importée** (`cutout` : fond de papier
   retiré par estimation **locale** de l'éclairage), plus du texte libre et cinq marques (`marks`).
   Chaque élément est une annotation avec son apparence ; `flatten` les fond dans les pages.
+  La plume a trois **pointes** (`Nib` : stylo, plume, feutre) et trois **épaisseurs** (`Weight`).
+  Deux façons de la proportionner, et elles ne se confondent pas : `Pen::styled` met le trait à
+  l'échelle du dessin (une signature garde son allure qu'on la trace dans une fenêtre de 700 pixels
+  ou qu'on la pose sur 170 points), `Pen::on_page` lui donne une largeur **absolue** en points
+  (écrire sur une feuille : un trait de stylo fait la même épaisseur quelle que soit la longueur du
+  geste).
 - À faire : `edit_objects`, `security`,
   `ocr`, `optimize`, `scripting`, `ai`.
 
@@ -342,10 +348,14 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
 - `ui/objects` : outil « modifier » — boîte de sélection, huit poignées, redimensionnement sans
   retournement, proportions gardées avec Maj ; la conversion page ↔ vue reste au viewer, qui seul
   connaît le zoom et le défilement.
-- `ui/sign` : outil « remplir et signer » — barre des éléments posables et fenêtre de capture
+- `ui/sign` : outil « remplir et signer » — barre des éléments posables (signature, paraphe, texte,
+  stylo, cinq marques), choix de l'encre (couleur, épaisseur, pointe) et fenêtre de capture
   (tracer, taper, importer) ; l'aperçu est dessiné par le **même** code que le PDF
-  (`acrux_features::fillsign::ink`), si bien que ce qu'on voit est ce qu'on pose. Signature et
-  paraphe sont conservés dans les préférences.
+  (`acrux_features::fillsign::ink`), si bien que ce qu'on voit est ce qu'on pose. Signature,
+  paraphe et encre sont conservés dans les préférences. Deux outils n'y posent pas d'élément tout
+  fait : le **stylo** trace sur la page (le viewer relève les points en espace page et écrit le
+  trait au relâchement), et le **texte** ouvre une zone d'écriture du mode « Modifier le PDF » en
+  mode *overlay* — sans barre à lui, puisque celle de « remplir et signer » reste.
 - `ui` : toolkit interne — `text` (texte d'interface rendu par acrux-fonts + acrux-graphics),
   `theme`, `input` (champ de saisie), `icons` (icônes vectorielles), `toolbar`, `panel`
   (vignettes, signets, commentaires, calques), `tabs` (un onglet par document), `prefs` (réglages persistants et

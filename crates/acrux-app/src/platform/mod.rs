@@ -101,11 +101,15 @@ pub enum Cursor {
     Redact,
     /// Déplacer un objet.
     Move,
+    /// Dessiner au stylo.
+    Pen,
+    /// Poser un élément : signature, paraphe, marque.
+    Place,
 }
 
 impl Cursor {
     /// Nombre de pointeurs.
-    pub const COUNT: usize = 8;
+    pub const COUNT: usize = 10;
 }
 
 /// Modificateurs enfoncés.
