@@ -93,17 +93,37 @@ Livrable : version 0.2, parité avec Acrobat Standard hors édition de texte.
   étiquette `vX.Y.Z` déclenche la construction, l'installateur, l'archive portable, les sommes
   SHA-256 et la page de version. Le workflow refuse de publier si l'étiquette ne correspond pas à la
   version de `Cargo.toml`. Aucune action tierce : le jeton fourni par GitHub et `gh` suffisent.
-- [ ] **Métriques des quatorze polices standard, sans police système** — défaut connu, trouvé en
-  faisant tourner la suite sur macOS. Un PDF qui utilise Helvetica, Times ou Courier sans
-  `/Widths` ni programme incorporé (§9.6.2.2) fait aujourd'hui chercher une police système de
-  substitution ; là où il n'y en a aucune d'utilisable, les largeurs valent zéro, les boîtes de
-  glyphes s'effondrent et l'extraction de texte devient fausse. Les tables AFM existent déjà dans
-  `acrux-features/stamp/metrics.rs` : il faut les descendre dans `acrux-render` (ou
-  `acrux-fonts`), les utiliser en repli, et faire remonter `acrux-features` dessus. Un fichier PDF
-  valide doit se lire correctement sur une machine sans une seule police installée — c'est tout le
-  sens d'un moteur sans dépendances.
+- [x] **Métriques des quatorze polices standard, sans police système** (`acrux-fonts/standard.rs`)
+  — les tables AFM sont descendues sous le rendu comme sous l'écriture, une seule fois pour tout
+  le projet. Un `/BaseFont /Helvetica` sans `/Widths` ni descripteur (§9.6.2.2) compose désormais
+  aux largeurs d'Adobe, qu'il y ait ou non une police installée, et les noms courants (`ArialMT`,
+  `TimesNewRomanPSMT`, `CourierNew`) sont reconnus comme leurs équivalents. Symbol a sa table et
+  **son encodage** : le code 0x61 y est `alpha`, plus `a`. Les tables sont recoupées par un test
+  avec les polices métriquement compatibles du système, ce qui a déjà rattrapé trois erreurs (le
+  `i` accentué se bâtit sur `dotlessi`, `quotedblbase` de Times-Italic, `oe` d'Helvetica-Bold) et
+  comblé huit manques (`Ð Þ ð þ × ÷ ø ß`). Reste : les largeurs de ZapfDingbats, volontairement
+  absentes plutôt qu'inventées.
 - [ ] Signature Authenticode des exécutables (certificat commercial), paquet `winget`
 - [ ] Portages macOS et Linux, et leurs formats de paquet
+
+## Fidélité d'affichage
+
+- [x] **Un glyphe de substitution occupe la largeur déclarée** (`acrux-render/font.rs`,
+  `substitution_fit`) : quand la police n'est pas incorporée, celle qu'on lui substitue n'a pas ses
+  chasses. Dessinée telle quelle, chaque lettre flotte dans la place que le document lui réserve ou
+  en déborde, et la ligne se disloque. Le contour est donc étiré horizontalement jusqu'à l'avance
+  déclarée — ce que fait Acrobat avec ses polices à axes variables, en mieux dessiné. Les bornes
+  0,2 à 5 évitent d'étirer un glyphe qui n'a manifestement rien à voir.
+- [x] **La police demandée est cherchée avant d'être remplacée** : un document qui réclame Calibri
+  sur une machine où Calibri est installée recevait Arial. Les noms de fichiers de Windows se
+  devinent par radical et suffixe (`calibrib.ttf`, `georgiai.ttf`) sans ouvrir les quatre cents
+  polices installées.
+- [ ] **Police de secours dessinée par nous** — dernier trou connu. Sur une machine sans aucune
+  police utilisable (conteneur, image de compilation minimale), la géométrie est maintenant juste
+  mais **rien ne s'affiche** : faute de programme de glyphes, il n'y a pas de contour à remplir.
+  Acrobat embarque pour cela Adobe Sans MM et Adobe Serif MM. Il nous faut la nôtre : un alphabet
+  latin complet tracé à la main dans `acrux-fonts`, que `substitution_fit` mettra ensuite à la
+  chasse voulue. Vérifiable par `ACRUX_FONT_DIR` pointé sur un répertoire vide.
 
 ## Phase 5 — Édition de niveau Acrobat (le cœur du « mieux qu'Acrobat »)
 - [x] Reconstruction de paragraphes depuis le contenu, détection des colonnes et des styles (`acrux-features/text/` : blocs, paragraphes avec alignement, retrait et interligne, césures réparées, colonnes par découpe XY, en-têtes et pieds de page, listes, titres, tableaux à filets ou à colonnes alignées, styles gras / italique / couleur au glyphe près ; sorties `to_plain`, `to_markdown`, `to_html`, `to_layout`, `acr text --markdown|--html|--layout`) ; reste : ordre de lecture depuis le balisage (`/StructTreeRoot`), tableaux à cellules fusionnées, texte vertical CJK

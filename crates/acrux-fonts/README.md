@@ -28,6 +28,41 @@ bornées par la taille des données. Les polices tronquées (cas fréquent des
 sous-ensembles incorporés) donnent des glyphes vides et des tables absentes,
 jamais une erreur fatale.
 
+## Les quatorze polices standard (`standard`)
+
+Un PDF a le droit d'écrire ceci, et c'est valide :
+
+```
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+```
+
+Pas de largeurs, pas de descripteur, pas de programme de police. Le lecteur est
+censé **connaître** Helvetica. Ce module est cette connaissance : les largeurs
+des fichiers AFM d'Adobe, en millièmes d'em, plus les grandeurs du descripteur.
+
+Sans elles, la seule issue est de mesurer une police du système — et le même
+fichier ne se compose plus pareil d'une machine à l'autre, quand il se compose.
+Sur une machine sans police du tout, les largeurs tombent à zéro et les lettres
+s'empilent au même endroit.
+
+Trois détails qui comptent :
+
+- les accentués prennent l'avance de leur lettre de base, parce que ces polices
+  les construisent par superposition — mais le `i` accentué se bâtit sur le `i`
+  **sans point**, plus large (278 contre 222) ;
+- `Arial`, `TimesNewRoman` et `CourierNew` sont reconnus comme Helvetica, Times
+  et Courier : les fonderies les ont dessinées pour être interchangeables, et
+  d'innombrables fichiers écrivent `Arial` sans rien incorporer ;
+- Symbol porte **son propre encodage** : au code 0x61 il y a `alpha`, pas `a`.
+
+Les tables sont recoupées à chaque exécution des tests avec les polices
+métriquement compatibles installées sur la machine (`tests/standard_metrics.rs`).
+Ce juge extérieur a déjà rattrapé trois erreurs et comblé huit manques.
+
+Ce qui manque : les largeurs de ZapfDingbats. Les inventer serait pire que
+l'absence — `width_by_name` rend `None`, et l'appelant sait qu'il doit se
+rabattre ailleurs.
+
 ## Ce qui n'est pas encore couvert
 
 - **Hinting** : instructions TrueType (`fpgm`, `prep`, `cvt `, instructions

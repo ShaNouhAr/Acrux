@@ -19,6 +19,7 @@ use acrux_core::{Matrix, Path, Result};
 use acrux_document::{Dict, Document, Name, Object};
 use acrux_fonts::cmap::CMap;
 use acrux_fonts::encodings::{self, glyph_name_to_unicode};
+use acrux_fonts::standard::Standard;
 use acrux_fonts::{CffFont, TrueTypeFont, Type1Font};
 
 /// Famille de police PDF.
@@ -90,6 +91,9 @@ pub struct LoadedFont {
     pub program: Program,
     /// Vrai si le programme vient d'une substitution (police non incorporée).
     pub substituted: bool,
+    /// Police standard reconnue (§9.6.2.2), si `/BaseFont` en désigne une :
+    /// c'est elle qui donne les largeurs quand le document n'en fournit pas.
+    pub standard: Option<Standard>,
     /// Matrice glyphe → texte (`/FontMatrix` pour Type3, sinon 1/1000 ou
     /// 1/unitsPerEm est appliqué via `units_per_em`).
     pub font_matrix: Matrix,
@@ -162,11 +166,19 @@ impl LoadedFont {
         let descriptor = doc
             .dict_get(dict, "FontDescriptor")?
             .and_then(|d| d.as_dict().cloned());
+        // Les quatorze polices standard peuvent se passer de descripteur et de
+        // largeurs (§9.6.2.2) : c'est au lecteur de les connaître.
+        let standard = if kind == FontKind::Type3 {
+            None
+        } else {
+            Standard::from_base_font(&base_font)
+        };
         let flags = descriptor
             .as_ref()
             .and_then(|d| doc.dict_get(d, "Flags").ok().flatten())
             .and_then(|o| o.as_i64())
             .and_then(|v| u32::try_from(v).ok())
+            .or_else(|| standard.map(|s| s.metrics().flags))
             .unwrap_or(0);
         let missing_width = descriptor
             .as_ref()
@@ -212,9 +224,18 @@ impl LoadedFont {
             _ if kind == FontKind::Type3 => vec![None; 256],
             _ => base_table(encodings::BaseEncoding::Standard),
         };
-        if substituted && symbolic && builtin.is_none() {
-            // Police symbolique non incorporée : on ne sait rien de son encodage.
-            encoding_names = base_table(encodings::BaseEncoding::Standard);
+        if builtin.is_none() {
+            if let Some(s) = standard.filter(|s| s.has_builtin_encoding()) {
+                // Symbol et ZapfDingbats portent leur propre encodage
+                // (§9.6.6.1). Leur appliquer StandardEncoding mettrait « A »
+                // là où le document veut « Alpha » : ni le bon glyphe, ni la
+                // bonne largeur.
+                encoding_names = base_table(if s == Standard::ZapfDingbats {
+                    encodings::BaseEncoding::ZapfDingbats
+                } else {
+                    encodings::BaseEncoding::Symbol
+                });
+            }
         }
         let mut has_encoding = false;
         if let Some(enc) = doc.dict_get(dict, "Encoding")? {
@@ -275,6 +296,7 @@ impl LoadedFont {
             base_font,
             program,
             substituted,
+            standard,
             font_matrix: Matrix::IDENTITY,
             flags,
             default_width: missing_width / 1000.0,
@@ -430,6 +452,9 @@ impl LoadedFont {
             base_font,
             program,
             substituted,
+            // Aucune des quatorze n'est composite : leurs tables ne
+            // s'appliquent pas ici, où les largeurs viennent de /W et /DW.
+            standard: None,
             font_matrix: Matrix::IDENTITY,
             flags,
             default_width,
@@ -534,12 +559,33 @@ impl LoadedFont {
             return *w;
         }
         if self.simple_widths.is_empty() {
-            // Pas de /Widths (polices standard) : largeur du programme.
+            // Pas de /Widths. Un programme incorporé fait foi : c'est la
+            // police même du document.
+            if !self.substituted {
+                if let Some(w) = self.program_advance(code) {
+                    return w;
+                }
+            }
+            // Sinon, si c'est une des quatorze polices standard, sa table
+            // AFM fait foi — et elle ne dépend d'aucune police installée.
+            if let Some(w) = self.standard_width(code) {
+                return w;
+            }
+            // En dernier ressort, ce que mesure la police de substitution.
             if let Some(w) = self.program_advance(code) {
                 return w;
             }
         }
         self.default_width
+    }
+
+    /// Largeur d'un code d'après la table de la police standard, en unités
+    /// texte. `None` si la police n'en est pas une, ou si le glyphe lui est
+    /// inconnu.
+    fn standard_width(&self, code: u32) -> Option<f64> {
+        let standard = self.standard?;
+        let name = self.glyph_name(code)?;
+        standard.width_by_name(name).map(|w| w / 1000.0)
     }
 
     /// Largeur d'avance depuis le programme de police (unités texte).
@@ -707,25 +753,59 @@ impl LoadedFont {
     #[must_use]
     pub fn glyph_path(&self, glyph: &GlyphRef) -> Option<Path> {
         let gid = self.gid_for(glyph.cid)?;
-        let (path, upem) = match &self.program {
-            Program::TrueType(tt) => (
-                tt.glyph_path(u16::try_from(gid).ok()?)?,
-                f64::from(tt.units_per_em().max(1)),
-            ),
+        let path = match &self.program {
+            Program::TrueType(tt) => {
+                let p = tt.glyph_path(u16::try_from(gid).ok()?)?;
+                let scale = 1.0 / f64::from(tt.units_per_em().max(1));
+                p.transform(&Matrix::scale(scale, scale))
+            }
             Program::Cff(cff) => {
-                let p = cff.glyph_path(gid)?;
-                let m = cff.font_matrix();
                 // FontMatrix non standard : on l'applique et on ramène à 1 unité.
-                return Some(p.transform(&m));
+                cff.glyph_path(gid)?.transform(&cff.font_matrix())
             }
-            Program::Type1(t1) => {
-                let p = t1.glyph_path_by_name(t1.glyph_name(gid)?)?;
-                return Some(p.transform(&t1.font_matrix()));
-            }
+            Program::Type1(t1) => t1
+                .glyph_path_by_name(t1.glyph_name(gid)?)?
+                .transform(&t1.font_matrix()),
             _ => return None,
         };
-        let scale = 1.0 / upem.max(1.0);
-        Some(path.transform(&Matrix::scale(scale, scale)))
+        match self.substitution_fit(glyph) {
+            Some(fit) => Some(path.transform(&Matrix::scale(fit, 1.0))),
+            None => Some(path),
+        }
+    }
+
+    /// Étirement horizontal à appliquer au contour d'un glyphe de
+    /// substitution, pour qu'il occupe l'avance que le document déclare.
+    ///
+    /// Une police de remplacement n'a pas les chasses de la police absente.
+    /// Dessinée telle quelle, chaque lettre est trop étroite ou trop large
+    /// pour la place que le document lui a réservée : le texte se décolle de
+    /// ses blancs, déborde de sa colonne, et deux lecteurs affichent deux
+    /// pages différentes. Acrobat s'en tire avec des polices à axes variables
+    /// qu'il instancie à la chasse voulue ; faute de pouvoir dessiner une
+    /// chasse nouvelle, on étire le contour. La lettre est un peu condensée ou
+    /// dilatée, mais elle **tombe au bon endroit**, et c'est cela qui décide
+    /// si une page ressemble à son original.
+    ///
+    /// Ne s'applique qu'aux polices substituées : un programme incorporé est
+    /// la police du document, on n'y touche pas.
+    fn substitution_fit(&self, glyph: &GlyphRef) -> Option<f64> {
+        if !self.substituted || glyph.width <= 0.0 {
+            return None;
+        }
+        let natural = self.program_advance(glyph.cid)?;
+        if natural <= 0.0 {
+            return None;
+        }
+        let ratio = glyph.width / natural;
+        // Hors de ces bornes, ce n'est plus un ajustement : le glyphe trouvé
+        // n'a rien à voir avec celui que le document voulait. L'étirer le
+        // rendrait illisible sans rien corriger.
+        if (0.2..=5.0).contains(&ratio) {
+            Some(ratio)
+        } else {
+            None
+        }
     }
 
     /// Procédure de glyphe Type 3 pour un code.
@@ -838,8 +918,11 @@ fn program_from_bytes(bytes: &[u8], key: &str, subtype: Option<&str>) -> Option<
 /// Répertoires de polices système, dans l'ordre de recherche.
 fn system_font_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
+    // `ACRUX_FONT_DIR` remplace les répertoires du système au lieu de s'y
+    // ajouter : c'est ce qui permet de vérifier ce que donne un fichier sur
+    // une machine dépourvue de polices, qui est le cas que l'on redoute.
     if let Ok(custom) = std::env::var("ACRUX_FONT_DIR") {
-        dirs.push(PathBuf::from(custom));
+        return vec![PathBuf::from(custom)];
     }
     if let Ok(windir) = std::env::var("WINDIR") {
         dirs.push(PathBuf::from(windir).join("Fonts"));
@@ -855,6 +938,54 @@ fn system_font_dirs() -> Vec<PathBuf> {
 
 thread_local! {
     static SUBSTITUTE_CACHE: std::cell::RefCell<HashMap<String, Option<Rc<Vec<u8>>>>> = std::cell::RefCell::new(HashMap::new());
+}
+
+/// Noms de fichiers à tenter pour la police **exactement demandée**.
+///
+/// Un document qui réclame Calibri sur une machine où Calibri est installée ne
+/// doit pas recevoir Arial : ce serait substituer là où il n'y a rien à
+/// substituer. Windows nomme ses fichiers par radical et suffixe de style
+/// (`calibri.ttf`, `calibrib.ttf`, `calibrii.ttf`, `calibriz.ttf`), ce qui se
+/// devine sans ouvrir les quatre cents polices installées.
+fn family_files(base_font: &str, bold: bool, italic: bool) -> Vec<String> {
+    let name = base_font.rsplit('+').next().unwrap_or(base_font);
+    let mut key = String::with_capacity(name.len());
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            key.push(c.to_ascii_lowercase());
+        }
+    }
+    for mot in [
+        "psmt",
+        "psmc",
+        "bolditalic",
+        "boldoblique",
+        "bold",
+        "italic",
+        "oblique",
+        "regular",
+        "mt",
+        "ps",
+    ] {
+        key = key.replace(mot, "");
+    }
+    // Un radical trop court attraperait n'importe quoi.
+    if key.len() < 4 {
+        return Vec::new();
+    }
+    let suffixes: &[&str] = match (bold, italic) {
+        (true, true) => &["bi", "z", "bd", "b"],
+        (true, false) => &["b", "bd"],
+        (false, true) => &["i", "it"],
+        (false, false) => &[""],
+    };
+    let mut files = Vec::new();
+    for suffix in suffixes.iter().chain(std::iter::once(&"")) {
+        for ext in ["ttf", "otf", "ttc"] {
+            files.push(format!("{key}{suffix}.{ext}"));
+        }
+    }
+    files
 }
 
 /// Choisit et charge une police système pour remplacer une police absente
@@ -946,6 +1077,8 @@ fn substitute(base_font: &str, flags: u32) -> Program {
             (false, false) => vec!["arial.ttf", "LiberationSans-Regular.ttf", "DejaVuSans.ttf"],
         }
     };
+    let demandees = family_files(base_font, bold, italic);
+    let candidates = demandees.iter().map(String::as_str).chain(candidates);
     for file in candidates {
         let key = file.to_string();
         let cached = SUBSTITUTE_CACHE.with(|c| c.borrow().get(&key).cloned());
@@ -962,7 +1095,10 @@ fn substitute(base_font: &str, flags: u32) -> Program {
             found
         };
         if let Some(bytes) = bytes {
-            if let Ok(tt) = TrueTypeFont::parse(&bytes) {
+            // Un `.ttc` est un recueil : sa première police est celle du nom.
+            if let Ok(tt) = TrueTypeFont::parse(&bytes)
+                .or_else(|_| TrueTypeFont::parse_collection_index(&bytes, 0))
+            {
                 return Program::TrueType(tt);
             }
         }
@@ -997,6 +1133,93 @@ mod tests {
     fn font(src: &str) -> LoadedFont {
         let d = Parser::new(src.as_bytes()).parse_object().unwrap();
         LoadedFont::load(&doc(), d.as_dict().unwrap()).unwrap()
+    }
+
+    /// Largeur en x de l'encre d'un contour.
+    fn ink_width(path: &Path) -> f64 {
+        path.bounds().map_or(0.0, |b| b.x1 - b.x0)
+    }
+
+    #[test]
+    fn les_polices_standard_ont_leurs_largeurs_sans_police_systeme() {
+        // §9.6.2.2 : ni /Widths, ni /FontDescriptor, et c'est légal.
+        let helvetica = font("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+        assert_eq!(helvetica.standard, Some(Standard::Helvetica));
+        let glyphes = helvetica.decode(b"A i ");
+        // Helvetica : A = 667, espace = 278, i = 222 millièmes.
+        assert!(
+            (glyphes[0].width - 0.667).abs() < 1e-9,
+            "{:?}",
+            glyphes[0].width
+        );
+        assert!((glyphes[1].width - 0.278).abs() < 1e-9);
+        assert!((glyphes[2].width - 0.222).abs() < 1e-9);
+        // Times et Courier de même, sous leurs noms courants.
+        let times = font("<< /Type /Font /Subtype /TrueType /BaseFont /TimesNewRomanPSMT >>");
+        assert!((times.decode(b"m")[0].width - 0.778).abs() < 1e-9);
+        let courier = font("<< /Type /Font /Subtype /TrueType /BaseFont /CourierNew >>");
+        assert!((courier.decode(b"i")[0].width - 0.600).abs() < 1e-9);
+        // Un /Widths explicite reste le maître : c'est le document qui parle.
+        let declaree = font(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /FirstChar 65 /Widths [900] >>",
+        );
+        assert!((declaree.decode(b"A")[0].width - 0.9).abs() < 1e-9);
+    }
+
+    #[test]
+    fn symbol_garde_son_propre_encodage() {
+        let f = font("<< /Type /Font /Subtype /Type1 /BaseFont /Symbol >>");
+        assert_eq!(f.standard, Some(Standard::Symbol));
+        // Le code 0x61 est « alpha » dans Symbol, pas « a ».
+        assert_eq!(f.glyph_name(0x61), Some("alpha"));
+        assert!((f.decode(b"a")[0].width - 0.631).abs() < 1e-9);
+        // ZapfDingbats de même : des noms de fleurons, jamais « a ».
+        let z = font("<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>");
+        let nom = z.glyph_name(0x61).unwrap_or_default();
+        assert!(
+            nom.starts_with('a') && nom.len() > 1 && nom[1..].chars().all(|c| c.is_ascii_digit()),
+            "{nom}"
+        );
+    }
+
+    #[test]
+    fn un_glyphe_substitue_occupe_la_largeur_declaree() {
+        // Deux fois la même lettre, deux largeurs déclarées différentes : le
+        // contour dessiné doit suivre, sans quoi le texte se décolle de sa
+        // place.
+        let etroit =
+            font("<< /Type /Font /Subtype /TrueType /BaseFont /Helvetica /FirstChar 65 /Widths [500] /FontDescriptor << /Flags 32 >> >>");
+        let large =
+            font("<< /Type /Font /Subtype /TrueType /BaseFont /Helvetica /FirstChar 65 /Widths [1000] /FontDescriptor << /Flags 32 >> >>");
+        assert!(etroit.substituted && large.substituted);
+        let (Some(a), Some(b)) = (
+            etroit.glyph_path(&etroit.decode(b"A")[0]),
+            large.glyph_path(&large.decode(b"A")[0]),
+        ) else {
+            return; // Aucune police de substitution sur cette machine.
+        };
+        let (wa, wb) = (ink_width(&a), ink_width(&b));
+        assert!(wa > 0.0 && wb > 0.0);
+        // Rapport des largeurs déclarées : 1000 / 500.
+        assert!(
+            (wb / wa - 2.0).abs() < 0.02,
+            "rapport {} attendu 2",
+            wb / wa
+        );
+    }
+
+    #[test]
+    fn la_police_demandee_est_cherchee_avant_toute_substitution() {
+        let files = family_files("ABCDEF+Calibri-Bold", true, false);
+        assert!(files.contains(&"calibrib.ttf".to_string()), "{files:?}");
+        assert!(files.contains(&"calibri.ttf".to_string()), "{files:?}");
+        let italiques = family_files("Georgia,Italic", false, true);
+        assert!(
+            italiques.contains(&"georgiai.ttf".to_string()),
+            "{italiques:?}"
+        );
+        // Un radical trop court ne doit rien attraper.
+        assert!(family_files("F1", false, false).is_empty());
     }
 
     #[test]

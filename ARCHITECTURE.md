@@ -96,6 +96,14 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   CID-keyed, charsets, encodages, 391 chaînes standard), `type1` (PFA/PFB, eexec,
   charstrings Type 1, flex, seac), `encodings` (annexe D + liste Adobe réduite), `cmap`
   (CMaps incorporées, Identity, ToUnicode), `glyph` (trait `GlyphProvider`).
+- `standard` : métriques des quatorze polices standard (§9.6.2.2, annexe D) — largeurs AFM par nom
+  de glyphe et par caractère, descripteurs, reconnaissance des noms employés à leur place
+  (`ArialMT`, `TimesNewRomanPSMT`, `CourierNew`). C'est la connaissance qu'un lecteur est censé
+  avoir : un PDF a le droit d'écrire `/BaseFont /Helvetica` sans rien d'autre. Sans ces tables, la
+  seule issue est de mesurer une police du système, et le même fichier ne se compose plus pareil
+  d'une machine à l'autre. Les accentués prennent l'avance de leur lettre de base, sauf `oslash` et
+  le `i` accentué, qui se bâtit sur `dotlessi`. Recoupées par test avec les polices métriquement
+  compatibles du système.
 - `subset` : production d'une police TrueType valide contenant un ensemble de glyphes choisi
   (tables `head hhea maxp hmtx loca glyf cmap name post` recalculées, descriptions `glyf`
   recopiées octet pour octet, composantes des glyphes composites renumérotées, fusion de
@@ -131,7 +139,16 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   largeurs, substitution système), `image` (bpc 1-16, Decode, masques, SMask, JPEG),
   `shading` (types 1 à 7), `interpreter` (tous les opérateurs, XObjects, motifs, ExtGState,
   masques souples, groupes de transparence, contenu optionnel, budgets anti-hostilité),
-  `page` (matrice de base, rotation, annotations). Un masque souple ou un groupe de
+  `page` (matrice de base, rotation, annotations).
+- **Fidélité quand la police manque.** Trois règles, dans cet ordre. La police *demandée* est
+  cherchée d'abord — réclamer Calibri sur une machine où Calibri est installée ne devrait jamais
+  donner Arial. À défaut, si `/BaseFont` désigne une des quatorze polices standard, ses largeurs
+  viennent de `acrux_fonts::standard`, qui ne dépend d'aucune installation. Et le contour de
+  remplacement est **étiré horizontalement jusqu'à l'avance déclarée** : une police de substitution
+  n'a pas les chasses de l'absente, et dessinée telle quelle chaque lettre flotte dans sa place ou
+  en déborde. Acrobat fait cela avec des polices à axes variables ; nous étirons le contour, ce qui
+  condense un peu la lettre mais la fait tomber au bon endroit — et c'est cela qui décide si une
+  page ressemble à son original. Un masque souple ou un groupe de
   transparence n'est rendu hors écran **que dans sa `/BBox`** ramenée en pixels, jamais en
   pleine page, et une découpe de `/BBox` qui couvre déjà toute la cible n'est pas posée :
   sur une page à huit masques imbriqués, cela fait passer le rendu de 259 à 170 ms (150 dpi,

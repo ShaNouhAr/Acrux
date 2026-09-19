@@ -3,7 +3,7 @@
 //! Parseurs et rasteriseurs de polices écrits de zéro.
 //!
 //! Modules : `truetype`, `cff`, `type1`, `opentype`, `encodings`, `cmap`,
-//! `subset`, `unicode`, `shape`. À venir : `type3`, `substitution`.
+//! `standard`, `subset`, `unicode`, `shape`. À venir : `type3`.
 //!
 //! Sortie commune : des contours vectoriels (segments et courbes de Bézier)
 //! en unités de police, que `acrux-graphics` transforme et rasterise.
@@ -19,6 +19,7 @@
 //! | `type1`     | PFA, PFB, FontFile ; eexec ; charstrings Type 1 ; flex | Adobe Type 1 Font Format              | Implémenté  |
 //! | `encodings` | Standard, WinAnsi, MacRoman, MacExpert, PDFDoc, Symbol, ZapfDingbats ; AGL réduite | ISO 32000-2 annexe D | Implémenté |
 //! | `cmap`      | CMaps incorporées, Identity-H/V, ToUnicode             | ISO 32000-2 §9.7.5, §9.10.3, TN #5014 | Implémenté  |
+//! | `standard`  | Métriques des quatorze polices standard (largeurs AFM, descripteurs) | ISO 32000-2 §9.6.2.2, annexe D | Implémenté  |
 //! | `subset`    | Sous-ensemble TrueType : tables head, hhea, maxp, hmtx, loca, glyf, cmap, name, post recalculées | OpenType (Microsoft) | Implémenté |
 //! | `opentype`  | `GSUB` (types 1 à 8), `GPOS` (types 1 à 9), `GDEF`, `kern` format 0, `vhea`/`vmtx`/`VORG` | OpenType Layout | Implémenté |
 //! | `unicode`   | Bidirectionnel UAX #9, grappes UAX #29, jointure arabe, classes combinatoires | UAX #9, #15, #29, #44 | Implémenté |
@@ -73,6 +74,7 @@ pub mod glyph;
 pub mod opentype;
 pub mod reader;
 pub mod shape;
+pub mod standard;
 pub mod subset;
 pub mod truetype;
 pub mod type1;
