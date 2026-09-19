@@ -17,6 +17,7 @@
 //! | `prefs`   | réglages persistants et modes d'affichage             |
 //! | `tabs`    | barre d'onglets (un par document ouvert)              |
 //! | `palette` | palette de commandes filtrable (Ctrl+Maj+P)           |
+//! | `signpanel` | panneau « remplir et signer » : signatures, encre  |
 //! | `sign`    | outil « remplir et signer » : barre et capture        |
 //! | `objects` | outil « modifier » : boîte de sélection et poignées   |
 //! | `tools`   | barre latérale des outils, à droite                   |
@@ -35,6 +36,7 @@ pub mod palette;
 pub mod panel;
 pub mod prefs;
 pub mod sign;
+pub mod signpanel;
 pub mod tabs;
 pub mod text;
 pub mod theme;

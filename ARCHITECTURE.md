@@ -348,8 +348,12 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
 - `ui/objects` : outil « modifier » — boîte de sélection, huit poignées, redimensionnement sans
   retournement, proportions gardées avec Maj ; la conversion page ↔ vue reste au viewer, qui seul
   connaît le zoom et le défilement.
-- `ui/sign` : outil « remplir et signer » — barre des éléments posables (signature, paraphe, texte,
-  stylo, cinq marques), choix de l'encre (couleur, épaisseur, pointe) et fenêtre de capture
+- `ui/signpanel` : **panneau** de « remplir et signer », à gauche de la page (il prend la place des
+  vignettes tant que l'outil est ouvert). Il montre les signatures enregistrées — aperçus dessinés
+  par le code qui écrit dans le PDF —, permet d'en ajouter, d'en refaire et d'en retirer, et tient
+  ce qu'on ajoute (texte, stylo, marques) et l'encre. Le viewer y répond par `sign_panel_action`.
+- `ui/sign` : outil « remplir et signer » — éléments posables (signature, paraphe, texte,
+  stylo, cinq marques), palette d'encre (`INKS`) et fenêtre de capture
   (tracer, taper, importer) ; l'aperçu est dessiné par le **même** code que le PDF
   (`acrux_features::fillsign::ink`), si bien que ce qu'on voit est ce qu'on pose. Signature,
   paraphe et encre sont conservés dans les préférences. Deux outils n'y posent pas d'élément tout

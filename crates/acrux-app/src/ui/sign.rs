@@ -35,7 +35,7 @@ use std::path::PathBuf;
 
 use acrux_core::{Matrix, Path, Point};
 use acrux_features::fillsign::ink::{self, InkPoint, Nib, Outline, Pen, Seg, Stroke, Weight};
-use acrux_features::fillsign::marks::{outline_of, Mark};
+use acrux_features::fillsign::marks::Mark;
 use acrux_graphics::{FillRule, Rasterizer};
 
 use crate::platform::{Frame, Key};
@@ -882,333 +882,10 @@ pub fn ink_rgb(index: usize) -> (u8, u8, u8) {
     ((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
 }
 
-/// Barre de l'outil : ce qu'on peut poser, avec quelle encre, et le bouton
-/// pour en sortir.
-///
-/// Acrobat met tout sur une ligne, et c'est le bon choix : l'encre se change
-/// entre deux poses sans quitter la page des yeux.
-#[derive(Debug, Default)]
-pub struct Bar {
-    /// Élément choisi.
-    pub item: Option<Item>,
-    /// Couleur d'encre, indice dans [`INKS`].
-    pub color: usize,
-    /// Pointe.
-    pub nib: Nib,
-    /// Épaisseur.
-    pub weight: Weight,
-    /// Zones cliquables, remplies au dessin.
-    hits: Vec<(i32, i32, i32, i32, Hit)>,
-}
-
-/// Ce que vise un clic dans la barre.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Hit {
-    /// Un élément à poser.
-    Pick(Item),
-    /// Une couleur d'encre.
-    Ink(usize),
-    /// Une pointe.
-    Nib(Nib),
-    /// Une épaisseur.
-    Weight(Weight),
-    /// Sortir de l'outil.
-    Close,
-}
-
-/// Les éléments de la barre, dans l'ordre d'Acrobat.
-pub const ITEMS: [Item; 9] = [
-    Item::Signature,
-    Item::Initials,
-    Item::Text,
-    Item::Draw,
-    Item::Mark(Mark::Check),
-    Item::Mark(Mark::Cross),
-    Item::Mark(Mark::Circle),
-    Item::Mark(Mark::Line),
-    Item::Mark(Mark::Dot),
-];
-
-impl Bar {
-    /// Barre neuve, avec une encre choisie.
-    #[must_use]
-    pub fn with_ink(color: usize, nib: Nib, weight: Weight) -> Self {
-        Bar {
-            color,
-            nib,
-            weight,
-            ..Bar::default()
-        }
-    }
-
-    /// Hauteur de la barre en pixels.
-    #[must_use]
-    pub fn height(dpi: f32) -> i32 {
-        (38.0 * dpi) as i32
-    }
-
-    /// Couleur d'encre choisie, telle que le PDF l'attend.
-    #[must_use]
-    pub fn rgb(&self) -> [f64; 3] {
-        INKS[self.color.min(INKS.len() - 1)].1
-    }
-
-    /// Clic dans la barre : `None` s'il tombe à côté.
-    pub fn mouse_down(&mut self, x: i32, y: i32) -> Option<Action> {
-        let hit = self
-            .hits
-            .iter()
-            .find(|&&(bx, by, bw, bh, _)| x >= bx && x < bx + bw && y >= by && y < by + bh)
-            .map(|&(_, _, _, _, hit)| hit)?;
-        Some(match hit {
-            Hit::Pick(item) => Action::Pick(item),
-            Hit::Ink(i) => {
-                self.color = i;
-                Action::Ink(i)
-            }
-            Hit::Nib(nib) => {
-                self.nib = nib;
-                Action::Style(nib, self.weight)
-            }
-            Hit::Weight(weight) => {
-                self.weight = weight;
-                Action::Style(self.nib, weight)
-            }
-            Hit::Close => Action::Close,
-        })
-    }
-
-    /// Dessine la barre sur toute la largeur, à l'ordonnée `y`.
-    pub fn paint(
-        &mut self,
-        frame: &mut Frame<'_>,
-        text: &mut TextRenderer,
-        raster: &mut Rasterizer,
-        theme: &Theme,
-        dpi: f32,
-        y: i32,
-    ) {
-        let h = Self::height(dpi);
-        let size = theme.font_size * dpi;
-        let fw = frame.width as i32;
-        frame.fill_rect(0, y, fw, h, theme.bar.0, theme.bar.1, theme.bar.2);
-        frame.fill_rect(
-            0,
-            y + h - 1,
-            fw,
-            1,
-            theme.separator.0,
-            theme.separator.1,
-            theme.separator.2,
-        );
-        self.hits.clear();
-        let pad = (10.0 * dpi) as i32;
-        let gap = (4.0 * dpi) as i32;
-        // « Terminer » garde sa place quoi qu'il arrive : on doit toujours
-        // pouvoir sortir de l'outil. Ce sont les réglages d'encre qui
-        // disparaissent en premier quand la fenêtre est étroite.
-        let close_w = (text.measure(size, "Terminer") + 24.0 * dpi) as i32;
-        let limit = fw - close_w - 2 * pad;
-        let top = y + (4.0 * dpi) as i32;
-        let inner = h - (8.0 * dpi) as i32;
-        let baseline = y as f32 + f32::midpoint(h as f32, text.ascent(size)) - 1.0;
-        let mut x = pad;
-        // 1. Ce qu'on pose.
-        for item in ITEMS {
-            let label = item.label();
-            let glyph = (18.0 * dpi) as i32;
-            let is_mark = matches!(item, Item::Mark(_));
-            let w = (text.measure(size, label) + 22.0 * dpi) as i32
-                + if is_mark {
-                    glyph + (4.0 * dpi) as i32
-                } else {
-                    0
-                };
-            let selected = self.item == Some(item);
-            if selected {
-                frame.fill_rect(
-                    x,
-                    top,
-                    w,
-                    inner,
-                    theme.accent.0,
-                    theme.accent.1,
-                    theme.accent.2,
-                );
-            }
-            let color = if selected {
-                (255, 255, 255)
-            } else {
-                theme.text
-            };
-            let mut tx = x + (11.0 * dpi) as i32;
-            if let Item::Mark(mark) = item {
-                // Le bouton montre la marque elle-même, dessinée par le même
-                // code que celui qui l'écrira dans le PDF.
-                let outline = outline_of(mark);
-                let (bw, bh) = (
-                    (outline.bbox.x1 - outline.bbox.x0).max(0.01),
-                    (outline.bbox.y1 - outline.bbox.y0).max(0.01),
-                );
-                let s = (f64::from(glyph) / bw.max(bh)).min(f64::from(glyph) / bh);
-                let mid = f64::from(y) + f64::from(h) / 2.0 + bh * s / 2.0;
-                // Y vers le bas à l'écran : la matrice retourne le dessin.
-                let m = Matrix::new(
-                    s,
-                    0.0,
-                    0.0,
-                    -s,
-                    f64::from(tx) - outline.bbox.x0 * s,
-                    mid + outline.bbox.y0 * s,
-                );
-                fill_outline(frame, raster, &outline, &m, color);
-                tx += glyph + (4.0 * dpi) as i32;
-            }
-            text.draw(frame, tx as f32, baseline, size, label, color);
-            self.hits.push((x, top, w, inner, Hit::Pick(item)));
-            x += w + gap;
-        }
-        // 2. L'encre : couleur, pointe, épaisseur. Le trait montré est celui
-        //    qui sortira de la plume, pas un carré de couleur quelconque.
-        x += (8.0 * dpi) as i32;
-        frame.fill_rect(
-            x,
-            top + (3.0 * dpi) as i32,
-            1.max((dpi) as i32),
-            inner - (6.0 * dpi) as i32,
-            theme.separator.0,
-            theme.separator.1,
-            theme.separator.2,
-        );
-        x += (10.0 * dpi) as i32;
-        for (index, (name, _)) in INKS.iter().enumerate() {
-            let _ = name;
-            let swatch = (16.0 * dpi) as i32;
-            if x + swatch > limit {
-                break;
-            }
-            let bx = x;
-            let by = y + (h - swatch) / 2;
-            if self.color == index {
-                frame.fill_rect(
-                    bx - (3.0 * dpi) as i32,
-                    by - (3.0 * dpi) as i32,
-                    swatch + (6.0 * dpi) as i32,
-                    swatch + (6.0 * dpi) as i32,
-                    theme.accent.0,
-                    theme.accent.1,
-                    theme.accent.2,
-                );
-            }
-            let (r, g, b) = ink_rgb(index);
-            frame.fill_rect(bx, by, swatch, swatch, r, g, b);
-            // Le noir sur une barre sombre a besoin d'un liseré.
-            frame.fill_rect(bx, by, swatch, 1.max((dpi) as i32), 0x8A, 0x8F, 0x99);
-            self.hits.push((
-                bx - (3.0 * dpi) as i32,
-                top,
-                swatch + (6.0 * dpi) as i32,
-                inner,
-                Hit::Ink(index),
-            ));
-            x += swatch + (8.0 * dpi) as i32;
-        }
-        x += (6.0 * dpi) as i32;
-        for weight in Weight::all() {
-            let w = (26.0 * dpi) as i32;
-            if x + w > limit {
-                break;
-            }
-            let selected = self.weight == weight;
-            if selected {
-                frame.fill_rect(
-                    x,
-                    top,
-                    w,
-                    inner,
-                    theme.accent.0,
-                    theme.accent.1,
-                    theme.accent.2,
-                );
-            }
-            // Un trait d'épaisseur, plutôt qu'un mot : on choisit ce qu'on voit.
-            let thickness = match weight {
-                Weight::Thin => 1.0,
-                Weight::Medium => 2.5,
-                Weight::Thick => 5.0,
-            };
-            let th = ((thickness * f64::from(dpi)) as i32).max(1);
-            let color = if selected {
-                (255, 255, 255)
-            } else {
-                theme.text
-            };
-            frame.fill_rect(
-                x + (6.0 * dpi) as i32,
-                y + (h - th) / 2,
-                w - (12.0 * dpi) as i32,
-                th,
-                color.0,
-                color.1,
-                color.2,
-            );
-            self.hits.push((x, top, w, inner, Hit::Weight(weight)));
-            x += w + gap;
-        }
-        x += (6.0 * dpi) as i32;
-        for nib in Nib::all() {
-            let label = nib.label();
-            let w = (text.measure(size, label) + 18.0 * dpi) as i32;
-            if x + w > limit {
-                break;
-            }
-            let selected = self.nib == nib;
-            if selected {
-                frame.fill_rect(
-                    x,
-                    top,
-                    w,
-                    inner,
-                    theme.accent.0,
-                    theme.accent.1,
-                    theme.accent.2,
-                );
-            }
-            let color = if selected {
-                (255, 255, 255)
-            } else {
-                theme.text_dim
-            };
-            text.draw(
-                frame,
-                (x + (9.0 * dpi) as i32) as f32,
-                baseline,
-                size,
-                label,
-                color,
-            );
-            self.hits.push((x, top, w, inner, Hit::Nib(nib)));
-            x += w + gap;
-        }
-        // 3. Sortir.
-        let label = "Terminer";
-        let bx = fw - close_w - pad;
-        text.draw(
-            frame,
-            (bx + (12.0 * dpi) as i32) as f32,
-            baseline,
-            size,
-            label,
-            theme.text_dim,
-        );
-        self.hits.push((bx, top, close_w, inner, Hit::Close));
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
-    use super::{ink_rgb, Action, Bar, Capture, Item, Nib, Saved, Tab, Weight, INKS, ITEMS};
+    use super::{ink_rgb, Action, Capture, Item, Nib, Saved, Tab, Weight, INKS};
     use acrux_features::fillsign::marks::Mark;
 
     #[test]
@@ -1305,7 +982,17 @@ mod tests {
 
     #[test]
     fn chaque_element_a_un_libelle_et_une_taille() {
-        for item in ITEMS {
+        for item in [
+            Item::Signature,
+            Item::Initials,
+            Item::Text,
+            Item::Draw,
+            Item::Mark(Mark::Check),
+            Item::Mark(Mark::Cross),
+            Item::Mark(Mark::Circle),
+            Item::Mark(Mark::Line),
+            Item::Mark(Mark::Dot),
+        ] {
             assert!(!item.label().is_empty());
             let (w, h) = item.default_size();
             // Le stylo est le seul sans taille : c'est le geste qui la donne.
@@ -1335,7 +1022,6 @@ mod tests {
         assert_eq!(INKS[0].0, "Noir");
         assert!(INKS[0].1.iter().all(|c| c.abs() < 1e-9));
         assert_eq!(ink_rgb(0), (0, 0, 0));
-        assert!(Bar::default().rgb().iter().all(|c| c.abs() < 1e-9));
         // Un indice hors palette ne fait pas paniquer.
         assert_eq!(ink_rgb(99), ink_rgb(INKS.len() - 1));
     }
@@ -1369,7 +1055,7 @@ mod tests {
 
     #[test]
     fn le_stylo_fait_partie_des_outils() {
-        assert!(ITEMS.contains(&Item::Draw));
+        assert!(crate::ui::signpanel::MARKS.contains(&Mark::Check));
         assert_eq!(Item::Draw.label(), "Dessiner");
     }
 

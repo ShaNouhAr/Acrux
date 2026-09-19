@@ -192,6 +192,9 @@ Livrable : version 0.2, parité avec Acrobat Standard hors édition de texte.
   s'allument dans la colonne et agissent directement sur la page — glisser surligne ou marque, un
   clic pose une note — avec une barre qui dit l'outil en cours et comment en sortir. Du texte déjà
   sélectionné est traité dès qu'on choisit l'outil.
+- [x] **Écran d'accueil** : les documents récents sont des cartes avec la vignette de leur première
+  page (rendu complet, calculé une vignette par réveil pour ne pas figer la fenêtre), leur taille et
+  leur date, plus un bouton « Ouvrir un document… ».
 - [ ] Menus classiques, info-bulles détaillées, personnalisation de la colonne d'outils.
 
 ## Phase 5 — Édition de niveau Acrobat (le cœur du « mieux qu'Acrobat »)
@@ -308,7 +311,10 @@ Livrable : version 0.3, édition au moins équivalente à Acrobat Pro sur le cor
   pointeur et s'écrit au relâchement (`Pen::on_page`, largeur absolue en points). **Texte tapé sur
   la page** à l'endroit cliqué, dans la police du document, au lieu d'une boîte de dialogue.
   Fenêtre de capture : aperçu dans l'encre choisie, Ctrl+Z défait le dernier trait, Entrée
-  applique. Chaque élément est une annotation
+  applique. **Panneau à gauche** (`acrux-app/src/ui/signpanel.rs`) : les signatures s'y voient,
+  s'y ajoutent (trois au plus), s'y refont et s'y retirent ; un **aperçu suit le pointeur** et ce
+  qu'on pose se **centre sur le clic**. À faire : déplacer ou redimensionner un élément déjà posé,
+  aperçu des signatures tapées et importées dans le panneau. Chaque élément est une annotation
   `/Stamp` ou `/FreeText` avec son apparence, repérée par la clé privée `/AKFillSign` : inventaire,
   retrait et **aplatissement** qui ne déplace pas un pixel. Interface : barre des éléments, fenêtre
   de capture à trois onglets, signature et paraphe conservés entre deux sessions.

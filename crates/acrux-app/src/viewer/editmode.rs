@@ -112,7 +112,7 @@ impl Viewer {
             return;
         }
         // Un seul outil à la fois : les autres rendent la main.
-        self.sign_bar = None;
+        self.sign_panel = None;
         self.objects = None;
         self.selection = None;
         let ticking = Arc::new(AtomicBool::new(true));

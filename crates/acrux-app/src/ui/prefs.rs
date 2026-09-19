@@ -152,6 +152,12 @@ impl Fit {
 /// Nombre maximal de fichiers récents conservés.
 pub const MAX_RECENT: usize = 10;
 
+/// Nombre de signatures gardées.
+///
+/// Trois suffisent : au-delà, on ne les reconnaît plus dans la liste et l'on
+/// dessine plus vite la bonne qu'on ne la retrouve.
+pub const MAX_SIGNATURES: usize = 3;
+
 /// Réglages persistants.
 // Plusieurs booléens indépendants : ce sont des cases à cocher de l'interface,
 // les regrouper dans un type dédié n'apporterait rien au lecteur.
@@ -179,8 +185,11 @@ pub struct Prefs {
     pub check_updates: bool,
     /// Jour de la dernière vérification, en jours depuis 1970.
     pub last_update_check: u64,
-    /// Signature enregistrée de « remplir et signer », sous sa forme texte.
-    pub signature: Option<String>,
+    /// Signatures enregistrées de « remplir et signer », sous leur forme
+    /// texte. Plusieurs, comme dans Acrobat : on signe rarement toujours de
+    /// la même façon (nom complet, initiales d'un autre prénom, paraphe
+    /// professionnel).
+    pub signatures: Vec<String>,
     /// Paraphe enregistré, même forme.
     pub initials: Option<String>,
     /// Pointe choisie pour l'encre (`stylo`, `plume`, `feutre`).
@@ -206,7 +215,7 @@ impl Default for Prefs {
             window: (1100, 900),
             check_updates: true,
             last_update_check: 0,
-            signature: None,
+            signatures: Vec::new(),
             initials: None,
             sign_nib: 0,
             sign_weight: 1,
@@ -310,7 +319,9 @@ impl Prefs {
                 "encre-pointe" => p.sign_nib = value.parse().unwrap_or(0).min(2),
                 "encre-epaisseur" => p.sign_weight = value.parse().unwrap_or(1).min(2),
                 "encre-couleur" => p.sign_color = value.parse().unwrap_or(0),
-                "signature" if !value.is_empty() => p.signature = Some(value.to_string()),
+                "signature" if !value.is_empty() && p.signatures.len() < MAX_SIGNATURES => {
+                    p.signatures.push(value.to_string());
+                }
                 "initials" if !value.is_empty() => p.initials = Some(value.to_string()),
                 "recent" if !value.is_empty() && p.recent.len() < MAX_RECENT => {
                     p.recent.push(PathBuf::from(value));
@@ -338,12 +349,12 @@ impl Prefs {
         let _ = writeln!(out, "window={}x{}", self.window.0, self.window.1);
         let _ = writeln!(out, "mises-a-jour={}", u8::from(self.check_updates));
         let _ = writeln!(out, "derniere-verification={}", self.last_update_check);
+        for value in self.signatures.iter().take(MAX_SIGNATURES) {
+            let _ = writeln!(out, "signature={value}");
+        }
         let _ = writeln!(out, "encre-pointe={}", self.sign_nib);
         let _ = writeln!(out, "encre-epaisseur={}", self.sign_weight);
         let _ = writeln!(out, "encre-couleur={}", self.sign_color);
-        if let Some(value) = &self.signature {
-            let _ = writeln!(out, "signature={value}");
-        }
         if let Some(value) = &self.initials {
             let _ = writeln!(out, "initials={value}");
         }
@@ -390,7 +401,7 @@ mod tests {
             window: (1440, 960),
             check_updates: false,
             last_update_check: 20_350,
-            signature: Some("typed:Élise Marchand".into()),
+            signatures: vec!["typed:Élise Marchand".into()],
             initials: Some("drawn:1.0,2.0 3.0,4.0".into()),
             sign_nib: 2,
             sign_weight: 0,

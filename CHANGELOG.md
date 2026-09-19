@@ -7,6 +7,34 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
+## Non publié
+
+### Un panneau pour les signatures
+
+- **« Remplir et signer » ouvre un panneau à gauche**, comme dans Acrobat, à
+  la place de la barre du haut : on y **voit** ses signatures, dessinées par
+  le code qui les écrira dans le PDF.
+- **Plusieurs signatures** (trois) et un paraphe, qu'on peut enfin **gérer** :
+  en ajouter une, en **refaire** une, en **retirer** une. La liste survit d'une
+  session à l'autre.
+- Le panneau rassemble aussi ce qu'on ajoute (texte, stylo, les cinq marques)
+  et l'encre (couleur, épaisseur, pointe) : tout est nommé, plus rien à
+  deviner.
+
+### La signature se pose là où l'on clique
+
+- **Un aperçu suit le pointeur** et montre exactement ce que le clic posera.
+- **Ce qu'on pose se centre sur le pointeur** : on visait un coin invisible,
+  la signature tombait à côté.
+
+### Écran d'accueil
+
+- **Les documents récents deviennent des cartes** avec la **vignette de leur
+  première page**, leur taille et leur date : on reconnaît un document d'un
+  coup d'œil au lieu de lire des noms de fichiers. Les vignettes se calculent
+  une par une, sans bloquer la fenêtre.
+- Un bouton **« Ouvrir un document… »** remplace le rappel de raccourci.
+
 ## 0.6.0 — 19 septembre 2026
 
 Remplir un formulaire imprimé, comme on le ferait au stylo.

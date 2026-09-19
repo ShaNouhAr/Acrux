@@ -52,7 +52,8 @@ use crate::ui::panel::{
     AttachmentRow, CommentRow, OutlineRow, Panel, PanelAction, PanelContent, PanelTab,
 };
 use crate::ui::prefs::{Fit, Prefs, ViewMode};
-use crate::ui::sign::{self, Bar as SignBar, Capture, Item as SignItem, Saved};
+use crate::ui::sign::{self, Capture, Item as SignItem, Saved};
+use crate::ui::signpanel::{Action as SignAction, SignPanel};
 use crate::ui::tabs::{TabAction, TabInfo, Tabs};
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
@@ -290,6 +291,9 @@ fn row_of(rows: &[(usize, usize)], page: usize) -> usize {
 const GAP: i32 = 16;
 /// Largeur du panneau latéral, en pixels logiques.
 const PANEL_WIDTH: u32 = 240;
+
+/// Documents récents montrés sur l'écran d'accueil.
+const MAX_WELCOME: usize = 8;
 /// Largeur minimale laissée à la page, en pixels logiques. En deçà, la barre
 /// des outils s'efface.
 const MIN_PAGE_WIDTH: u32 = 420;
@@ -633,13 +637,20 @@ pub struct Viewer {
     /// La recherche du démarrage a déjà été lancée.
     update_started: bool,
     /// Outil « remplir et signer » : la barre est affichée quand il est actif.
-    sign_bar: Option<SignBar>,
+    sign_panel: Option<SignPanel>,
+    /// Vignettes de la première page des documents récents, calculées une à
+    /// une pendant que l'écran d'accueil est affiché. `None` = illisible.
+    welcome_thumbs: HashMap<PathBuf, Option<Bitmap>>,
+    /// Zone du bouton « Ouvrir un document ».
+    welcome_open: Option<(i32, i32, i32, i32)>,
+    /// Place de la signature qu'on est en train de refaire, s'il y en a une.
+    replacing: Option<usize>,
     /// Tracé au stylo en cours, en coordonnées de page.
     inking: Option<Inking>,
     /// Fenêtre de capture d'une signature, ouverte par-dessus tout.
     capture: Option<Capture>,
     /// Signature enregistrée, conservée entre deux sessions.
-    signature: Option<Saved>,
+    signatures: Vec<Saved>,
     /// Paraphe enregistré.
     initials: Option<Saved>,
     /// Message passager affiché dans la barre d'état (fin d'export…).
@@ -707,7 +718,11 @@ impl Viewer {
     #[must_use]
     pub fn new(initial: Vec<PathBuf>) -> Self {
         let prefs = Prefs::load();
-        let signature = prefs.signature.as_deref().and_then(Saved::decode);
+        let signatures: Vec<Saved> = prefs
+            .signatures
+            .iter()
+            .filter_map(|s| Saved::decode(s))
+            .collect();
         let initials = prefs.initials.as_deref().and_then(Saved::decode);
         Self {
             loaded: None,
@@ -758,10 +773,13 @@ impl Viewer {
             update_found: None,
             update_asked: false,
             update_started: false,
-            sign_bar: None,
+            sign_panel: None,
+            welcome_thumbs: HashMap::new(),
+            welcome_open: None,
+            replacing: None,
             inking: None,
             capture: None,
-            signature,
+            signatures,
             initials,
             notice: None,
             tip: None,
@@ -1133,34 +1151,39 @@ impl Viewer {
 
     /// Écran d'accueil : titre, rappel des raccourcis et documents récents
     /// cliquables. Dessiné dans la zone de document quand rien n'est ouvert.
+    #[allow(clippy::too_many_lines)] // une mise en page, lue de haut en bas
     fn paint_welcome(&mut self, frame: &mut Frame<'_>) {
         let t = self.theme;
         let dpi = self.dpi_scale as f32;
         let hover = self.last_mouse;
-        let recent: Vec<(String, String)> = self
+        let recent: Vec<(PathBuf, String, String)> = self
             .prefs
             .recent
             .iter()
+            .take(MAX_WELCOME)
             .map(|p| {
                 (
+                    p.clone(),
                     p.file_name()
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_default(),
-                    p.parent()
-                        .map(|d| d.display().to_string())
-                        .unwrap_or_default(),
+                    describe_file(p),
                 )
             })
             .collect();
+        let thumbs = std::mem::take(&mut self.welcome_thumbs);
         let mut hits: Vec<(i32, i32, i32, i32)> = Vec::new();
         let Some(text) = &mut self.text else {
             self.recent_hits.clear();
+            self.welcome_open = None;
+            self.welcome_thumbs = thumbs;
             return;
         };
         let size = t.font_size * dpi;
-        let x = (48.0 * dpi) as i32;
-        let mut y = (56.0 * dpi) as i32;
-        let title = size * 2.0;
+        let pad = (56.0 * dpi) as i32;
+        let x = pad;
+        let mut y = (54.0 * dpi) as i32;
+        let title = size * 2.4;
         text.draw(
             frame,
             x as f32,
@@ -1169,63 +1192,217 @@ impl Viewer {
             "Acrux",
             t.text,
         );
-        y += (title * 1.8) as i32;
-        for line in [
-            "Ctrl+O pour ouvrir un document, ou déposez un PDF sur la fenêtre.",
-            "Ctrl+Maj+P ouvre la palette : toutes les commandes et leurs raccourcis.",
-        ] {
-            text.draw(
-                frame,
-                x as f32,
-                y as f32 + text.ascent(size),
-                size,
-                line,
-                t.text_dim,
-            );
-            y += (size * 1.9) as i32;
+        y += (title * 1.25) as i32;
+        text.draw(
+            frame,
+            x as f32,
+            y as f32 + text.ascent(size),
+            size,
+            "Lire, modifier, remplir et signer un PDF.",
+            t.text_dim,
+        );
+        y += (size * 2.6) as i32;
+        // Le geste principal : un bouton, pas un raccourci à retenir.
+        let label = "Ouvrir un document…";
+        let bw = (text.measure(size, label) + 40.0 * dpi) as i32;
+        let bh = (38.0 * dpi) as i32;
+        let over_open =
+            hover.is_some_and(|(mx, my)| mx >= x && mx < x + bw && my >= y && my < y + bh);
+        let bg = if over_open {
+            (
+                t.accent.0.saturating_add(18),
+                t.accent.1.saturating_add(18),
+                t.accent.2.saturating_add(10),
+            )
+        } else {
+            t.accent
+        };
+        frame.fill_rect(x, y, bw, bh, bg.0, bg.1, bg.2);
+        text.draw(
+            frame,
+            (x + (20.0 * dpi) as i32) as f32,
+            y as f32 + f32::midpoint(bh as f32, text.ascent(size)) - 1.0,
+            size,
+            label,
+            (255, 255, 255),
+        );
+        let open_hit = Some((x, y, bw, bh));
+        text.draw(
+            frame,
+            (x + bw + (18.0 * dpi) as i32) as f32,
+            y as f32 + f32::midpoint(bh as f32, text.ascent(size)) - 1.0,
+            size,
+            "ou déposez un PDF sur la fenêtre · Ctrl+Maj+P pour toutes les commandes",
+            t.text_dim,
+        );
+        y += bh + (34.0 * dpi) as i32;
+        if recent.is_empty() {
+            self.recent_hits = hits;
+            self.welcome_open = open_hit;
+            self.welcome_thumbs = thumbs;
+            return;
         }
-        if !recent.is_empty() {
-            y += (size * 1.4) as i32;
-            text.draw(
-                frame,
-                x as f32,
-                y as f32 + text.ascent(size),
-                size,
-                "Documents récents",
-                t.text_dim,
-            );
-            y += (size * 2.2) as i32;
-            let row = (size * 2.4) as i32;
-            let width = (frame.width as i32 - 2 * x).max(120);
-            for (name, dir) in &recent {
-                if y + row > frame.height as i32 {
-                    break;
-                }
-                let over = hover
-                    .is_some_and(|(mx, my)| mx >= x && mx < x + width && my >= y && my < y + row);
-                if over {
-                    frame.fill_rect(x - 8, y, width + 16, row, t.hover.0, t.hover.1, t.hover.2);
-                }
-                let baseline = y as f32 + (row as f32 + text.ascent(size)) / 2.0 - 1.0;
-                let used = text.draw(frame, x as f32, baseline, size, name, t.text);
-                text.draw_clipped(
-                    frame,
-                    used + size,
-                    baseline,
-                    size * 0.92,
-                    dir,
-                    t.text_dim,
-                    (x + width) as f32 - used - size,
-                );
-                hits.push((x - 8, y, width + 16, row));
-                y += row;
+        text.draw(
+            frame,
+            x as f32,
+            y as f32 + text.ascent(size),
+            size,
+            "Documents récents",
+            t.text_dim,
+        );
+        y += (size * 2.0) as i32;
+        // Une grille de cartes : la vignette dit de quel document il s'agit
+        // bien plus vite que son nom de fichier.
+        let card_w = (186.0 * dpi) as i32;
+        let thumb_h = (148.0 * dpi) as i32;
+        let card_h = thumb_h + (58.0 * dpi) as i32;
+        let gap = (18.0 * dpi) as i32;
+        let columns = ((frame.width as i32 - 2 * pad + gap) / (card_w + gap)).max(1);
+        for (index, (path, name, meta)) in recent.iter().enumerate() {
+            let col = index as i32 % columns;
+            let row = index as i32 / columns;
+            let cx = x + col * (card_w + gap);
+            let cy = y + row * (card_h + gap);
+            if cy + card_h > frame.height as i32 {
+                break;
             }
+            let over = hover.is_some_and(|(mx, my)| {
+                mx >= cx && mx < cx + card_w && my >= cy && my < cy + card_h
+            });
+            if over {
+                frame.fill_rect(
+                    cx - (6.0 * dpi) as i32,
+                    cy - (6.0 * dpi) as i32,
+                    card_w + (12.0 * dpi) as i32,
+                    card_h + (12.0 * dpi) as i32,
+                    t.hover.0,
+                    t.hover.1,
+                    t.hover.2,
+                );
+            }
+            // La page, sur son fond blanc et son ombre, comme dans la vue.
+            frame.fill_rect(
+                cx + (3.0 * dpi) as i32,
+                cy + (4.0 * dpi) as i32,
+                card_w,
+                thumb_h,
+                t.page_shadow.0,
+                t.page_shadow.1,
+                t.page_shadow.2,
+            );
+            frame.fill_rect(cx, cy, card_w, thumb_h, 0xFF, 0xFF, 0xFF);
+            match thumbs.get(path) {
+                Some(Some(bitmap)) => {
+                    let bw = bitmap.width() as i32;
+                    let bh = bitmap.height() as i32;
+                    frame.blit_rgba_premultiplied(
+                        cx + (card_w - bw) / 2,
+                        cy + (thumb_h - bh) / 2,
+                        bitmap.width(),
+                        bitmap.height(),
+                        bitmap.data(),
+                    );
+                }
+                Some(None) => {
+                    let label = "illisible";
+                    let w = text.measure(size, label);
+                    text.draw(
+                        frame,
+                        cx as f32 + (card_w as f32 - w) / 2.0,
+                        cy as f32 + thumb_h as f32 / 2.0,
+                        size,
+                        label,
+                        (0x90, 0x94, 0x9C),
+                    );
+                }
+                None => {
+                    // Pas encore calculée : quelques lignes grises, le temps
+                    // que la vignette arrive.
+                    for line in 0..4 {
+                        let ly = cy + (24.0 * dpi) as i32 + line * (16.0 * dpi) as i32;
+                        let lw = card_w - (40.0 * dpi) as i32 - line * (10.0 * dpi) as i32;
+                        frame.fill_rect(
+                            cx + (20.0 * dpi) as i32,
+                            ly,
+                            lw.max(20),
+                            (6.0 * dpi) as i32,
+                            0xEC,
+                            0xEE,
+                            0xF2,
+                        );
+                    }
+                }
+            }
+            let baseline = (cy + thumb_h) as f32 + text.ascent(size) + 12.0 * dpi;
+            text.draw_clipped(
+                frame,
+                cx as f32,
+                baseline,
+                size,
+                name,
+                t.text,
+                card_w as f32,
+            );
+            text.draw_clipped(
+                frame,
+                cx as f32,
+                baseline + text.ascent(size) + 8.0 * dpi,
+                size * 0.88,
+                meta,
+                t.text_dim,
+                card_w as f32,
+            );
+            hits.push((cx, cy, card_w, card_h));
         }
         self.recent_hits = hits;
+        self.welcome_open = open_hit;
+        self.welcome_thumbs = thumbs;
+    }
+
+    /// Vrai s'il reste des vignettes d'accueil à calculer.
+    fn welcome_pending(&self) -> bool {
+        self.loaded.is_none()
+            && self
+                .prefs
+                .recent
+                .iter()
+                .take(MAX_WELCOME)
+                .any(|p| !self.welcome_thumbs.contains_key(p))
+    }
+
+    /// Calcule une vignette manquante, s'il en reste une. Rend vrai s'il
+    /// faudra repasser : une par réveil, pour que la fenêtre reste vive.
+    fn step_welcome_thumbs(&mut self) -> bool {
+        if self.loaded.is_some() {
+            return false;
+        }
+        let Some(path) = self
+            .prefs
+            .recent
+            .iter()
+            .take(MAX_WELCOME)
+            .find(|p| !self.welcome_thumbs.contains_key(*p))
+            .cloned()
+        else {
+            return false;
+        };
+        let scale = f64::from(self.dpi_scale as f32);
+        let thumb = render_thumbnail(&path, 186.0 * scale, 148.0 * scale);
+        self.welcome_thumbs.insert(path, thumb);
+        true
     }
 
     /// Ouvre le document récent situé sous `(x, y)`, le cas échéant.
     fn click_recent(&mut self, x: i32, y: i32, window: &mut dyn WindowHandle) -> bool {
+        if self
+            .welcome_open
+            .is_some_and(|(bx, by, bw, bh)| x >= bx && x < bx + bw && y >= by && y < by + bh)
+        {
+            if let Some(path) = window.open_file_dialog() {
+                self.open(&path, window);
+            }
+            return true;
+        }
         let Some(index) = self
             .recent_hits
             .iter()
@@ -2248,7 +2425,6 @@ impl Viewer {
         }
         Toolbar::height(&self.theme, self.dpi_scale as f32) as u32
             + self.tabs_height()
-            + self.sign_height()
             + self.edit_bar_height()
             + self.mode_bar_height()
     }
@@ -2274,7 +2450,7 @@ impl Viewer {
         }
         // Un seul outil à la fois.
         self.edit = None;
-        self.sign_bar = None;
+        self.sign_panel = None;
         self.objects = None;
         self.annot_tool = Some(tool);
         // Du texte déjà sélectionné est traité tout de suite : choisir
@@ -2302,14 +2478,6 @@ impl Viewer {
     }
 
     /// Hauteur de la barre « remplir et signer », nulle quand l'outil dort.
-    fn sign_height(&self) -> u32 {
-        if self.sign_bar.is_some() && !self.fullscreen && !self.reading {
-            SignBar::height(self.dpi_scale as f32).max(0) as u32
-        } else {
-            0
-        }
-    }
-
     /// Bascule le plein écran (F11 ; Échap pour sortir).
     fn toggle_fullscreen(&mut self, window: &mut dyn WindowHandle) {
         self.fullscreen = !self.fullscreen;
@@ -2436,11 +2604,24 @@ impl Viewer {
 
     /// Bord gauche de la zone de document (à droite du panneau latéral).
     fn view_left(&self) -> u32 {
-        if self.panel_open && !self.reading {
+        if self.reading {
+            return 0;
+        }
+        // L'outil « remplir et signer » a son propre panneau, à la place des
+        // vignettes : deux colonnes à gauche ne laisseraient plus voir la page.
+        if self.sign_panel.is_some() {
+            return (f64::from(crate::ui::signpanel::WIDTH) * self.dpi_scale).round() as u32;
+        }
+        if self.panel_open {
             (f64::from(PANEL_WIDTH) * self.dpi_scale).round() as u32
         } else {
             0
         }
+    }
+
+    /// Vrai si le panneau de gauche est celui de « remplir et signer ».
+    fn sign_panel_open(&self) -> bool {
+        self.sign_panel.is_some() && !self.reading
     }
 
     /// Largeur de la barre des outils, à droite.
@@ -2486,7 +2667,7 @@ impl Viewer {
                     EditTool::Select => Command::EditPdf,
                     EditTool::AddText => Command::AddTextBox,
                 })
-            } else if self.sign_bar.is_some() {
+            } else if self.sign_panel.is_some() {
                 Some(Command::FillSign)
             } else if self.objects.is_some() {
                 Some(Command::EditObjects)
@@ -4155,13 +4336,13 @@ impl Viewer {
         }
         self.edit = None;
         self.annot_tool = None;
-        if self.sign_bar.is_some() {
-            self.sign_bar = None;
+        if self.sign_panel.is_some() {
+            self.sign_panel = None;
             self.capture = None;
             self.set_notice("remplir et signer : terminé".into());
         } else {
-            self.sign_bar = Some(self.new_sign_bar());
-            if self.signature.is_none() {
+            self.sign_panel = Some(self.new_sign_panel());
+            if self.signatures.is_empty() {
                 self.capture = Some(self.new_capture(false));
             } else {
                 self.pick_sign_item(SignItem::Signature);
@@ -4178,7 +4359,7 @@ impl Viewer {
             self.leave_edit();
         }
         let missing = match item {
-            SignItem::Signature => self.signature.is_none(),
+            SignItem::Signature => self.signatures.is_empty(),
             SignItem::Initials => self.initials.is_none(),
             _ => false,
         };
@@ -4186,8 +4367,8 @@ impl Viewer {
             self.capture = Some(self.new_capture(item == SignItem::Initials));
             return;
         }
-        if let Some(bar) = &mut self.sign_bar {
-            bar.item = Some(item);
+        if let Some(panel) = &mut self.sign_panel {
+            panel.item = Some(item);
         }
         self.set_notice(format!("{} : cliquez sur la page", item.label()));
     }
@@ -4228,8 +4409,8 @@ impl Viewer {
                 } else {
                     SignItem::Signature
                 };
-                if self.sign_bar.is_none() {
-                    self.sign_bar = Some(self.new_sign_bar());
+                if self.sign_panel.is_none() {
+                    self.sign_panel = Some(self.new_sign_panel());
                 }
                 self.pick_sign_item(item);
             }
@@ -4237,7 +4418,7 @@ impl Viewer {
                 if self.capture.is_some() {
                     self.capture = None;
                 } else {
-                    self.sign_bar = None;
+                    self.sign_panel = None;
                     self.set_notice("remplir et signer : terminé".into());
                 }
                 self.clamp_scroll();
@@ -4248,14 +4429,30 @@ impl Viewer {
 
     /// Enregistre une signature et la conserve pour les sessions suivantes.
     fn remember_signature(&mut self, initials: bool, saved: Saved) {
-        let encoded = saved.encode();
         if initials {
             self.initials = Some(saved);
-            self.prefs.initials = Some(encoded);
+        } else if let Some(slot) = self.replacing.take().filter(|i| *i < self.signatures.len()) {
+            // On refaisait celle-ci : elle garde sa place dans la liste.
+            self.signatures[slot] = saved;
+            if let Some(panel) = &mut self.sign_panel {
+                panel.current = slot;
+            }
         } else {
-            self.signature = Some(saved);
-            self.prefs.signature = Some(encoded);
+            if self.signatures.len() >= crate::ui::prefs::MAX_SIGNATURES {
+                self.signatures.remove(0);
+            }
+            self.signatures.push(saved);
+            if let Some(panel) = &mut self.sign_panel {
+                panel.current = self.signatures.len() - 1;
+            }
         }
+        self.store_signatures();
+    }
+
+    /// Recopie les signatures dans les préférences et enregistre.
+    fn store_signatures(&mut self) {
+        self.prefs.signatures = self.signatures.iter().map(Saved::encode).collect();
+        self.prefs.initials = self.initials.as_ref().map(Saved::encode);
         self.prefs.save();
     }
 
@@ -4266,7 +4463,7 @@ impl Viewer {
     /// marques qui se centrent sur le curseur — on vise une case à cocher.
     #[allow(clippy::many_single_char_names)] // coordonnées et dimensions
     fn place_sign(&mut self, x: i32, y: i32, window: &mut dyn WindowHandle) -> bool {
-        let Some(item) = self.sign_bar.as_ref().and_then(|b| b.item) else {
+        let Some(item) = self.sign_panel.as_ref().and_then(|p| p.item) else {
             return false;
         };
         let Some((page, point)) = self.page_at(x, y) else {
@@ -4281,19 +4478,24 @@ impl Viewer {
             });
             return true;
         }
+        // Ce qu'on pose se **centre sur le pointeur**, comme l'aperçu qui
+        // l'accompagne : on vise une ligne ou une case, et c'est là que ça
+        // tombe. Poser au coin supérieur gauche obligeait à viser à côté.
         let (w, h) = item.default_size();
-        let rect = if matches!(item, SignItem::Mark(_)) {
-            Rect::new(
-                point.x - w / 2.0,
-                point.y - h / 2.0,
-                point.x + w / 2.0,
-                point.y + h / 2.0,
-            )
-        } else {
-            Rect::new(point.x, point.y - h, point.x + w, point.y)
-        };
+        let rect = Rect::new(
+            point.x - w / 2.0,
+            point.y - h / 2.0,
+            point.x + w / 2.0,
+            point.y + h / 2.0,
+        );
         let source = match item {
-            SignItem::Signature => self.signature.clone(),
+            SignItem::Signature => {
+                let current = self.sign_panel.as_ref().map_or(0, |p| p.current);
+                self.signatures
+                    .get(current)
+                    .or_else(|| self.signatures.first())
+                    .cloned()
+            }
             SignItem::Initials => self.initials.clone(),
             _ => None,
         };
@@ -4353,8 +4555,8 @@ impl Viewer {
     }
 
     /// Barre de l'outil, avec l'encre retenue de la dernière fois.
-    fn new_sign_bar(&self) -> SignBar {
-        SignBar::with_ink(
+    fn new_sign_panel(&self) -> SignPanel {
+        SignPanel::with_ink(
             self.prefs.sign_color as usize,
             self.sign_nib(),
             self.sign_weight(),
@@ -4363,9 +4565,9 @@ impl Viewer {
 
     /// Couleur d'encre choisie.
     fn sign_rgb(&self) -> [f64; 3] {
-        self.sign_bar
+        self.sign_panel
             .as_ref()
-            .map_or_else(|| sign::INKS[0].1, SignBar::rgb)
+            .map_or_else(|| sign::INKS[0].1, SignPanel::rgb)
     }
 
     /// Le trait suit le pointeur.
@@ -4403,6 +4605,88 @@ impl Viewer {
             rect,
             acrux_features::fillsign::Item::Drawn { strokes, pen },
         );
+    }
+
+    /// Dessine, sous le pointeur, ce que le prochain clic posera.
+    ///
+    /// Sans cet aperçu, on pose une signature « à peu près » puis on annule :
+    /// la taille et le centrage ne se devinent pas.
+    #[allow(clippy::many_single_char_names)] // géométrie de la boîte
+    fn paint_sign_ghost(&mut self, frame: &mut Frame<'_>) {
+        let Some(item) = self.sign_panel.as_ref().and_then(|p| p.item) else {
+            return;
+        };
+        if self.capture.is_some() || item == SignItem::Draw || item == SignItem::Text {
+            return;
+        }
+        let Some((mx, my)) = self.last_mouse else {
+            return;
+        };
+        if self.page_at(mx, my).is_none() {
+            return;
+        }
+        let scale = self.scale();
+        let (w, h) = item.default_size();
+        let outline = match item {
+            SignItem::Mark(mark) => Some(acrux_features::fillsign::marks::outline_of(mark)),
+            SignItem::Signature | SignItem::Initials => {
+                let saved = if item == SignItem::Initials {
+                    self.initials.clone()
+                } else {
+                    let current = self.sign_panel.as_ref().map_or(0, |p| p.current);
+                    self.signatures.get(current).cloned()
+                };
+                match saved {
+                    Some(Saved::Drawn(strokes)) => {
+                        let pen =
+                            Pen::styled_for_strokes(&strokes, self.sign_nib(), self.sign_weight());
+                        Some(acrux_features::fillsign::ink::outline(&strokes, &pen))
+                    }
+                    _ => None,
+                }
+            }
+            SignItem::Draw | SignItem::Text => None,
+        };
+        // Le point cliqué est le centre : l'aperçu montre exactement la boîte
+        // où l'élément ira.
+        let (cx, cy) = (f64::from(mx), f64::from(my));
+        let (dw, dh) = (w * scale, h * scale);
+        let box_rect = (cx - dw / 2.0, cy - dh / 2.0, dw, dh);
+        let [r, g, b] = self.sign_rgb();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let ink = ((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8);
+        // L'encre pâlie : c'est un aperçu, pas encore une trace.
+        let faded = (ink.0 / 2 + 110, ink.1 / 2 + 110, ink.2 / 2 + 110);
+        if let Some(outline) = outline {
+            let (bw, bh) = (
+                (outline.bbox.x1 - outline.bbox.x0).max(0.01),
+                (outline.bbox.y1 - outline.bbox.y0).max(0.01),
+            );
+            let k = (dw / bw).min(dh / bh);
+            let m = Matrix::new(
+                k,
+                0.0,
+                0.0,
+                -k,
+                cx - bw * k / 2.0 - outline.bbox.x0 * k,
+                cy + bh * k / 2.0 + outline.bbox.y0 * k,
+            );
+            sign::fill_outline(frame, &mut self.raster, &outline, &m, faded);
+        } else {
+            // Signature tapée ou importée : on montre au moins la boîte.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let (bx, by, bw, bh) = (
+                box_rect.0 as i32,
+                box_rect.1 as i32,
+                box_rect.2 as i32,
+                box_rect.3 as i32,
+            );
+            let t = (self.dpi_scale.round().max(1.0)) as i32;
+            frame.fill_rect(bx, by, bw, t, faded.0, faded.1, faded.2);
+            frame.fill_rect(bx, by + bh - t, bw, t, faded.0, faded.1, faded.2);
+            frame.fill_rect(bx, by, t, bh, faded.0, faded.1, faded.2);
+            frame.fill_rect(bx + bw - t, by, t, bh, faded.0, faded.1, faded.2);
+        }
     }
 
     /// Dessine le trait en cours, tel qu'il sera écrit.
@@ -4466,17 +4750,87 @@ impl Viewer {
         self.set_notice(format!("posé : {label} en page {}", page + 1));
     }
 
-    /// Dessine la barre de l'outil, sous la barre d'onglets.
-    fn paint_sign_bar(&mut self, frame: &mut Frame<'_>) {
-        if self.sign_height() == 0 {
-            return;
-        }
-        let y = Toolbar::height(&self.theme, self.dpi_scale as f32) + self.tabs_height() as i32;
+    /// Dessine le panneau de l'outil, à gauche.
+    fn paint_sign_panel(&mut self, frame: &mut Frame<'_>) {
         let (theme, dpi) = (self.theme, self.dpi_scale as f32);
-        let Some(text) = &mut self.text else { return };
-        if let Some(bar) = &mut self.sign_bar {
-            bar.paint(frame, text, &mut self.raster, &theme, dpi, y);
+        let signatures = std::mem::take(&mut self.signatures);
+        let initials = self.initials.take();
+        if let (Some(panel), Some(text)) = (self.sign_panel.as_mut(), self.text.as_mut()) {
+            panel.paint(
+                frame,
+                text,
+                &mut self.raster,
+                &theme,
+                dpi,
+                &signatures,
+                initials.as_ref(),
+                crate::ui::prefs::MAX_SIGNATURES,
+            );
         }
+        self.signatures = signatures;
+        self.initials = initials;
+    }
+
+    /// Suite d'une action venue du panneau.
+    fn sign_panel_action(&mut self, action: &SignAction, window: &mut dyn WindowHandle) {
+        match action {
+            SignAction::Pick(item) => self.pick_sign_item(*item),
+            SignAction::Use(index, initials) => {
+                let item = if *initials {
+                    SignItem::Initials
+                } else {
+                    SignItem::Signature
+                };
+                let _ = index;
+                self.pick_sign_item(item);
+            }
+            SignAction::Create(initials) => {
+                self.replacing = None;
+                self.capture = Some(self.new_capture(*initials));
+            }
+            SignAction::Edit(index, initials) => {
+                self.replacing = (!*initials).then_some(*index);
+                self.capture = Some(self.new_capture(*initials));
+            }
+            SignAction::Delete(index, initials) => {
+                if *initials {
+                    self.initials = None;
+                } else if *index < self.signatures.len() {
+                    self.signatures.remove(*index);
+                }
+                if let Some(panel) = &mut self.sign_panel {
+                    panel.current = panel.current.min(self.signatures.len().saturating_sub(1));
+                    let empty = if *initials {
+                        panel.item == Some(SignItem::Initials)
+                    } else {
+                        self.signatures.is_empty() && panel.item == Some(SignItem::Signature)
+                    };
+                    if empty {
+                        panel.item = None;
+                    }
+                }
+                self.store_signatures();
+            }
+            SignAction::Ink(index) => {
+                self.prefs.sign_color = u8::try_from(*index).unwrap_or(0);
+                self.prefs.save();
+            }
+            SignAction::Style(nib, weight) => {
+                self.prefs.sign_nib = nib.index();
+                self.prefs.sign_weight = weight.index();
+                self.prefs.save();
+            }
+            SignAction::Close => {
+                self.sign_panel = None;
+                self.capture = None;
+                if self.edit_overlay() {
+                    self.leave_edit();
+                }
+                self.clamp_scroll();
+                self.set_notice("remplir et signer : terminé".into());
+            }
+        }
+        window.request_redraw();
     }
 
     /// Dessine la fenêtre de capture, par-dessus tout le reste.
@@ -4497,7 +4851,7 @@ impl Viewer {
         self.prefs.tools_open = self.tools_open;
         self.prefs.zoom = self.zoom;
         self.prefs.two_up_cover = self.two_up_cover;
-        self.prefs.signature = self.signature.as_ref().map(Saved::encode);
+        self.prefs.signatures = self.signatures.iter().map(Saved::encode).collect();
         self.prefs.initials = self.initials.as_ref().map(Saved::encode);
         if self.width > 0 && self.height > 0 && self.dpi_scale > 0.0 {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -4823,6 +5177,7 @@ impl App for Viewer {
                     && !self.tip_due()
                     && !self.media_playing()
                     && !self.edit_on()
+                    && !self.welcome_pending()
                 {
                     return;
                 }
@@ -4834,7 +5189,18 @@ impl App for Viewer {
                 x,
                 y,
             } => {
-                if self.panel_open && x < self.view_left() as i32 && y >= self.view_top() as i32 {
+                if self.sign_panel_open()
+                    && x < self.view_left() as i32
+                    && y >= self.view_top() as i32
+                {
+                    let height = f64::from(self.view_height());
+                    if let Some(panel) = &mut self.sign_panel {
+                        panel.wheel(f64::from(delta) * 60.0, height);
+                    }
+                } else if self.panel_open
+                    && x < self.view_left() as i32
+                    && y >= self.view_top() as i32
+                {
                     self.panel.wheel(delta);
                 } else if self.tools_width() > 0
                     && x >= self.width.saturating_sub(self.tools_width()) as i32
@@ -5110,15 +5476,6 @@ impl App for Viewer {
                     if self.prompt.is_none() {
                         self.edit_bar_click(x, y, window);
                     }
-                } else if y < top {
-                    // Barre « remplir et signer ».
-                    if self.prompt.is_none() {
-                        if let Some(action) =
-                            self.sign_bar.as_mut().and_then(|b| b.mouse_down(x, y))
-                        {
-                            self.sign_action(action, window);
-                        }
-                    }
                 } else if self.tools_width() > 0
                     && x >= self.width.saturating_sub(self.tools_width()) as i32
                 {
@@ -5128,6 +5485,18 @@ impl App for Viewer {
                         let dpi = self.dpi_scale;
                         if let Some(command) = self.tools.click(f64::from(y - top), dpi, info) {
                             self.run_command(command, window);
+                        }
+                    }
+                } else if self.sign_panel_open() && x < self.view_left() as i32 {
+                    self.toolbar.blur();
+                    if self.prompt.is_none() {
+                        let action = self
+                            .sign_panel
+                            .as_mut()
+                            .and_then(|p| p.mouse_down(x, y - top));
+                        if let Some(action) = action {
+                            log_line(&format!("remplir et signer : {action:?}"));
+                            self.sign_panel_action(&action, window);
                         }
                     }
                 } else if self.panel_open && x < self.view_left() as i32 {
@@ -5265,8 +5634,22 @@ impl App for Viewer {
                 } else {
                     hover_changed |= self.tabs.mouse_leave();
                 }
-                let in_panel =
-                    self.panel_open && x < self.view_left() as i32 && y >= self.view_top() as i32;
+                let in_sign_panel = self.sign_panel_open()
+                    && x < self.view_left() as i32
+                    && y >= self.view_top() as i32;
+                let panel_top = self.view_top() as i32;
+                if let Some(panel) = self.sign_panel.as_mut() {
+                    let top = panel_top;
+                    hover_changed |= if in_sign_panel {
+                        panel.mouse_move(x, y - top)
+                    } else {
+                        panel.leave()
+                    };
+                }
+                let in_panel = self.panel_open
+                    && !in_sign_panel
+                    && x < self.view_left() as i32
+                    && y >= self.view_top() as i32;
                 if in_panel {
                     hover_changed |= self
                         .panel
@@ -5323,7 +5706,7 @@ impl App for Viewer {
                     }
                     let in_view =
                         self.prompt.is_none() && x >= 0 && y >= 0 && y < self.view_height() as i32;
-                    let sign_item = self.sign_bar.as_ref().and_then(|b| b.item);
+                    let sign_item = self.sign_panel.as_ref().and_then(|p| p.item);
                     let cursor = if in_view && sign_item == Some(SignItem::Draw) {
                         Cursor::Pen
                     } else if in_view && sign_item == Some(SignItem::Text) {
@@ -5346,7 +5729,9 @@ impl App for Viewer {
                         Cursor::Arrow
                     };
                     window.set_cursor(cursor);
-                    if hover_changed {
+                    // L'aperçu de ce qu'on va poser suit le pointeur : il
+                    // faut repeindre à chaque mouvement.
+                    if hover_changed || sign_item.is_some_and(|i| i != SignItem::Draw) {
                         window.request_redraw();
                     }
                     return;
@@ -5360,6 +5745,17 @@ impl App for Viewer {
         }
         // La recherche avance par petites tranches : chaque réveil en traite
         // une, ce qui laisse passer les événements de l'utilisateur entre-temps.
+        // Les vignettes de l'écran d'accueil se calculent une par réveil :
+        // la fenêtre reste vive, et la grille se remplit sous les yeux.
+        if self.step_welcome_thumbs() {
+            if self.waker.is_none() {
+                self.waker = Some(window.waker());
+            }
+            if let Some(w) = &self.waker {
+                w.wake();
+            }
+            window.request_redraw();
+        }
         if self.step_search() {
             if self.waker.is_none() {
                 self.waker = Some(window.waker());
@@ -5397,11 +5793,15 @@ impl App for Viewer {
             self.paint_edit(&mut view);
             self.paint_objects(&mut view);
             self.paint_inking(&mut view);
+            self.paint_sign_ghost(&mut view);
             self.paint_media(&mut view);
             self.paint_field_focus(&mut view);
             self.paint_search(&mut view);
         }
-        if self.panel_open && left > 0 && vh > 0 {
+        if self.sign_panel_open() && left > 0 && vh > 0 {
+            let mut side = frame.sub(0, top, left as u32, vh);
+            self.paint_sign_panel(&mut side);
+        } else if self.panel_open && left > 0 && vh > 0 {
             let mut side = frame.sub(0, top, left as u32, vh);
             self.paint_panel(&mut side);
         }
@@ -5419,14 +5819,12 @@ impl App for Viewer {
         if !self.fullscreen && !self.reading {
             self.paint_toolbar(frame);
             self.paint_tabs(frame);
-            self.paint_sign_bar(frame);
             if self.edit_on() {
                 self.paint_edit_bar(frame);
             }
             if let Some(tool) = self.annot_tool {
                 let y = Toolbar::height(&self.theme, self.dpi_scale as f32)
                     + self.tabs_height() as i32
-                    + self.sign_height() as i32
                     + self.edit_bar_height() as i32;
                 let (title, hint) = tool.describe();
                 let (theme, dpi) = (self.theme, self.dpi_scale as f32);
@@ -5507,7 +5905,7 @@ impl Viewer {
                     self.set_notice("lecture arrêtée".into());
                 } else if self.objects.is_some() {
                     self.toggle_objects(window);
-                } else if self.sign_bar.is_some() {
+                } else if self.sign_panel.is_some() {
                     self.sign_action(sign::Action::Close, window);
                 } else if self.reading {
                     self.toggle_reading(window);
@@ -5523,6 +5921,78 @@ impl Viewer {
         }
         self.clamp_scroll();
     }
+}
+
+/// Vignette de la première page d'un fichier, au plus grand format qui tient
+/// dans `max_w` × `max_h`. `None` si le fichier ne s'ouvre pas.
+///
+/// C'est un rendu complet, comme celui de la vue : une vignette fidèle vaut
+/// mieux qu'une icône générique pour reconnaître un document.
+fn render_thumbnail(path: &Path, max_w: f64, max_h: f64) -> Option<Bitmap> {
+    let doc = Document::load(path).ok()?;
+    let pages = collect_pages(&doc).ok()?;
+    let page = pages.first()?;
+    let crop = page.crop_box(&doc);
+    let (pw, ph) = match page.rotate(&doc) {
+        90 | 270 => (crop.height(), crop.width()),
+        _ => (crop.width(), crop.height()),
+    };
+    if pw < 1.0 || ph < 1.0 {
+        return None;
+    }
+    let scale = (max_w / pw).min(max_h / ph).clamp(0.01, 4.0);
+    let options = RenderOptions {
+        annotations: true,
+        // Une vignette n'a pas le droit de figer l'écran d'accueil.
+        time_budget: Some(std::time::Duration::from_millis(400)),
+        ..RenderOptions::default()
+    };
+    Some(render_page(&doc, page, scale, &options).bitmap)
+}
+
+/// Dossier, taille et date d'un fichier, en une ligne.
+fn describe_file(path: &Path) -> String {
+    let dir = path
+        .parent()
+        .map(|d| d.display().to_string())
+        .unwrap_or_default();
+    let Ok(meta) = std::fs::metadata(path) else {
+        return dir;
+    };
+    let size = meta.len();
+    let human = if size >= 1_048_576 {
+        format!("{:.1} Mo", size as f64 / 1_048_576.0)
+    } else {
+        format!("{} Ko", (size / 1024).max(1))
+    };
+    let day = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| day_label(d.as_secs()))
+        .unwrap_or_default();
+    if day.is_empty() {
+        format!("{human} · {dir}")
+    } else {
+        format!("{human} · {day} · {dir}")
+    }
+}
+
+/// Date d'un horodatage Unix, en jours, sous la forme « 19/09/2026 ».
+fn day_label(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    // Algorithme civil depuis 1970 (Howard Hinnant), sans dépendance.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{d:02}/{m:02}/{y}")
 }
 
 #[cfg(test)]
