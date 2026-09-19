@@ -61,9 +61,11 @@ use crate::ui::tools::{ToolsInfo, ToolsPanel};
 use crate::ui::video::{self as video_ui, Box2, Hit as VideoHit};
 use acrux_features::edit_objects::{self, Edit as ObjectEdit, PageObject};
 
+mod dialogs;
 mod editmode;
 use crate::ui::editpdf::EditTool;
 use crate::ui::modebar::ModeBar;
+use dialogs::{Asking, Then};
 use editmode::EditMode;
 
 /// Rectangle semi-transparent (alpha 0..255) composé sur le tampon.
@@ -607,6 +609,8 @@ pub struct Viewer {
     tabs: Tabs,
     /// Palette de commandes ouverte.
     palette: Option<Palette>,
+    /// Questions et messages en attente de réponse ; le dernier est affiché.
+    dialogs: Vec<Asking>,
     /// Outil « modifier » : objets de la page courante et sélection.
     objects: Option<ObjectTool>,
     /// Média en cours de lecture, s'il y en a un.
@@ -736,6 +740,7 @@ impl Viewer {
             active_tab: 0,
             tabs: Tabs::new(),
             palette: None,
+            dialogs: Vec::new(),
             objects: None,
             media: None,
             update_rx: None,
@@ -863,7 +868,7 @@ impl Viewer {
     }
 
     /// Clic sur un widget de formulaire : bascule, sélection ou saisie.
-    fn click_widget(&mut self, fi: usize, wi: usize, window: &mut dyn WindowHandle) {
+    fn click_widget(&mut self, fi: usize, wi: usize) {
         let Some(l) = &self.loaded else { return };
         let Some(field) = l.fields.get(fi) else {
             return;
@@ -882,25 +887,19 @@ impl Viewer {
             FieldType::CheckBox => {
                 let checked = matches!(&field.value, Some(FieldValue::State(s)) if s != "Off")
                     || matches!(&field.value, Some(FieldValue::Bool(true)));
-                self.apply_edit(
-                    EditOp::SetField {
-                        name,
-                        value: FieldValue::Bool(!checked),
-                    },
-                    window,
-                );
+                self.apply_edit(EditOp::SetField {
+                    name,
+                    value: FieldValue::Bool(!checked),
+                });
             }
             FieldType::Radio => {
                 let Some(state) = field.widgets.get(wi).and_then(|w| w.on_state.clone()) else {
                     return;
                 };
-                self.apply_edit(
-                    EditOp::SetField {
-                        name,
-                        value: FieldValue::State(state),
-                    },
-                    window,
-                );
+                self.apply_edit(EditOp::SetField {
+                    name,
+                    value: FieldValue::State(state),
+                });
             }
             FieldType::Text | FieldType::ComboBox | FieldType::ListBox => {
                 let label = if kind == FieldType::Text {
@@ -1228,7 +1227,7 @@ impl Viewer {
         if !path.exists() {
             self.prefs.recent.retain(|p| p != &path);
             self.prefs.save();
-            window.show_error(
+            self.alert(
                 "Fichier introuvable",
                 &format!("{}\n\nIl a été retiré de la liste.", path.display()),
             );
@@ -1357,13 +1356,10 @@ impl Viewer {
                     PromptKind::Field { name, kind } => {
                         let (name, kind) = (name.clone(), *kind);
                         self.prompt = None;
-                        self.apply_edit(
-                            EditOp::SetField {
-                                name,
-                                value: FieldValue::parse(kind, &value),
-                            },
-                            window,
-                        );
+                        self.apply_edit(EditOp::SetField {
+                            name,
+                            value: FieldValue::parse(kind, &value),
+                        });
                     }
                     PromptKind::SignText { page, rect } => {
                         let (page, rect) = (*page, *rect);
@@ -1381,14 +1377,13 @@ impl Viewer {
                                 page,
                                 wide,
                                 acrux_features::fillsign::Item::Text { text: value },
-                                window,
                             );
                         }
                     }
                     PromptKind::Highlight { zones } => {
                         let zones = zones.clone();
                         self.prompt = None;
-                        self.add_highlights(&zones, Some(&value), window);
+                        self.add_highlights(&zones, Some(&value));
                     }
                     PromptKind::EditText {
                         page,
@@ -1399,35 +1394,29 @@ impl Viewer {
                         let (page, line, start, end) = (*page, *line, *start, *end);
                         self.prompt = None;
                         if !value.is_empty() {
-                            self.apply_edit(
-                                EditOp::EditText {
-                                    page,
-                                    line,
-                                    start,
-                                    end,
-                                    text: value,
-                                },
-                                window,
-                            );
+                            self.apply_edit(EditOp::EditText {
+                                page,
+                                line,
+                                start,
+                                end,
+                                text: value,
+                            });
                         }
                     }
                     PromptKind::Note { page, x, y } => {
                         let (page, x, y) = (*page, *x, *y);
                         self.prompt = None;
                         if !value.trim().is_empty() {
-                            self.apply_edit(
-                                EditOp::Annotate {
-                                    page,
-                                    annotation: NewAnnotation::Note {
-                                        x,
-                                        y,
-                                        contents: value,
-                                        color: [1.0, 0.85, 0.0],
-                                    },
-                                    author: author_name(),
+                            self.apply_edit(EditOp::Annotate {
+                                page,
+                                annotation: NewAnnotation::Note {
+                                    x,
+                                    y,
+                                    contents: value,
+                                    color: [1.0, 0.85, 0.0],
                                 },
-                                window,
-                            );
+                                author: author_name(),
+                            });
                         }
                     }
                 }
@@ -1446,7 +1435,7 @@ impl Viewer {
         }
         let (start, end) = sel.ordered();
         if start.page != end.page {
-            window.show_error(
+            self.alert(
                 "Modification impossible",
                 "Sélectionnez du texte sur une seule ligne.",
             );
@@ -1459,7 +1448,7 @@ impl Viewer {
             return;
         };
         let Some((line, first, last)) = text.line_range(from, to) else {
-            window.show_error(
+            self.alert(
                 "Modification impossible",
                 "Sélectionnez du texte sur une seule ligne.",
             );
@@ -1512,12 +1501,7 @@ impl Viewer {
 
     /// Pose les surlignages ; le commentaire, s'il y en a un, va sur la
     /// première zone (c'est là que le lecteur clique).
-    fn add_highlights(
-        &mut self,
-        zones: &[(usize, Rect)],
-        comment: Option<&str>,
-        window: &mut dyn WindowHandle,
-    ) {
+    fn add_highlights(&mut self, zones: &[(usize, Rect)], comment: Option<&str>) {
         for (index, (page, rect)) in zones.iter().enumerate() {
             let contents = if index == 0 {
                 comment
@@ -1526,18 +1510,15 @@ impl Viewer {
             } else {
                 None
             };
-            self.apply_edit(
-                EditOp::Annotate {
-                    page: *page,
-                    annotation: NewAnnotation::Highlight {
-                        rect: *rect,
-                        color: [1.0, 1.0, 0.0],
-                        contents,
-                    },
-                    author: author_name(),
+            self.apply_edit(EditOp::Annotate {
+                page: *page,
+                annotation: NewAnnotation::Highlight {
+                    rect: *rect,
+                    color: [1.0, 1.0, 0.0],
+                    contents,
                 },
-                window,
-            );
+                author: author_name(),
+            });
         }
     }
 
@@ -1558,14 +1539,14 @@ impl Viewer {
     }
 
     /// Surligne la sélection courante (annotations `/Highlight`, une par ligne).
-    fn highlight_selection(&mut self, window: &mut dyn WindowHandle) {
+    fn highlight_selection(&mut self) {
         let zones = self.selection_zones();
-        self.add_highlights(&zones, None, window);
+        self.add_highlights(&zones, None);
     }
 
     /// Marque la sélection pour biffure (annotations `/Redact`, visibles en
     /// cadre rouge et encore réversibles tant qu'elles ne sont pas appliquées).
-    fn mark_redaction(&mut self, window: &mut dyn WindowHandle) {
+    fn mark_redaction(&mut self) {
         let Some(sel) = self.selection else { return };
         if sel.is_empty() {
             return;
@@ -1591,24 +1572,22 @@ impl Viewer {
             return;
         }
         let count = marks.len();
-        self.apply_edit(EditOp::Mark { marks }, window);
+        self.apply_edit(EditOp::Mark { marks });
         self.selection = None;
         log_line(&format!("{count} zone(s) marquée(s) pour biffure"));
     }
 
     /// Applique définitivement les marques de biffure, après confirmation.
-    fn apply_redactions(&mut self, window: &mut dyn WindowHandle) {
+    fn apply_redactions(&mut self) {
         if self.loaded.is_none() {
             return;
         }
-        if !window.confirm(
-            "Appliquer les biffures",
-            "Le contenu couvert par les marques sera supprimé définitivement du document. Continuer ?",
-        ) {
-            return;
-        }
-        self.apply_edit(EditOp::ApplyRedactions, window);
-        log_line("biffures appliquées");
+        self.confirm(
+            "Appliquer les biffures ?",
+            "Le contenu couvert par les marques sera supprimé définitivement du document.",
+            "Appliquer",
+            Then::ApplyRedactions,
+        );
     }
 
     /// Affiche ou masque un calque : le document n'est pas modifié, seul le
@@ -1688,12 +1667,12 @@ impl Viewer {
         let list = match list_attachments(&l.doc) {
             Ok(list) => list,
             Err(e) => {
-                window.show_error("Extraction impossible", &format!("{e}"));
+                self.alert("Extraction impossible", &format!("{e}"));
                 return;
             }
         };
         let Some(found) = list.iter().find(|a| a.name == name) else {
-            window.show_error(
+            self.alert(
                 "Extraction impossible",
                 &format!("la pièce jointe « {name} » a disparu du document."),
             );
@@ -1704,7 +1683,7 @@ impl Viewer {
             Ok(data.len())
         }) {
             Ok(size) => self.set_notice(format!("« {name} » enregistré ({size} octets)")),
-            Err(e) => window.show_error("Extraction impossible", &format!("{name}\n\n{e}")),
+            Err(e) => self.alert("Extraction impossible", &format!("{name}\n\n{e}")),
         }
         window.request_redraw();
     }
@@ -1720,7 +1699,7 @@ impl Viewer {
         let data = match std::fs::read(&path) {
             Ok(data) => data,
             Err(e) => {
-                window.show_error("Lecture impossible", &format!("{}\n\n{e}", path.display()));
+                self.alert("Lecture impossible", &format!("{}\n\n{e}", path.display()));
                 return;
             }
         };
@@ -1729,14 +1708,11 @@ impl Viewer {
             |n| n.to_string_lossy().into_owned(),
         );
         let size = data.len();
-        self.apply_edit(
-            EditOp::Attach {
-                name: name.clone(),
-                data,
-                description: None,
-            },
-            window,
-        );
+        self.apply_edit(EditOp::Attach {
+            name: name.clone(),
+            data,
+            description: None,
+        });
         self.panel_open = true;
         self.panel.tab = PanelTab::Attachments;
         self.clamp_scroll();
@@ -1755,22 +1731,19 @@ impl Viewer {
             return;
         };
         let at = self.current_page();
-        self.apply_edit(
-            EditOp::Insert {
-                path,
-                password: None,
-                pages: Vec::new(),
-                at,
-            },
-            window,
-        );
+        self.apply_edit(EditOp::Insert {
+            path,
+            password: None,
+            pages: Vec::new(),
+            at,
+        });
         self.set_notice(format!("pages insérées avant la page {}", at + 1));
     }
 
     /// Duplique la page courante juste après elle. Un index répété dans
     /// l'ordre des pages suffit : `reorder_pages` en fait une copie indirecte
     /// distincte, ce qui marche aussi sur un document déjà modifié.
-    fn duplicate_current(&mut self, window: &mut dyn WindowHandle) {
+    fn duplicate_current(&mut self) {
         let Some(l) = &self.loaded else { return };
         let count = l.pages.len();
         let page = self.current_page();
@@ -1779,7 +1752,7 @@ impl Viewer {
             return;
         }
         order.insert(page + 1, page);
-        self.apply_edit(EditOp::Reorder { order }, window);
+        self.apply_edit(EditOp::Reorder { order });
         self.set_notice(format!("page {} dupliquée", page + 1));
     }
 
@@ -1807,7 +1780,7 @@ impl Viewer {
                 page + 1,
                 target.display()
             )),
-            Err(e) => window.show_error("Extraction impossible", &format!("{e}")),
+            Err(e) => self.alert("Extraction impossible", &format!("{e}")),
         }
     }
 
@@ -1829,7 +1802,7 @@ impl Viewer {
             .map(|e| e.to_string_lossy().into_owned())
             .unwrap_or_default();
         let Some(format) = ExportFormat::from_extension(&extension) else {
-            window.show_error(
+            self.alert(
                 "Format inconnu",
                 "Choisissez une extension parmi html, docx, xlsx, md, txt, png ou jpg.",
             );
@@ -1837,7 +1810,7 @@ impl Viewer {
         };
         let Some(l) = &self.loaded else { return };
         let Some(worker) = &l.worker else {
-            window.show_error(
+            self.alert(
                 "Export impossible",
                 "Le document n'est pas ouvert sur le fil de rendu.",
             );
@@ -2171,7 +2144,7 @@ impl Viewer {
             }
             Err(e) => {
                 self.error = Some(format!("{e}"));
-                window.show_error(
+                self.alert(
                     "Ouverture impossible",
                     &format!("{}\n\n{e}", path.display()),
                 );
@@ -2313,22 +2286,22 @@ impl Viewer {
         self.annot_tool = Some(tool);
         // Du texte déjà sélectionné est traité tout de suite : choisir
         // « surligner » après avoir sélectionné fait ce qu'on attend.
-        self.apply_annot_tool(window);
+        self.apply_annot_tool();
         window.request_redraw();
     }
 
     /// Applique l'outil courant à la sélection, s'il y en a une.
-    fn apply_annot_tool(&mut self, window: &mut dyn WindowHandle) {
+    fn apply_annot_tool(&mut self) {
         if self.selection.is_none_or(|s| s.is_empty()) {
             return;
         }
         match self.annot_tool {
             Some(AnnotTool::Highlight) => {
-                self.highlight_selection(window);
+                self.highlight_selection();
                 self.selection = None;
             }
             Some(AnnotTool::Redact) => {
-                self.mark_redaction(window);
+                self.mark_redaction();
                 self.selection = None;
             }
             _ => {}
@@ -2425,9 +2398,9 @@ impl Viewer {
     }
 
     /// Active le champ ayant le focus (Entrée / Espace).
-    fn activate_focused_field(&mut self, window: &mut dyn WindowHandle) {
+    fn activate_focused_field(&mut self) {
         if let Some(fi) = self.focus_field {
-            self.click_widget(fi, 0, window);
+            self.click_widget(fi, 0);
         }
     }
 
@@ -2804,7 +2777,7 @@ impl Viewer {
                 let mut order: Vec<usize> = (0..count).collect();
                 let page = order.remove(from);
                 order.insert(to, page);
-                self.apply_edit(EditOp::Reorder { order }, window);
+                self.apply_edit(EditOp::Reorder { order });
                 self.scroll_to_page(to);
             }
             PanelAction::ToggleLayer(number) => self.toggle_layer(number, window),
@@ -2838,14 +2811,16 @@ impl Viewer {
         log_line(&format!("palette : {command:?}"));
         match command {
             Command::Open => {
-                if self.confirm_discard(window) {
-                    if let Some(p) = window.open_file_dialog() {
-                        self.open(&p, window);
-                    }
+                if let Some(p) = window.open_file_dialog() {
+                    self.open(&p, window);
                 }
             }
-            Command::Save => self.save(false, window),
-            Command::SaveAs => self.save(true, window),
+            Command::Save => {
+                self.save(false, window);
+            }
+            Command::SaveAs => {
+                self.save(true, window);
+            }
             Command::Print => self.print(window),
             Command::Export => self.export(window),
             Command::CloseTab => {
@@ -2901,11 +2876,11 @@ impl Viewer {
                 }
             }
             Command::SelectAll => self.select_all(),
-            Command::RotateRight => self.rotate_current(90, window),
-            Command::RotateLeft => self.rotate_current(-90, window),
-            Command::DeletePage => self.delete_current(window),
+            Command::RotateRight => self.rotate_current(90),
+            Command::RotateLeft => self.rotate_current(-90),
+            Command::DeletePage => self.delete_current(),
             Command::InsertPages => self.insert_pages(window),
-            Command::DuplicatePage => self.duplicate_current(window),
+            Command::DuplicatePage => self.duplicate_current(),
             Command::ExtractPage => self.extract_current(window),
             Command::Undo => self.undo(window),
             Command::Redo => self.redo_edit(window),
@@ -2921,21 +2896,21 @@ impl Viewer {
                 self.annot_tool = None;
                 self.enter_edit(EditTool::AddText, window);
             }
-            Command::Highlight => self.highlight_selection(window),
+            Command::Highlight => self.highlight_selection(),
             Command::Note => self.start_note(),
             Command::CheckUpdates => self.install_update(window),
             Command::EditObjects => self.toggle_objects(window),
             Command::FillSign => self.toggle_fillsign(window),
-            Command::MarkRedaction => self.mark_redaction(window),
-            Command::ApplyRedactions => self.apply_redactions(window),
+            Command::MarkRedaction => self.mark_redaction(),
+            Command::ApplyRedactions => self.apply_redactions(),
         }
     }
 
     /// Applique une modification au document (et à la copie du fil de rendu).
-    fn apply_edit(&mut self, op: EditOp, window: &mut dyn WindowHandle) {
+    fn apply_edit(&mut self, op: EditOp) {
         let Some(l) = &mut self.loaded else { return };
         if let Err(e) = op.apply(&l.doc) {
-            window.show_error("Modification impossible", &format!("{e}"));
+            self.alert("Modification impossible", &format!("{e}"));
             return;
         }
         if let Some(w) = &mut l.worker {
@@ -2946,7 +2921,7 @@ impl Viewer {
         match collect_pages(&l.doc) {
             Ok(p) => l.pages = p,
             Err(e) => {
-                window.show_error("Modification impossible", &format!("{e}"));
+                self.alert("Modification impossible", &format!("{e}"));
                 return;
             }
         }
@@ -2983,7 +2958,7 @@ impl Viewer {
         let doc = match Document::load(&path) {
             Ok(d) => d,
             Err(e) => {
-                window.show_error("Rechargement impossible", &format!("{e}"));
+                self.alert("Rechargement impossible", &format!("{e}"));
                 return;
             }
         };
@@ -2992,14 +2967,14 @@ impl Viewer {
         }
         for op in &ops {
             if let Err(e) = op.apply(&doc) {
-                window.show_error("Rejeu impossible", &format!("{e}"));
+                self.alert("Rejeu impossible", &format!("{e}"));
                 return;
             }
         }
         let pages = match collect_pages(&doc) {
             Ok(p) => p,
             Err(e) => {
-                window.show_error("Rechargement impossible", &format!("{e}"));
+                self.alert("Rechargement impossible", &format!("{e}"));
                 return;
             }
         };
@@ -3051,53 +3026,46 @@ impl Viewer {
     }
 
     /// Pivote la page courante.
-    fn rotate_current(&mut self, degrees: i32, window: &mut dyn WindowHandle) {
+    fn rotate_current(&mut self, degrees: i32) {
         if self.loaded.is_none() {
             return;
         }
         let page = self.current_page();
-        self.apply_edit(
-            EditOp::Rotate {
-                pages: vec![page],
-                degrees,
-            },
-            window,
-        );
+        self.apply_edit(EditOp::Rotate {
+            pages: vec![page],
+            degrees,
+        });
     }
 
     /// Supprime la page courante après confirmation.
-    fn delete_current(&mut self, window: &mut dyn WindowHandle) {
+    fn delete_current(&mut self) {
         let Some(l) = &self.loaded else { return };
         if l.pages.len() <= 1 {
-            window.show_error(
+            self.alert(
                 "Suppression impossible",
                 "Un document doit garder au moins une page.",
             );
             return;
         }
         let page = self.current_page();
-        if !window.confirm(
-            "Supprimer la page",
-            &format!(
-                "Supprimer la page {} ? (Ctrl+S pour enregistrer ensuite)",
-                page + 1
-            ),
-        ) {
-            return;
-        }
-        self.apply_edit(EditOp::Delete { pages: vec![page] }, window);
+        self.confirm(
+            &format!("Supprimer la page {} ?", page + 1),
+            "La page sera retirée du document. Ctrl+Z la rétablit ; Ctrl+S enregistre.",
+            "Supprimer",
+            Then::DeletePage(page),
+        );
     }
 
     /// Enregistre (`save_as` : demande un nouveau chemin et réécrit tout).
-    fn save(&mut self, save_as: bool, window: &mut dyn WindowHandle) {
-        let Some(l) = &self.loaded else { return };
+    fn save(&mut self, save_as: bool, window: &mut dyn WindowHandle) -> bool {
+        let Some(l) = &self.loaded else { return false };
         let suggested = l.path.file_name().map_or_else(
             || "document.pdf".to_string(),
             |n| n.to_string_lossy().into_owned(),
         );
         let target = if save_as {
             let Some(p) = window.save_file_dialog(&suggested) else {
-                return;
+                return false;
             };
             p
         } else {
@@ -3112,8 +3080,8 @@ impl Viewer {
         let bytes = match bytes {
             Ok(b) => b,
             Err(e) => {
-                window.show_error("Enregistrement impossible", &format!("{e}"));
-                return;
+                self.alert("Enregistrement impossible", &format!("{e}"));
+                return false;
             }
         };
         // Écriture dans un fichier temporaire puis remplacement : jamais de fichier à moitié écrit.
@@ -3121,11 +3089,11 @@ impl Viewer {
         let written = std::fs::write(&tmp, &bytes).and_then(|()| std::fs::rename(&tmp, &target));
         if let Err(e) = written {
             let _ = std::fs::remove_file(&tmp);
-            window.show_error(
+            self.alert(
                 "Enregistrement impossible",
                 &format!("{}\n\n{e}", target.display()),
             );
-            return;
+            return false;
         }
         log_line(&format!(
             "enregistré : {} ({} octets)",
@@ -3141,6 +3109,7 @@ impl Viewer {
             l.redo.clear();
         }
         self.title_dirty = true;
+        true
     }
 
     /// Imprime le document (dialogue système).
@@ -3157,36 +3126,8 @@ impl Viewer {
         match window.print(&title, &mut source) {
             PrintOutcome::Printed(n) => log_line(&format!("imprimé : {n} page(s)")),
             PrintOutcome::Cancelled => {}
-            PrintOutcome::Failed(m) => window.show_error("Impression impossible", &m),
+            PrintOutcome::Failed(m) => self.alert("Impression impossible", &m),
         }
-    }
-
-    /// Vrai s'il n'y a rien à perdre, ou si l'utilisateur accepte de perdre
-    /// les modifications non enregistrées.
-    fn confirm_discard(&mut self, window: &mut dyn WindowHandle) -> bool {
-        match &self.loaded {
-            Some(l) if l.modified => window.confirm(
-                "Modifications non enregistrées",
-                "Le document a été modifié. Abandonner les modifications ?",
-            ),
-            _ => true,
-        }
-    }
-
-    /// Comme [`Self::confirm_discard`], mais pour **tous** les onglets : à la
-    /// fermeture de la fenêtre, un onglet modifié en arrière-plan ne doit pas
-    /// disparaître en silence.
-    fn confirm_discard_all(&mut self, window: &mut dyn WindowHandle) -> bool {
-        let others = self.others.iter().filter(|l| l.modified).count();
-        let active = self.loaded.as_ref().is_some_and(|l| l.modified);
-        if others == 0 {
-            return !active || self.confirm_discard(window);
-        }
-        let total = others + usize::from(active);
-        window.confirm(
-            "Modifications non enregistrées",
-            &format!("{total} document(s) ouverts ont été modifiés. Quitter sans enregistrer ?"),
-        )
     }
 
     /// Ouvre le champ de recherche.
@@ -3216,10 +3157,8 @@ impl Viewer {
     fn tool_action(&mut self, action: ToolAction, window: &mut dyn WindowHandle) {
         match action {
             ToolAction::Open => {
-                if self.confirm_discard(window) {
-                    if let Some(p) = window.open_file_dialog() {
-                        self.open(&p, window);
-                    }
+                if let Some(p) = window.open_file_dialog() {
+                    self.open(&p, window);
                 }
             }
             ToolAction::PrevPage => self.step_row(false),
@@ -3241,8 +3180,10 @@ impl Viewer {
             ToolAction::ToggleTheme => self.toggle_theme(),
             ToolAction::TogglePanel => self.toggle_panel(),
             ToolAction::ToggleTools => self.run_command(Command::ToggleTools, window),
-            ToolAction::RotatePage => self.rotate_current(90, window),
-            ToolAction::Save => self.save(false, window),
+            ToolAction::RotatePage => self.rotate_current(90),
+            ToolAction::Save => {
+                self.save(false, window);
+            }
             ToolAction::Print => self.print(window),
             ToolAction::CycleViewMode => self.set_view_mode(self.view_mode.next()),
         }
@@ -3512,15 +3453,19 @@ impl Viewer {
         self.reset_view_state();
     }
 
-    /// Ferme un onglet (avec confirmation s'il a des modifications).
+    /// Ferme un onglet (en proposant d'enregistrer s'il a des modifications).
     fn close_tab(&mut self, index: usize, window: &mut dyn WindowHandle) {
+        self.guard_close_tab(index, window);
+    }
+
+    /// Ferme un onglet sans rien demander.
+    fn close_tab_now(&mut self, index: usize) {
         if index >= self.tab_count() {
             return;
         }
         if index == self.active_tab {
-            if !self.confirm_discard(window) {
-                return;
-            }
+            self.edit = None;
+            self.annot_tool = None;
             self.loaded = None;
             if self.others.is_empty() {
                 self.active_tab = 0;
@@ -3539,14 +3484,6 @@ impl Viewer {
                 index
             };
             if at >= self.others.len() {
-                return;
-            }
-            if self.others[at].modified
-                && !window.confirm(
-                    "Modifications non enregistrées",
-                    "Cet onglet a été modifié. Le fermer sans enregistrer ?",
-                )
-            {
                 return;
             }
             self.others.remove(at);
@@ -3894,24 +3831,26 @@ impl Viewer {
             ));
             return;
         };
-        if !window.confirm(
+        self.confirm(
             &format!("Installer Acrux {} ?", release.version),
             &format!(
-                "L'installateur sera téléchargé depuis :\n{url}\n\n\
-                 Puis lancé pour remplacer la version en place. Acrux devra \
-                 être relancé ensuite.",
+                "L'installateur sera téléchargé depuis {url}, puis lancé pour \
+                 remplacer la version en place. Acrux devra être relancé ensuite.",
             ),
-        ) {
-            return;
-        }
+            "Installer",
+            Then::InstallUpdate(url, release.version.clone()),
+        );
+    }
+
+    /// Télécharge et lance l'installateur, une fois l'accord donné.
+    fn install_update_now(&mut self, url: &str, version: &str) {
         self.set_notice("téléchargement de la mise à jour…".into());
-        match crate::update::download(&url, &release.version) {
+        match crate::update::download(url, version) {
             Ok(path) => {
                 self.save_prefs();
                 match std::process::Command::new(&path).arg("--silent").spawn() {
                     Ok(_) => self.set_notice(format!(
-                        "Acrux {} s'installe — relancez l'application pour en profiter",
-                        release.version
+                        "Acrux {version} s'installe — relancez l'application pour en profiter"
                     )),
                     Err(e) => self.set_notice(format!("l'installateur n'a pas démarré : {e}")),
                 }
@@ -4083,7 +4022,7 @@ impl Viewer {
     }
 
     /// Fin d'un geste : la transformation est envoyée au document.
-    fn objects_mouse_up(&mut self, window: &mut dyn WindowHandle) {
+    fn objects_mouse_up(&mut self) {
         let Some(tool) = &self.objects else { return };
         let (Some(drag), Some(index)) = (tool.drag, tool.selected) else {
             return;
@@ -4101,20 +4040,15 @@ impl Viewer {
             return;
         }
         let matrix = edit_objects::fit(drag.start, drag.current);
-        self.apply_object_edit(page, vec![ObjectEdit::Transform { index, matrix }], window);
+        self.apply_object_edit(page, vec![ObjectEdit::Transform { index, matrix }]);
     }
 
     /// Envoie des modifications d'objets et recharge l'inventaire.
-    fn apply_object_edit(
-        &mut self,
-        page: usize,
-        edits: Vec<ObjectEdit>,
-        window: &mut dyn WindowHandle,
-    ) {
+    fn apply_object_edit(&mut self, page: usize, edits: Vec<ObjectEdit>) {
         if edits.is_empty() {
             return;
         }
-        self.apply_edit(EditOp::EditObject { page, edits }, window);
+        self.apply_edit(EditOp::EditObject { page, edits });
         // L'inventaire d'après l'édition : les plages d'octets ont changé.
         let selected = self.objects.as_ref().and_then(|t| t.selected);
         self.load_objects(page);
@@ -4126,7 +4060,7 @@ impl Viewer {
     }
 
     /// Touche pressée quand l'outil est actif.
-    fn objects_key(&mut self, key: Key, window: &mut dyn WindowHandle) -> bool {
+    fn objects_key(&mut self, key: Key) -> bool {
         let Some(tool) = &self.objects else {
             return false;
         };
@@ -4155,7 +4089,7 @@ impl Viewer {
             _ => return false,
         };
         let removing = matches!(edit, ObjectEdit::Delete { .. });
-        self.apply_object_edit(page, vec![edit], window);
+        self.apply_object_edit(page, vec![edit]);
         if removing {
             if let Some(t) = &mut self.objects {
                 t.selected = None;
@@ -4165,7 +4099,7 @@ impl Viewer {
     }
 
     /// Caractère tapé quand l'outil est actif : l'ordre de superposition.
-    fn objects_char(&mut self, c: char, window: &mut dyn WindowHandle) -> bool {
+    fn objects_char(&mut self, c: char) -> bool {
         let Some(tool) = &self.objects else {
             return false;
         };
@@ -4179,7 +4113,7 @@ impl Viewer {
             '{' => edit_objects::Order::Back,
             _ => return false,
         };
-        self.apply_object_edit(page, vec![ObjectEdit::Arrange { index, to }], window);
+        self.apply_object_edit(page, vec![ObjectEdit::Arrange { index, to }]);
         true
     }
 
@@ -4320,7 +4254,7 @@ impl Viewer {
     /// **supérieur gauche** de l'élément, comme dans Acrobat, sauf pour les
     /// marques qui se centrent sur le curseur — on vise une case à cocher.
     #[allow(clippy::many_single_char_names)] // coordonnées et dimensions
-    fn place_sign(&mut self, x: i32, y: i32, window: &mut dyn WindowHandle) -> bool {
+    fn place_sign(&mut self, x: i32, y: i32) -> bool {
         let Some(item) = self.sign_bar.as_ref().and_then(|b| b.item) else {
             return false;
         };
@@ -4371,18 +4305,12 @@ impl Viewer {
                 None => return false,
             },
         };
-        self.apply_fillsign(page, rect, fill_item, window);
+        self.apply_fillsign(page, rect, fill_item);
         true
     }
 
     /// Envoie la pose au fil de rendu.
-    fn apply_fillsign(
-        &mut self,
-        page: usize,
-        rect: Rect,
-        item: acrux_features::fillsign::Item,
-        window: &mut dyn WindowHandle,
-    ) {
+    fn apply_fillsign(&mut self, page: usize, rect: Rect, item: acrux_features::fillsign::Item) {
         let label = item.kind().to_string();
         let options = acrux_features::fillsign::Options {
             item,
@@ -4391,12 +4319,9 @@ impl Viewer {
             author: None,
             ..acrux_features::fillsign::Options::default()
         };
-        self.apply_edit(
-            EditOp::FillSign {
-                options: Box::new(options),
-            },
-            window,
-        );
+        self.apply_edit(EditOp::FillSign {
+            options: Box::new(options),
+        });
         self.set_notice(format!("posé : {label} en page {}", page + 1));
     }
 
@@ -4739,6 +4664,12 @@ impl App for Viewer {
             }
         }
         log_event(&event);
+        if self.dialog_event(&event, window) {
+            if self.title_dirty {
+                self.update_title(window);
+            }
+            return;
+        }
         match event {
             Event::Resize { width, height } => {
                 self.width = width;
@@ -4766,11 +4697,7 @@ impl App for Viewer {
                     return;
                 }
             }
-            Event::FileDropped(path) => {
-                if self.confirm_discard(window) {
-                    self.open(&path, window);
-                }
-            }
+            Event::FileDropped(path) => self.open(&path, window),
             Event::Wheel {
                 delta,
                 modifiers,
@@ -4816,15 +4743,11 @@ impl App for Viewer {
                 if self.editing_text() && self.prompt.is_none() && self.edit_char(c, m, window) => {
             }
             Event::Key(key, _)
-                if self.objects.is_some()
-                    && self.prompt.is_none()
-                    && self.objects_key(key, window) =>
+                if self.objects.is_some() && self.prompt.is_none() && self.objects_key(key) =>
             {
                 window.request_redraw();
             }
-            Event::Char(c, m)
-                if self.objects.is_some() && !m.ctrl && self.objects_char(c, window) =>
-            {
+            Event::Char(c, m) if self.objects.is_some() && !m.ctrl && self.objects_char(c) => {
                 window.request_redraw();
             }
             Event::Key(key, _) if self.capture.is_some() => {
@@ -4921,13 +4844,13 @@ impl App for Viewer {
                 if m.ctrl {
                     match c {
                         'o' | 'O' | '\u{f}' => {
-                            if self.confirm_discard(window) {
-                                if let Some(p) = window.open_file_dialog() {
-                                    self.open(&p, window);
-                                }
+                            if let Some(p) = window.open_file_dialog() {
+                                self.open(&p, window);
                             }
                         }
-                        's' | 'S' => self.save(m.shift, window),
+                        's' | 'S' => {
+                            self.save(m.shift, window);
+                        }
                         'w' | 'W' => {
                             let active = self.active_tab;
                             self.close_tab(active, window);
@@ -4978,14 +4901,14 @@ impl App for Viewer {
                         'f' | 'F' => self.set_fit(Fit::Width),
                         '1' => self.set_zoom(1.0),
                         't' | 'T' => self.toggle_theme(),
-                        'r' => self.rotate_current(90, window),
-                        'R' => self.rotate_current(-90, window),
-                        ' ' => self.activate_focused_field(window),
+                        'r' => self.rotate_current(90),
+                        'R' => self.rotate_current(-90),
+                        ' ' => self.activate_focused_field(),
                         'e' | 'E' => self.start_text_edit(window),
-                        'h' => self.highlight_selection(window),
+                        'h' => self.highlight_selection(),
                         'H' => self.highlight_with_comment(window),
-                        'm' => self.mark_redaction(window),
-                        'M' => self.apply_redactions(window),
+                        'm' => self.mark_redaction(),
+                        'M' => self.apply_redactions(),
                         'n' | 'N' => self.start_note(),
                         's' | 'S' => self.toggle_fillsign(window),
                         'o' | 'O' => self.toggle_objects(window),
@@ -5114,12 +5037,12 @@ impl App for Viewer {
                         } else if self.objects.is_some() {
                             self.objects_mouse_down(x, y, modifiers.shift);
                             window.request_redraw();
-                        } else if self.place_sign(x, y, window) {
+                        } else if self.place_sign(x, y) {
                             // L'outil a posé quelque chose : ni sélection, ni lien.
                         } else if let Some((fi, wi)) = self.widget_at(x, y) {
                             self.selection = None;
                             self.focus_field = Some(fi);
-                            self.click_widget(fi, wi, window);
+                            self.click_widget(fi, wi);
                         } else if let Some(link) = self.link_at(x, y) {
                             self.selection = None;
                             self.follow(&link.action, window);
@@ -5136,7 +5059,7 @@ impl App for Viewer {
                 ..
             } => self.drag_last = Some((x - self.view_left() as i32, y - self.view_top() as i32)),
             Event::MouseUp { .. } if self.objects.is_some() => {
-                self.objects_mouse_up(window);
+                self.objects_mouse_up();
                 window.request_redraw();
             }
             Event::MouseMove { x, y, dragging } if self.objects.is_some() => {
@@ -5144,6 +5067,11 @@ impl App for Viewer {
                 if self.objects_mouse_move(vx, vy, dragging) {
                     window.request_redraw();
                 }
+                let grab = self
+                    .objects
+                    .as_ref()
+                    .is_some_and(|t| t.drag.is_some() || t.hover.is_some() || t.handle.is_some());
+                window.set_cursor(if grab { Cursor::Move } else { Cursor::Arrow });
             }
             Event::MouseUp { .. } if self.capture.is_some() => {
                 let action = self
@@ -5174,7 +5102,7 @@ impl App for Viewer {
                     self.selection = None;
                 }
                 if was_selecting {
-                    self.apply_annot_tool(window);
+                    self.apply_annot_tool();
                 }
             }
             Event::MouseMove { x, y, dragging } => {
@@ -5247,7 +5175,13 @@ impl App for Viewer {
                     }
                     let in_view =
                         self.prompt.is_none() && x >= 0 && y >= 0 && y < self.view_height() as i32;
-                    let cursor = if in_view
+                    let cursor = if in_view && self.annot_tool.is_some() {
+                        match self.annot_tool {
+                            Some(AnnotTool::Note) => Cursor::Note,
+                            Some(AnnotTool::Redact) => Cursor::Redact,
+                            _ => Cursor::Highlight,
+                        }
+                    } else if in_view
                         && (self.widget_at(x, y).is_some() || self.link_at(x, y).is_some())
                     {
                         Cursor::Hand
@@ -5264,12 +5198,7 @@ impl App for Viewer {
                 }
             }
             Event::MouseDown { .. } => {}
-            Event::Close => {
-                if self.confirm_discard_all(window) {
-                    self.save_prefs();
-                    window.close();
-                }
-            }
+            Event::Close => self.guard_quit(window),
         }
         if self.title_dirty {
             self.update_title(window);
@@ -5356,6 +5285,7 @@ impl App for Viewer {
         self.paint_prompt(frame);
         self.paint_tip(frame);
         self.paint_palette(frame);
+        self.paint_dialog(frame);
         dump_frame(frame);
     }
 }
@@ -5375,8 +5305,8 @@ impl Viewer {
             Key::F(11) => self.toggle_fullscreen(window),
             Key::Tab if m.ctrl => self.cycle_tab(!m.shift),
             Key::Tab => self.focus_next_field(!m.shift),
-            Key::Enter => self.activate_focused_field(window),
-            Key::Delete if m.ctrl => self.delete_current(window),
+            Key::Enter => self.activate_focused_field(),
+            Key::Delete if m.ctrl => self.delete_current(),
             Key::Down => self.scroll_y += 60.0,
             Key::Up => self.scroll_y -= 60.0,
             Key::Right => self.scroll_x += 60.0,

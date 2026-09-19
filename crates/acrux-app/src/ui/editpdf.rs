@@ -287,6 +287,11 @@ pub struct EditBar {
     pub color: usize,
     /// Corps du paragraphe en cours, à afficher à la place du défaut.
     pub active_size: Option<f64>,
+    /// Le corps a été choisi dans la barre : il s'impose au texte ajouté,
+    /// qui sinon prend celui du texte voisin.
+    pub size_set: bool,
+    /// La couleur a été choisie dans la barre (même règle).
+    pub color_set: bool,
     /// Zones cliquables, remplies au dessin.
     hits: Vec<(i32, i32, i32, i32, BarAction)>,
 }
@@ -298,6 +303,8 @@ impl Default for EditBar {
             size: 12.0,
             color: 0,
             active_size: None,
+            size_set: false,
+            color_set: false,
             hits: Vec::new(),
         }
     }

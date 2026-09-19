@@ -446,6 +446,109 @@ pub fn new_text_frame(
     }
 }
 
+/// Style d'une zone de texte neuve imposé par l'utilisateur ; ce qui n'est
+/// pas imposé vient du texte voisin.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct NewTextStyle {
+    /// Corps, en points.
+    pub size: Option<f64>,
+    /// Couleur RVB.
+    pub color: Option<[f64; 3]>,
+}
+
+/// Prépare une zone de texte neuve **là où l'on clique**, comme dans
+/// Acrobat : elle écrit dans la police, le corps et la couleur du texte le
+/// plus proche — une valeur ajoutée à un formulaire imprimé ressemble ainsi
+/// au reste de la page, au lieu d'arriver en Helvetica.
+///
+/// Placement : le clic tombe au milieu des lettres (c'est là qu'on vise
+/// quand on montre une ligne). Un clic sur une ligne de champ, ou juste
+/// au-dessus (« Intitulé du compte : ______ »), pose le texte **sur** ce
+/// trait.
+///
+/// Rien n'est écrit ici.
+#[must_use]
+pub fn text_frame_at(
+    doc: &Document,
+    page: &Page,
+    text: &PageText,
+    x: f64,
+    y: f64,
+    style: NewTextStyle,
+) -> ParagraphFrame {
+    let near = nearest_style(doc, page, text, x, y);
+    let size = style
+        .size
+        .or(near.as_ref().map(|n| n.1))
+        .unwrap_or(12.0)
+        .clamp(4.0, 144.0);
+    let color = style
+        .color
+        .or(near.as_ref().map(|n| n.2))
+        .unwrap_or([0.0, 0.0, 0.0]);
+    let (x, baseline) = field_line(doc, page, x, y, size).unwrap_or((x, y - size * 0.33));
+    let mut frame = new_text_frame(doc, page, x, baseline, size, color);
+    if let Some((font, _, _)) = near {
+        frame.font = font;
+        frame.standard = None;
+    }
+    frame
+}
+
+/// Police (ressource de la page), corps et couleur du bloc le plus proche,
+/// s'il est modifiable et pas trop loin.
+fn nearest_style(
+    doc: &Document,
+    page: &Page,
+    text: &PageText,
+    x: f64,
+    y: f64,
+) -> Option<(Name, f64, [f64; 3])> {
+    let units = text_units(text);
+    let distance = |r: &Rect| {
+        let dx = (r.x0 - x).max(x - r.x1).max(0.0);
+        let dy = (r.y0 - y).max(y - r.y1).max(0.0);
+        // Le texte de la même ligne compte plus que celui du dessus.
+        dx.hypot(dy * 2.0)
+    };
+    let mut order: Vec<(f64, &TextUnit)> = units
+        .iter()
+        .map(|u| (distance(&u.bbox), u))
+        .filter(|(d, _)| *d < 200.0)
+        .collect();
+    order.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // Le premier bloc dont la police se retrouve dans le flux de la page ;
+    // quelques essais suffisent.
+    order.iter().take(4).find_map(|(_, unit)| {
+        let target = Target::find(doc, page, text, unit).ok()?;
+        let size = target.size_text * target.scale;
+        let color = piece_words(unit.pieces.first()?, text)
+            .first()
+            .and_then(|w| w.glyphs.first())
+            .map_or([0.0, 0.0, 0.0], |g| g.color.map(f64::from));
+        (size > 1.0).then_some((target.font, size, color))
+    })
+}
+
+/// Trait de champ sous le clic : origine et ligne de base du texte à y poser.
+fn field_line(doc: &Document, page: &Page, x: f64, y: f64, size: f64) -> Option<(f64, f64)> {
+    let objects = crate::edit_objects::list(doc, page).ok()?;
+    objects
+        .iter()
+        .filter(|o| o.kind == crate::edit_objects::Kind::Path)
+        .map(|o| o.bbox)
+        .filter(|b| {
+            b.height() <= 2.5
+                && b.width() >= size * 2.0
+                && x >= b.x0 - size
+                && x <= b.x1
+                && y >= b.y0 - size * 0.5
+                && y <= b.y1 + size * 1.3
+        })
+        .min_by(|a, b| (y - a.y1).abs().total_cmp(&(y - b.y1).abs()))
+        .map(|b| (x.max(b.x0 + 1.5), b.y1 + size * 0.22))
+}
+
 /// Texte sans blancs, pour comparer ce qui est dessiné à ce qui a été écrit.
 #[must_use]
 pub fn normalized(text: &str) -> String {
@@ -680,9 +783,75 @@ fn first_baseline(unit: &TextUnit, text: &PageText) -> f64 {
 }
 
 /// Retrouve le paragraphe logé dans une boîte et portant un texte donné.
+///
+/// Si aucun bloc entier ne convient, on regarde **la part de chaque bloc qui
+/// tombe dans la boîte** : une zone ajoutée juste après un libellé
+/// (« IBAN : » puis la saisie, sur la même ligne) est lue par l'extraction
+/// comme une seule ligne avec lui — c'est pourtant bien la zone seule qu'on
+/// recompose, le libellé restant à sa place.
 fn locate(text: &PageText, frame: &ParagraphFrame, expected: &str) -> Option<TextUnit> {
-    text_units(text)
-        .into_iter()
+    let units = text_units(text);
+    locate_whole(&units, text, frame, expected).or_else(|| {
+        units
+            .iter()
+            .filter_map(|u| clip_to_frame(u, text, frame))
+            .find(|u| {
+                (first_baseline(u, text) - frame.baseline).abs() <= frame.size * 0.35
+                    && normalized(&glyph_text(u, text)) == expected
+            })
+    })
+}
+
+/// Part d'un bloc logée dans une boîte : les mots qui commencent dans sa
+/// largeur, sur les lignes qui ne sont pas au-dessus de sa première ligne.
+fn clip_to_frame(unit: &TextUnit, text: &PageText, frame: &ParagraphFrame) -> Option<TextUnit> {
+    let (left, right) = (frame.x0 - frame.size * 0.3, frame.x0 + frame.width + 1.0);
+    let mut pieces = Vec::new();
+    for piece in &unit.pieces {
+        let Some(line) = text.lines.get(piece.line) else {
+            continue;
+        };
+        if line.baseline() > frame.baseline + frame.size * 0.35 {
+            continue;
+        }
+        let words = piece_words(piece, text);
+        let inside: Vec<usize> = (0..words.len())
+            .filter(|&i| words[i].bbox.x0 >= left && words[i].bbox.x0 <= right)
+            .collect();
+        let (Some(&a), Some(&b)) = (inside.first(), inside.last()) else {
+            continue;
+        };
+        if b - a + 1 != inside.len() {
+            continue;
+        }
+        pieces.push(Piece {
+            line: piece.line,
+            words: (piece.words.0 + a, piece.words.0 + b + 1),
+        });
+    }
+    let bbox = pieces
+        .iter()
+        .filter_map(|p| piece_box(p, text))
+        .reduce(|a, b| a.union(&b))?;
+    Some(TextUnit {
+        bbox,
+        pieces,
+        alignment: frame.alignment,
+        first_line_indent: frame.first_line_indent,
+        line_spacing: frame.line_spacing,
+        size: frame.size,
+    })
+}
+
+/// Bloc entier logé dans une boîte et portant un texte donné.
+fn locate_whole(
+    units: &[TextUnit],
+    text: &PageText,
+    frame: &ParagraphFrame,
+    expected: &str,
+) -> Option<TextUnit> {
+    units
+        .iter()
         .filter(|u| {
             (first_baseline(u, text) - frame.baseline).abs() <= frame.size * 0.35
                 && u.bbox.x1 >= frame.x0 - 1.0
@@ -694,6 +863,7 @@ fn locate(text: &PageText, frame: &ParagraphFrame, expected: &str) -> Option<Tex
                 .abs()
                 .total_cmp(&(first_baseline(b, text) - frame.baseline).abs())
         })
+        .cloned()
 }
 
 /// Boîte d'un paragraphe existant.

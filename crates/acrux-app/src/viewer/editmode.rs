@@ -25,8 +25,8 @@ use super::{
 };
 use crate::ui::editpdf::{step_size, BarAction, Buffer, EditBar, EditTool};
 use acrux_features::edit_text::{
-    new_text_frame, normalized, open_paragraph, set_paragraph_text, text_units, CaretMap,
-    ParagraphFrame, TextUnit,
+    normalized, open_paragraph, set_paragraph_text, text_frame_at, text_units, CaretMap,
+    NewTextStyle, ParagraphFrame, TextUnit,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -187,6 +187,7 @@ impl Viewer {
             BarAction::Color(i) => {
                 if let Some(mode) = &mut self.edit {
                     mode.bar.color = i;
+                    mode.bar.color_set = true;
                     // Une zone neuve encore vide prend la couleur choisie.
                     let rgb = mode.bar.rgb();
                     if let Some(a) = &mut mode.active {
@@ -209,6 +210,7 @@ impl Viewer {
                         Some(a.buffer.clone())
                     } else {
                         mode.bar.size = step_size(mode.bar.size, up);
+                        mode.bar.size_set = true;
                         None
                     }
                 });
@@ -288,34 +290,28 @@ impl Viewer {
                 mode.map_or(0, |m| m.blink.elapsed().as_millis()),
             )
         };
-        // 1. Le cadre de chaque paragraphe des pages visibles : c'est ce qui
-        //    dit, d'un coup d'œil, que tout le texte est modifiable.
-        for (page, b) in layout.iter().enumerate() {
-            if !b.visible {
-                continue;
-            }
-            let Some(m) = self.page_to_view(&layout, page) else {
-                continue;
-            };
-            let Some((_, top)) = self.page_screen(&layout, page) else {
-                continue;
-            };
-            if top + f64::from(b.h) < 0.0 || top > view_h {
-                continue;
-            }
-            let boxes: Vec<Rect> = self.units(page).iter().map(|u| u.bbox).collect();
-            for r in boxes {
-                let dev = m.transform_rect(&r);
-                let hovered = hover.is_some_and(|(hp, hr)| hp == page && hr == r);
-                let (color, width) = if hovered {
-                    (accent, thin * 2)
-                } else {
-                    ((0x9A, 0xA4, 0xB4), thin)
-                };
-                outline(frame, &dev, 2.0 * dpi, width, color);
+        // 1. Pas de cadre autour de chaque bloc : la page reste lisible. Seul
+        //    le bloc survolé se signale, d'un filet discret — c'est ce qui dit
+        //    « ceci se modifie » au moment où l'on s'en approche.
+        if let Some((page, r)) = hover {
+            let visible = layout.get(page).is_some_and(|b| b.visible);
+            let is_active = active_page == Some(page)
+                && self
+                    .edit
+                    .as_ref()
+                    .and_then(|e| e.active.as_ref())
+                    .and_then(|a| a.map.bounds())
+                    .is_some_and(|b| b.x0 < r.x1 && r.x0 < b.x1 && b.y0 < r.y1 && r.y0 < b.y1);
+            if visible && !is_active {
+                if let Some(m) = self.page_to_view(&layout, page) {
+                    let dev = m.transform_rect(&r);
+                    if dev.y1 >= 0.0 && dev.y0 <= view_h {
+                        outline(frame, &dev, 3.0 * dpi, thin, (0xA8, 0xB8, 0xD0));
+                    }
+                }
             }
         }
-        // 2. Le paragraphe en cours : cadre franc, sélection, curseur.
+        // 2. Le bloc en cours : filet fin, sélection, curseur.
         let Some(page) = active_page else { return };
         let Some(m) = self.page_to_view(&layout, page) else {
             return;
@@ -342,13 +338,7 @@ impl Viewer {
                 }
             },
         );
-        outline(
-            frame,
-            &m.transform_rect(&bounds),
-            4.0 * dpi,
-            thin * 2,
-            accent,
-        );
+        outline(frame, &m.transform_rect(&bounds), 3.0 * dpi, thin, accent);
         let (s0, s1) = a.buffer.range();
         for r in a.map.selection_rects(s0, s1) {
             tint(frame, &m.transform_rect(&r), accent, 90);
@@ -427,6 +417,12 @@ impl Viewer {
             EditTool::Select => {
                 if let Some((index, _)) = self.paragraph_at(page, pt) {
                     self.open_existing(page, index, pt);
+                } else {
+                    // Un clic hors du texte prépare une zone neuve, invisible
+                    // tant qu'on n'a rien tapé : pour remplir un formulaire
+                    // imprimé, on clique sur chaque ligne et on écrit, sans
+                    // repasser par la barre.
+                    self.open_new_box(page, pt, window);
                 }
             }
         }
@@ -467,17 +463,26 @@ impl Viewer {
 
     /// Ouvre une zone de texte neuve au point cliqué.
     fn open_new_box(&mut self, page: usize, pt: Point, window: &mut dyn WindowHandle) {
-        let Some((size, rgb)) = self.edit.as_ref().map(|e| (e.bar.size, e.bar.rgb())) else {
+        let Some(style) = self.edit.as_ref().map(|e| NewTextStyle {
+            size: e.bar.size_set.then_some(e.bar.size),
+            color: e.bar.color_set.then(|| e.bar.rgb()),
+        }) else {
             return;
         };
         let opened = {
-            let Some(l) = self.loaded.as_ref() else {
+            let Some(l) = self.loaded.as_mut() else {
                 return;
             };
+            let text = l.text(page).0.clone();
             let Some(p) = l.pages.get(page) else { return };
-            // Le clic marque le haut du texte, comme dans Acrobat : la ligne
-            // de base tombe donc un peu plus bas.
-            let frame = new_text_frame(&l.doc, p, pt.x, pt.y - size * 0.8, size, rgb);
+            // Hors de la page, rien à poser.
+            let crop = p.crop_box(&l.doc);
+            if pt.x < crop.x0 || pt.x > crop.x1 || pt.y < crop.y0 || pt.y > crop.y1 {
+                return;
+            }
+            // Police, corps et couleur du texte voisin ; posée sur la ligne
+            // de champ s'il y en a une sous le clic.
+            let frame = text_frame_at(&l.doc, p, &text, pt.x, pt.y, style);
             set_paragraph_text(&l.doc, p, &frame, "", "").map(|map| (frame, map))
         };
         match opened {
@@ -531,8 +536,31 @@ impl Viewer {
         if let Some(mode) = &mut self.edit {
             mode.hover = over;
         }
-        let cursor = if tool == Some(EditTool::AddText) || over.is_some() || self.editing_text() {
+        let in_active = hit.is_some_and(|(page, pt)| {
+            self.edit
+                .as_ref()
+                .and_then(|e| e.active.as_ref())
+                .filter(|a| a.page == page)
+                .and_then(|a| a.map.bounds())
+                .is_some_and(|r| {
+                    let m = 4.0;
+                    pt.x >= r.x0 - m && pt.x <= r.x1 + m && pt.y >= r.y0 - m && pt.y <= r.y1 + m
+                })
+        });
+        let on_page = hit.is_some_and(|(page, pt)| {
+            self.loaded
+                .as_ref()
+                .and_then(|l| l.pages.get(page).map(|p| p.crop_box(&l.doc)))
+                .is_some_and(|c| pt.x >= c.x0 && pt.x <= c.x1 && pt.y >= c.y0 && pt.y <= c.y1)
+        });
+        // Comme dans Acrobat : la barre de texte sur du texte, le pointeur
+        // « ajouter du texte » là où un clic posera une zone neuve.
+        let cursor = if tool == Some(EditTool::AddText) && !in_active && on_page {
+            Cursor::AddText
+        } else if over.is_some() || in_active {
             Cursor::IBeam
+        } else if on_page {
+            Cursor::AddText
         } else {
             Cursor::Arrow
         };

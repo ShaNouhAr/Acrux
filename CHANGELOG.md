@@ -7,6 +7,46 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
+## Non publié
+
+### Acrux pose ses propres questions
+
+- **Plus de boîte de message du système.** « Enregistrer les modifications ? »
+  s'affiche dans la fenêtre, dans le thème de l'application, et **nomme ce que
+  fait chaque bouton** : Enregistrer, Ne pas enregistrer, Annuler — au lieu
+  d'un « Oui / Non » qui laisse deviner. Entrée valide, Échap annule, Tab
+  passe d'un bouton à l'autre. Les messages d'erreur, la suppression d'une
+  page, l'application des biffures et l'installation d'une mise à jour passent
+  par la même fenêtre.
+- **Ouvrir un document ne demande plus rien** : le document en cours passe
+  simplement dans un onglet, il n'y avait rien à perdre.
+
+### Modifier le PDF : plus proche encore d'Acrobat
+
+- **Plus de cadres partout.** La page reste la page ; seul le bloc survolé se
+  signale d'un filet discret, et le bloc en cours d'un filet fin.
+- **Une zone de texte neuve écrit dans la police, le corps et la couleur du
+  texte voisin**, au lieu d'arriver en Helvetica — une valeur ajoutée à un
+  formulaire imprimé ressemble au reste de la page. Le corps et la couleur
+  choisis dans la barre l'emportent, s'ils ont été choisis.
+- **Le texte se pose sur la ligne du champ.** Un clic sur un trait de
+  formulaire (« Intitulé du compte : ______ ») écrit dessus, et non au-dessus
+  ou en dessous.
+- **Un clic dans une zone vide de la page suffit pour écrire** : plus besoin de
+  reprendre « Ajouter du texte » à chaque valeur. Rien n'est écrit tant
+  qu'aucune lettre n'est tapée.
+- Une zone posée juste après un libellé, sur la même ligne, reste modifiable
+  frappe après frappe : c'est bien elle qu'on recompose, le libellé ne bouge
+  pas.
+- Un paragraphe justifié de **deux** lignes est reconnu comme justifié : la
+  première frappe ne le met plus en drapeau.
+
+### Pointeurs
+
+- **Des pointeurs dessinés par Acrux**, comme dans Acrobat : ajouter du texte,
+  surligneur, note, biffure, déplacement. Le pointeur dit ce que fera le clic
+  avant qu'on le fasse.
+
 ## 0.4.0 — 19 septembre 2026
 
 On choisit un outil, on entre dans un mode, et c'est la page elle-même qui

@@ -24,6 +24,8 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::ptr::{null, null_mut};
 
+use crate::ui::cursors::{self, Shape};
+
 use super::{
     App, Cursor, Event, Frame, Key, Modifiers, MouseButton, PrintOutcome, PrintSource, WindowHandle,
 };
@@ -35,6 +37,7 @@ type HCURSOR = *mut c_void;
 type HBRUSH = *mut c_void;
 type HDC = *mut c_void;
 type HMENU = *mut c_void;
+type HBITMAP = *mut c_void;
 type WPARAM = usize;
 type LPARAM = isize;
 type LRESULT = isize;
@@ -222,6 +225,7 @@ const IMAGE_ICON: UINT = 1;
 /// L'icône appartient au système : ni copie, ni libération à notre charge.
 const LR_SHARED: UINT = 0x0000_8000;
 /// Indices de `GetSystemMetrics` pour la taille des icônes, grande puis petite.
+const SM_CXCURSOR: i32 = 13;
 const SM_CXICON: i32 = 11;
 const SM_CYICON: i32 = 12;
 const SM_CXSMICON: i32 = 49;
@@ -275,8 +279,18 @@ const VK_CONTROL: i32 = 0x11;
 const VK_MENU: i32 = 0x12;
 const MK_LBUTTON: WPARAM = 0x0001;
 
+#[repr(C)]
+struct ICONINFO {
+    f_icon: BOOL,
+    x_hotspot: DWORD,
+    y_hotspot: DWORD,
+    hbm_mask: HBITMAP,
+    hbm_color: HBITMAP,
+}
+
 #[link(name = "user32")]
 extern "system" {
+    fn CreateIconIndirect(info: *const ICONINFO) -> HICON;
     fn RegisterClassExW(class: *const WNDCLASSEXW) -> ATOM;
     fn CreateWindowExW(
         ex_style: DWORD,
@@ -355,6 +369,14 @@ impl super::Waker for Win32Waker {
 
 #[link(name = "gdi32")]
 extern "system" {
+    fn CreateBitmap(
+        width: i32,
+        height: i32,
+        planes: UINT,
+        bits_per_pixel: UINT,
+        bits: *const c_void,
+    ) -> HBITMAP;
+    fn DeleteObject(object: *mut c_void) -> BOOL;
     fn GetPixel(hdc: HDC, x: i32, y: i32) -> DWORD;
     fn GetDeviceCaps(hdc: HDC, index: i32) -> i32;
     fn StartDocW(hdc: HDC, info: *const DOCINFOW) -> i32;
@@ -527,8 +549,8 @@ struct WindowState {
     want_redraw: bool,
     want_close: bool,
     dragging: bool,
-    /// Pointeurs chargés une fois : flèche, barre, main.
-    cursors: [HCURSOR; 3],
+    /// Pointeurs chargés une fois, dans l'ordre de [`Cursor`].
+    cursors: [HCURSOR; Cursor::COUNT],
     /// Pointeur demandé par l'application.
     cursor: Cursor,
     /// Journal de débogage actif (`ACRUX_LOG` défini).
@@ -1524,6 +1546,46 @@ fn program_icon(instance: HINSTANCE, metric_x: i32, metric_y: i32) -> HICON {
     }
 }
 
+/// Pointeur dessiné par [`crate::ui::cursors`], à la taille des pointeurs
+/// du système.
+fn drawn_cursor(shape: Shape) -> Option<HCURSOR> {
+    // SAFETY : sans précondition.
+    let metric = unsafe { GetSystemMetrics(SM_CXCURSOR) };
+    let image = cursors::image(shape, u32::try_from(metric).unwrap_or(32).max(32));
+    let side = i32::try_from(image.size).ok()?;
+    // Masque monochrome tout à zéro : c'est l'alpha de l'image couleur qui
+    // découpe la forme. Une ligne de masque est alignée sur 16 bits.
+    let mask = vec![0_u8; (image.size as usize).div_ceil(16) * 2 * image.size as usize];
+    // SAFETY : les tampons vivent pendant les appels et ont la taille
+    // annoncée (côté × côté × 4 octets pour la couleur, lignes de 16 bits
+    // pour le masque) ; CreateIconIndirect copie les bitmaps, qu'on libère
+    // ensuite.
+    unsafe {
+        let color = CreateBitmap(side, side, 1, 32, image.pixels.as_ptr().cast());
+        let mask = CreateBitmap(side, side, 1, 1, mask.as_ptr().cast());
+        if color.is_null() || mask.is_null() {
+            if !color.is_null() {
+                DeleteObject(color);
+            }
+            if !mask.is_null() {
+                DeleteObject(mask);
+            }
+            return None;
+        }
+        let info = ICONINFO {
+            f_icon: 0,
+            x_hotspot: image.hot.0,
+            y_hotspot: image.hot.1,
+            hbm_mask: mask,
+            hbm_color: color,
+        };
+        let cursor = CreateIconIndirect(&raw const info);
+        DeleteObject(color);
+        DeleteObject(mask);
+        (!cursor.is_null()).then_some(cursor)
+    }
+}
+
 /// Crée la fenêtre principale et fait tourner la boucle de messages.
 ///
 /// # Errors
@@ -1541,13 +1603,24 @@ pub fn run(title: &str, width: u32, height: u32, app: Box<dyn App>) -> Result<()
     // SAFETY : null = module courant.
     let instance = unsafe { GetModuleHandleW(null()) };
     // SAFETY : IDC_* sont des ressources système prédéfinies.
-    let cursors = unsafe {
-        [
+    let (arrow, beam, pointer) = unsafe {
+        (
             LoadCursorW(null_mut(), IDC_ARROW as *const u16),
             LoadCursorW(null_mut(), IDC_IBEAM as *const u16),
             LoadCursorW(null_mut(), IDC_HAND as *const u16),
-        ]
+        )
     };
+    let drawn = |shape| drawn_cursor(shape).unwrap_or(arrow);
+    let cursors = [
+        arrow,
+        beam,
+        pointer,
+        drawn(Shape::AddText),
+        drawn(Shape::Highlight),
+        drawn(Shape::Note),
+        drawn(Shape::Redact),
+        drawn(Shape::Move),
+    ];
     let cursor = cursors[0];
     let icon = program_icon(instance, SM_CXICON, SM_CYICON);
     let icon_small = program_icon(instance, SM_CXSMICON, SM_CYSMICON);

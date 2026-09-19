@@ -330,6 +330,13 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   vient d'être écrit**, la page est rendue tout de suite sur ce fil (attendre le fil de rendu
   montrerait une page blanche entre deux lettres), et l'historique garde une seule opération par
   bloc, mise à jour à chaque frappe.
+- `ui/dialog` et `viewer/dialogs` : **les questions d'Acrux**, dessinées dans la fenêtre. Une
+  question ne bloque rien : elle est posée, et l'action attend la réponse (`Then`). Les boutons
+  nomment ce qu'ils font (« Enregistrer », « Ne pas enregistrer »), ce qu'un « Oui / Non » du
+  système ne permet pas. Tant qu'une fenêtre est ouverte, elle reçoit seule le clavier et la souris.
+- `ui/cursors` : **pointeurs dessinés** (ajouter du texte, surligneur, note, biffure, déplacement),
+  décrits sur une grille de 32 × 32 et rasterisés à la taille des pointeurs du système ; `platform`
+  les confie au système (`CreateIconIndirect` sous Windows).
 - `ui/modebar` : barre fine d'un outil d'annotation en cours — son nom, sa consigne, « Terminer ».
   Un outil qui change ce que fait un clic sur la page doit le dire.
 - `ui/objects` : outil « modifier » — boîte de sélection, huit poignées, redimensionnement sans

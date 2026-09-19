@@ -18,7 +18,8 @@ use std::path::PathBuf;
 
 use acrux_document::{collect_pages, Document};
 use acrux_features::edit_text::{
-    new_text_frame, normalized, open_paragraph, set_paragraph_text, OpenedParagraph,
+    new_text_frame, normalized, open_paragraph, set_paragraph_text, text_frame_at, NewTextStyle,
+    OpenedParagraph,
 };
 use acrux_features::text::{extract_page_text, PageText};
 
@@ -366,5 +367,124 @@ fn modifier_la_moitie_droite_dun_entete_ne_touche_pas_la_gauche() {
         "bord droit {} au lieu de {}",
         word.bbox.x1,
         right.bbox.x1
+    );
+}
+
+/// Un formulaire imprimé : des lignes de champ à remplir, comme on en reçoit
+/// à compléter.
+fn formulaire() -> Document {
+    Document::load(corpus("reels/chrome-skia-formulaire-lignes-cases.pdf")).unwrap()
+}
+
+#[test]
+fn une_zone_neuve_prend_la_police_du_document_et_se_pose_sur_la_ligne_de_champ() {
+    let doc = formulaire();
+    let pages = collect_pages(&doc).unwrap();
+    let text = extract_page_text(&doc, &pages[0]).unwrap();
+    // La ligne « Intitulé du compte : ______ » et son trait.
+    let label = text
+        .lines
+        .iter()
+        .find(|l| l.text().contains("Intitulé du compte"))
+        .unwrap_or_else(|| panic!("le libellé est absent du fichier d'essai"));
+    let (baseline, size) = (label.baseline(), label.words[0].glyphs[0].size);
+    let police = label.words[0].glyphs[0].font.clone();
+    // On clique sur le trait, à droite du libellé : un peu sous la ligne de
+    // base du libellé, comme le ferait quelqu'un qui vise le trait.
+    let x = label.bbox.x1 + 60.0;
+    let frame = text_frame_at(
+        &doc,
+        &pages[0],
+        &text,
+        x,
+        baseline - 1.0,
+        NewTextStyle::default(),
+    );
+    assert!(
+        (frame.size - size).abs() < 0.6,
+        "corps hérité : {} au lieu de {size}",
+        frame.size
+    );
+    assert!(
+        frame.standard.is_none(),
+        "la zone doit écrire avec une police du document, pas une police standard"
+    );
+    // Posée sur le trait, donc à peu près sur la ligne de base du libellé.
+    assert!(
+        (frame.baseline - baseline).abs() < size * 0.6,
+        "ligne de base {} loin de celle du libellé {baseline}",
+        frame.baseline
+    );
+    // Et l'on peut taper, frappe après frappe, bien que le libellé soit sur
+    // la même ligne : c'est la zone seule qui est recomposée.
+    let mut drawn = String::new();
+    let mut typed = String::new();
+    for c in "Jean Dupont".chars() {
+        typed.push(c);
+        let pages = collect_pages(&doc).unwrap();
+        set_paragraph_text(&doc, &pages[0], &frame, &drawn, &typed)
+            .unwrap_or_else(|e| panic!("frappe « {c} » refusée : {e}"));
+        drawn = normalized(&typed);
+    }
+    let pages = collect_pages(&doc).unwrap();
+    let after = extract_page_text(&doc, &pages[0]).unwrap();
+    let line = after
+        .lines
+        .iter()
+        .find(|l| l.text().contains("Jean Dupont"))
+        .unwrap_or_else(|| panic!("la saisie est absente de la page"));
+    // Le libellé est intact, et la saisie s'écrit dans sa police.
+    assert!(line.text().contains("Intitulé du compte"));
+    assert_eq!(
+        line.words
+            .iter()
+            .flat_map(|w| w.glyphs.iter())
+            .find(|g| g.text == "J")
+            .map(|g| g.font.clone()),
+        Some(police)
+    );
+}
+
+#[test]
+fn le_corps_et_la_couleur_choisis_dans_la_barre_lemportent() {
+    let doc = formulaire();
+    let pages = collect_pages(&doc).unwrap();
+    let text = extract_page_text(&doc, &pages[0]).unwrap();
+    let crop = pages[0].crop_box(&doc);
+    let style = NewTextStyle {
+        size: Some(24.0),
+        color: Some([0.9, 0.1, 0.1]),
+    };
+    let frame = text_frame_at(
+        &doc,
+        &pages[0],
+        &text,
+        crop.x0 + 60.0,
+        crop.y0 + 60.0,
+        style,
+    );
+    assert!((frame.size - 24.0).abs() < 0.01);
+    assert!((frame.color[0] - 0.9).abs() < 0.01);
+}
+
+#[test]
+fn un_paragraphe_de_deux_lignes_reste_justifie() {
+    let doc = formulaire();
+    let pages = collect_pages(&doc).unwrap();
+    let text = extract_page_text(&doc, &pages[0]).unwrap();
+    let paragraphs: Vec<_> = text
+        .blocks
+        .iter()
+        .flat_map(|b| b.paragraphs.iter())
+        .collect();
+    let two = paragraphs
+        .iter()
+        .find(|p| p.text.contains("Une demande de remboursement"))
+        .unwrap_or_else(|| panic!("le paragraphe de deux lignes est absent"));
+    assert_eq!(
+        two.alignment,
+        acrux_features::text::Alignment::Justify,
+        "un paragraphe justifié de deux lignes doit être reconnu comme tel, \
+         sans quoi la première frappe le mettrait en drapeau"
     );
 }

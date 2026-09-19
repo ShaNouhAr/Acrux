@@ -775,7 +775,10 @@ fn finish_paragraph(b: &Building, infos: &[LineInfo], col: Rect) -> Paragraph {
             .iter()
             .zip(&rights)
             .all(|(l, r)| (l - r).abs() < 1.0 * size);
-        if left_ok && right_ok && n >= 3 {
+        // Deux lignes suffisent : la première touche le bord droit de la
+        // colonne à un tiers de cadratin près, ce qu'un texte en drapeau ne
+        // fait que par hasard — et alors la justifier ne la change pas.
+        if left_ok && right_ok {
             Alignment::Justify
         } else if left_ok {
             Alignment::Left

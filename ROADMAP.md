@@ -158,7 +158,7 @@ Livrable : version 0.2, parité avec Acrobat Standard hors édition de texte.
   bouton les parcourt et la barre d'état dit lequel est actif.
 - [x] **Mode « Modifier le PDF »**, comme dans Acrobat (`acrux-app/src/viewer/editmode.rs`,
   `acrux-app/src/ui/editpdf.rs`, `acrux-features/edit_text/reflow.rs`) : on n'a plus à sélectionner
-  d'abord. On entre dans le mode, **tout le texte s'encadre**, un clic dans un bloc y pose le curseur
+  d'abord. On entre dans le mode, un clic dans un bloc de texte y pose le curseur
   et l'on tape, efface, se déplace (flèches, Ctrl+flèches, Début/Fin, Maj pour sélectionner,
   double-clic sur un mot, triple-clic sur le bloc, Ctrl+A/C/X/V). Le bloc se recompose **à chaque
   frappe, dans sa vraie police et sur son vrai fond** — environ 25 ms sur une vraie page, rendu
@@ -166,7 +166,10 @@ Livrable : version 0.2, parité avec Acrobat Standard hors édition de texte.
   bloc ne déplace rien : le curseur se pose sur le dessin d'origine, la recomposition n'arrive
   qu'à la première frappe. **Ajouter du texte** pose une zone neuve où l'on clique, qui grandit en
   largeur jusqu'à la marge puis coule à la ligne ; rien n'est écrit tant qu'aucune lettre n'est
-  tapée. Barre du mode : outil, taille (du bloc en cours ou du texte ajouté), couleur du texte
+  tapée : elle écrit dans **la police, le corps et la couleur du texte voisin**, et se pose sur la
+  ligne du champ quand on clique sur un trait de formulaire. Un clic dans une zone vide de la page
+  prépare la même chose sans repasser par l'outil. Pas de cadre permanent : seul le bloc survolé se
+  signale d'un filet, et le bloc en cours d'un filet fin. Barre du mode : outil, taille (du bloc en cours ou du texte ajouté), couleur du texte
   ajouté, Terminer. **Annuler défait toute une saisie d'un coup** : l'historique ne garde qu'une
   opération par bloc, rejouable sur le fichier d'origine (vérifié par test). Les blocs sont ceux
   d'Acrobat et non les paragraphes de l'extraction : un paragraphe qui se poursuit dans la colonne
@@ -177,6 +180,14 @@ Livrable : version 0.2, parité avec Acrobat Standard hors édition de texte.
   À faire : gras, italique, famille et couleur d'un bloc existant ; images dans le même mode
   (« Modifier les objets » reste un outil à part) ; texte ajouté hors WinAnsi (police standard) ;
   poignées pour élargir une zone.
+- [x] **Les questions d'Acrux sont dessinées par Acrux** (`acrux-app/src/ui/dialog.rs`,
+  `acrux-app/src/viewer/dialogs.rs`) : plus de boîte du système. Les boutons nomment l'action
+  (« Enregistrer », « Ne pas enregistrer », « Annuler »), la fenêtre ne bloque pas le programme —
+  l'action attend la réponse — et le clavier la pilote (Entrée, Échap, Tab). Messages d'erreur,
+  suppression de page, biffures et mise à jour passent par là.
+- [x] **Pointeurs dessinés** (`acrux-app/src/ui/cursors.rs`) : ajouter du texte, surligneur, note,
+  biffure, déplacement — le pointeur dit ce que fera le clic. À faire : pointeurs de
+  redimensionnement aux poignées, et tailles spécifiques aux écrans à très haute résolution.
 - [x] **Outils d'annotation en mode**, eux aussi : « Surligner », « Poser une note » et « Biffer »
   s'allument dans la colonne et agissent directement sur la page — glisser surligne ou marque, un
   clic pose une note — avec une barre qui dit l'outil en cours et comment en sortir. Du texte déjà

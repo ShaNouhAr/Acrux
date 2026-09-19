@@ -91,6 +91,21 @@ pub enum Cursor {
     IBeam,
     /// Main (lien, déplacement).
     Hand,
+    /// Poser une zone de texte (dessiné : [`crate::ui::cursors`]).
+    AddText,
+    /// Surligner.
+    Highlight,
+    /// Poser une note.
+    Note,
+    /// Biffer.
+    Redact,
+    /// Déplacer un objet.
+    Move,
+}
+
+impl Cursor {
+    /// Nombre de pointeurs.
+    pub const COUNT: usize = 8;
 }
 
 /// Modificateurs enfoncés.
