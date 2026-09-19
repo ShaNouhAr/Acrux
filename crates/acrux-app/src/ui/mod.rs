@@ -15,6 +15,7 @@
 //! | `palette` | palette de commandes filtrable (Ctrl+Maj+P)           |
 //! | `sign`    | outil « remplir et signer » : barre et capture        |
 //! | `objects` | outil « modifier » : boîte de sélection et poignées   |
+//! | `video`   | image de vidéo composée dans la page, barre de commandes |
 //!
 //! À venir : panneaux latéraux, menus, info-bulles.
 
@@ -29,3 +30,4 @@ pub mod tabs;
 pub mod text;
 pub mod theme;
 pub mod toolbar;
+pub mod video;

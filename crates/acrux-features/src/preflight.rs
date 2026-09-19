@@ -465,6 +465,23 @@ pub fn check_profile(doc: &Document, profile: Profile) -> Result<PreflightReport
         );
     }
 
+    // Multimédia : vidéo, son, média enrichi.
+    if profile.forbids_embedded_files() && !scan.media.is_empty() {
+        let formes: Vec<&str> = scan.media.iter().map(String::as_str).collect();
+        c.add(
+            Severity::Error,
+            "multimedia",
+            format!(
+                "annotation(s) multimédia ({}) : {} ne les admet pas, un document \
+                 d'archive ne doit pas dépendre d'un décodeur vidéo",
+                formes.join(", "),
+                profile.label()
+            ),
+            None,
+            false,
+        );
+    }
+
     // Flux externes (§7.3.8.2 : `/F` remplace les données par un fichier).
     if scan.external_streams > 0 {
         c.add(

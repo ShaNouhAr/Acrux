@@ -367,6 +367,7 @@ fn main() -> ExitCode {
         (Some("preflight"), Some(f)) => cmd_preflight(f, &args[2..]),
         (Some("separations"), Some(f)) => cmd_separations(f, &args[2..]),
         (Some("compare"), Some(f)) => cmd_compare(f, &args[2..]),
+        (Some("media"), Some(f)) => cmd_media(f, &args[2..]),
         (Some("objects"), Some(f)) => cmd_objects(f, &args[2..]),
         (Some("edit-object"), Some(f)) => cmd_edit_object(f, &args[2..]),
         (Some("fillsign"), Some(f)) => cmd_fillsign(f, &args[2..]),
@@ -1256,6 +1257,7 @@ fn positional(rest: &[String]) -> Vec<&String> {
                 | "--pattern"
                 | "--image"
                 | "--object"
+                | "--extract"
                 | "--move"
                 | "--rotate"
                 | "--place"
@@ -2804,6 +2806,76 @@ fn print_report_json(reports: &[acrux_features::signature::VerificationReport]) 
         println!("  }}{comma}");
     }
     println!("] }}");
+}
+
+/// `acr media` : inventaire des vidéos et des sons, et extraction.
+fn cmd_media(path: &str, rest: &[String]) -> acrux_core::Result<()> {
+    use acrux_features::media::{self, Source};
+    let (doc, _) = open(path)?;
+    let items = media::list(&doc)?;
+    if items.is_empty() {
+        println!("aucun média");
+        return Ok(());
+    }
+
+    // `--extract <dossier>` sort les fichiers incorporés.
+    if let Some(dir) = option_value(rest, "--extract") {
+        let dir = std::path::PathBuf::from(dir);
+        let mut sortis = 0usize;
+        for item in &items {
+            if !item.is_embedded() {
+                println!(
+                    "page {} : {} est hors du document, non extrait",
+                    item.page + 1,
+                    item.name.clone().unwrap_or_else(|| "le média".into())
+                );
+                continue;
+            }
+            let out = media::extract(&doc, item, &dir)?;
+            let taille = std::fs::metadata(&out).map_or(0, |m| m.len());
+            println!("{} ({} Kio)", out.display(), taille / 1024);
+            sortis += 1;
+        }
+        println!("{sortis} média(s) extrait(s)");
+        return Ok(());
+    }
+
+    println!("page  n°  forme            rectangle                      nom");
+    for item in &items {
+        let source = match &item.source {
+            Some(Source::Embedded { size, .. }) => match size {
+                Some(n) => format!("incorporé, {} Kio", n / 1024),
+                None => "incorporé".into(),
+            },
+            Some(Source::External(name)) => format!("hors du document : {name}"),
+            None => "source introuvable".into(),
+        };
+        println!(
+            "{:>4}  {:>2}  {:<15}  {:>6.0} {:>6.0} {:>6.0} {:>6.0}  {}",
+            item.page + 1,
+            item.index,
+            item.kind.label(),
+            item.rect.x0,
+            item.rect.y0,
+            item.rect.x1,
+            item.rect.y1,
+            item.name.clone().unwrap_or_default()
+        );
+        println!(
+            "                       {source}{}{}",
+            item.content_type
+                .as_ref()
+                .map(|t| format!(" — {t}"))
+                .unwrap_or_default(),
+            if item.has_poster {
+                ", avec affiche"
+            } else {
+                ", sans affiche"
+            }
+        );
+    }
+    println!("{} média(s)", items.len());
+    Ok(())
 }
 
 /// `acr objects` : inventaire des objets dessinés, page par page.

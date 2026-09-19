@@ -16,6 +16,9 @@ acrux-features = { workspace = true }
 acrux-graphics = { workspace = true }
 acrux-fonts = { workspace = true }
 
+[dev-dependencies]
+acrux-codecs = { workspace = true }
+
 [build-dependencies]
 acrux-winres = { workspace = true }
 

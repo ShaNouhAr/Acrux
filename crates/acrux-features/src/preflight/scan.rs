@@ -69,6 +69,9 @@ pub struct Scan {
     pub separations: BTreeSet<String>,
     /// Nombre de fichiers incorporés.
     pub embedded_files: usize,
+    /// Annotations multimédia rencontrées, par sous-type (`Screen`,
+    /// `RichMedia`, `Movie`, `Sound`).
+    pub media: BTreeSet<String>,
     /// Nombre de flux dont les données sont dans un fichier externe (`/F`).
     pub external_streams: usize,
     /// La surimpression est employée (`/OP` ou `/op` vrai).
@@ -228,6 +231,12 @@ impl Walker<'_> {
                     .unwrap_or_default();
                 if subtype == "FileAttachment" {
                     self.scan.embedded_files += 1;
+                }
+                // Le multimédia est interdit par PDF/A comme par PDF/X : un
+                // document d'archive doit se lire dans cinquante ans, sans
+                // dépendre d'un décodeur vidéo de notre époque.
+                if matches!(subtype.as_str(), "Screen" | "RichMedia" | "Movie" | "Sound") {
+                    self.scan.media.insert(subtype.clone());
                 }
             }
         }

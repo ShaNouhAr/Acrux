@@ -223,6 +223,10 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   RSA, chaîne de certificats, couverture de tout le fichier, modifications postérieures
   — et `signature/sign` pose une signature par mise à jour incrémentale en réservant le
   `/Contents` puis en écrivant le `/ByteRange` à largeur fixe, sans décaler un octet).
+- `media` : multimédia (§13.2, §13.7) — retrouve les vidéos et les sons derrière les annotations
+  `/Screen`, `/RichMedia` et `/Movie`, en descendant action → rendition → clip → spécification de
+  fichier, et en extrait les octets. Ne décode rien ; refuse d'ouvrir un média extérieur au
+  document.
 - `edit_objects` : édition des objets d'une page (images, dessins, groupes, dégradés, blocs de
   texte) — inventaire avec boîte, matrice et **plage d'octets** ; déplacer, redimensionner,
   pivoter, recadrer, réordonner, supprimer, remplacer une image, aligner. Tout passe par une
@@ -257,6 +261,15 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   (`update/json.rs`) plutôt qu'une recherche de texte à l'aveugle, qui se ferait piéger par une
   accolade dans une note de version. Le téléchargement n'accepte qu'une adresse du domaine de
   publication de GitHub, et rien ne s'installe sans un oui explicite.
+- `platform/media` : lecture des vidéos et des sons, par **Media Foundation** (`IMFSourceReader`)
+  et `waveOut`. Décoder du H.264 et de l'AAC à la main n'aurait aucun sens : ce sont des normes
+  immenses et le système en a déjà des décodeurs, souvent accélérés par la carte graphique. Ce qui
+  nous appartient, c'est ce qu'on fait des images : elles arrivent en BGRA dans un tampon ordinaire
+  et sont **composées dans la page**, si bien que la vidéo suit le défilement et le zoom sans
+  fenêtre flottante. Le son donne l'heure — la position vient de ce que la carte son déclare avoir
+  joué, pas de l'horloge de la machine.
+- `ui/video` : image mise à l'échelle bilinéaire dans la page, barre de commandes (lecture, pause,
+  ligne de temps, durée).
 - `platform/http` : une requête HTTPS, par **WinHTTP** — le certificat, les redirections et le
   proxy de l'entreprise sont l'affaire du système, pas la nôtre.
 - `ui/objects` : outil « modifier » — boîte de sélection, huit poignées, redimensionnement sans

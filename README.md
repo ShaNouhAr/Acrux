@@ -198,6 +198,8 @@ fournie (`--roots <dossier de certificats DER>`), **couverture de tout le fichie
 `--name`, `--field`, et `--page N --rect x0,y0,x1,y1` pour une signature visible) :
 enveloppe CMS détachée `adbe.pkcs7.detached` en SHA-256, ajoutée par mise à jour
 incrémentale, `/ByteRange` calculé après écriture sans décaler un octet ;
+`media` liste les **vidéos et les sons** du document (`/Screen`, `/RichMedia`, `/Movie`) avec leur
+rectangle, leur type et leur taille, et `--extract <dossier>` en sort les fichiers incorporés ;
 `objects` liste les **objets dessinés** par une page (images, tracés, blocs de texte, dégradés)
 avec leur boîte, et `edit-object` les modifie : `--move dx,dy`, `--scale sx[,sy]` (autour du
 centre), `--rotate deg`, `--place x0,y0,x1,y1`, `--crop x0,y0,x1,y1`, `--order
@@ -267,6 +269,7 @@ dans la barre d'outils et « page iii (3 / 240) » dans la barre d'état, et sai
 | `E` | modifier le texte sélectionné (même police, la ligne se recompose) |
 | `H`, `Maj+H` | surligner la sélection, la surligner en y joignant un commentaire |
 | `N` | poser une note à la position de la souris |
+| clic sur une vidéo | lecture ; re-clic pour mettre en pause, clic sur la ligne de temps pour se déplacer |
 | `O` | modifier les objets : sélection, poignées, ordre, suppression |
 | `S` | remplir et signer : signature tracée, tapée ou importée, texte, marques |
 | `M`, `Maj+M` | biffure : marquer (réversible), puis appliquer définitivement |

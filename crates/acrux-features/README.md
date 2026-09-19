@@ -5,6 +5,36 @@ Fonctionnalités métier : édition, pages, annotations, formulaires, biffure, e
 Voir `ARCHITECTURE.md` à la racine pour la place de ce crate dans l'ensemble,
 et `src/lib.rs` pour la liste des modules et de ceux qui restent à écrire.
 
+## Multimédia (`media`)
+
+Un PDF ne contient pas « une vidéo » : il contient une annotation qui occupe un
+rectangle, une action qui dit quoi jouer, et un fichier incorporé quelque part.
+Trois générations de spécification se superposent, et ce module les connaît
+toutes les trois :
+
+| Forme | Norme | Usage |
+|---|---|---|
+| `/Screen` + action `/Rendition` | §13.2 | la forme courante depuis Acrobat 6 |
+| `/RichMedia` | §13.7 | ce qu'écrit Acrobat récent |
+| `/Movie` | PDF 1.1 | obsolète, encore lu |
+
+Le module **trouve** le média, dit de quoi il s'agit, et sait en extraire les
+octets. Il ne décode rien : la lecture est l'affaire de la plateforme.
+
+Un média **extérieur** au document — un chemin sur le disque, une adresse
+réseau — est listé comme tel et jamais ouvert de lui-même. Un fichier PDF est
+une donnée venue d'ailleurs ; suivre ce qu'il désigne sans rien demander
+reviendrait à exécuter ses instructions. De même, le nom du fichier extrait est
+choisi par nous et jamais repris du document, qui pourrait appeler sa vidéo
+`..{B}..{B}Windows{B}System32{B}quelque-chose.dll`.
+
+```bash
+acr media rapport.pdf                      # inventaire
+acr media rapport.pdf --extract ./medias   # sort les fichiers incorporés
+```
+
+Dans l'application : un clic sur l'affiche lance la lecture.
+
 ## Modifier les objets (`edit_objects`)
 
 Le pendant de « Modifier le PDF » d'Acrobat pour tout ce qui n'est pas du

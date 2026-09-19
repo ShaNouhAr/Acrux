@@ -21,6 +21,8 @@ use std::path::PathBuf;
 
 pub mod http;
 #[cfg(windows)]
+pub mod media;
+#[cfg(windows)]
 pub mod win32;
 
 /// Chaîne terminée par zéro, prête pour les API « W » de Windows.

@@ -59,6 +59,21 @@ Livrable : lecteur PDF complet, rapide, installable, version 0.1 publique.
 - [~] Compression / optimisation, aplatissement : `acr rewrite` réécrit proprement (flux d'objets dépliés), `--compress` recompresse les flux non filtrés (compresseur DEFLATE maison, `acrux-codecs/flate/compress.rs`), `--compact` écrit les objets dans des flux d'objets avec une table xref compressée et retire les objets inatteignables (`SaveOptions::{object_streams, drop_unreferenced}`, `Document::reachable_objects`) ; recompression d'images, linéarisation à faire
 Livrable : version 0.2, parité avec Acrobat Standard hors édition de texte.
 
+## Multimédia
+
+- [x] **Vidéo et son dans le document** (`acrux-features/media.rs`, `acrux-app/src/platform/media/`,
+  `acr media`) : les trois formes du multimédia PDF sont reconnues — `/Screen` avec action
+  `/Rendition` (§13.2), `/RichMedia` (§13.7) et `/Movie` (PDF 1.1) —, en descendant action →
+  rendition → clip → spécification de fichier, sélecteurs et sections de clip compris. Extraction du
+  fichier incorporé sous un nom **choisi par nous** ; un média extérieur au document n'est jamais
+  ouvert de lui-même. Lecture par Media Foundation (`IMFSourceReader`, sortie BGRA) et `waveOut`,
+  avec **le son pour horloge** : la position vient de ce que la carte son a réellement joué. Les
+  images sont composées dans la page — la vidéo suit le défilement, le zoom et la découpe, sans
+  fenêtre flottante — avec mise à l'échelle bilinéaire, barre de commandes et déplacement sur la
+  ligne de temps. Règle de contrôle en amont ajoutée : PDF/A et PDF/X refusent le multimédia.
+  À faire : volume et sourdine, plein écran, `/RichMedia` à configurations multiples, lecture
+  automatique quand le document la demande (`/AA /PV`), sous-titres.
+
 ## Distribution
 
 - [x] **Installateur Windows** (`crates/acrux-setup`, `acrux-setup.exe`) : exécutable

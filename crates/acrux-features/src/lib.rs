@@ -17,6 +17,7 @@
 //! | `edit_text` | édition de texte in place : réécriture chirurgicale du flux, remplacement, recomposition de paragraphe, sous-ensembles de polices | §3 |
 //! | `forms`  | formulaires AcroForm : inventaire, remplissage avec apparences, aplatissement, FDF | §9 |
 //! | `linkedit` | écriture des liens : pose, retrait, détection automatique des adresses | §1 |
+//! | `media`  | multimédia : vidéos et sons du document, extraction du fichier incorporé | §13 |
 //! | `navigation` | destinations, liens, actions, signets                   | §1            |
 //! | `outline_edit` | écriture des signets : arbre complet, ajout, retrait, déplacement, signets automatiques | §1 |
 //! | `pages`  | pivoter, supprimer, réordonner, extraire, insérer, fusionner | §5            |
@@ -44,6 +45,7 @@ pub mod fillsign;
 pub mod fontembed;
 pub mod forms;
 pub mod linkedit;
+pub mod media;
 pub mod navigation;
 pub mod outline_edit;
 pub mod pagelabels;

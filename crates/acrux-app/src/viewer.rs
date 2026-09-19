@@ -57,6 +57,7 @@ use crate::ui::tabs::{TabAction, TabInfo, Tabs};
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
 use crate::ui::toolbar::{ToolAction, Toolbar, ToolbarInfo};
+use crate::ui::video::{self as video_ui, Box2, Hit as VideoHit};
 use acrux_features::edit_objects::{self, Edit as ObjectEdit, PageObject};
 
 /// Rectangle semi-transparent (alpha 0..255) composé sur le tampon.
@@ -321,6 +322,9 @@ struct Loaded {
     layers: Vec<(u32, String, bool)>,
     /// Pièces jointes, pour le panneau, rechargées après chaque modification.
     attachments: Vec<AttachmentRow>,
+    /// Vidéos et sons du document, avec leur rectangle : c'est ce qui rend un
+    /// clic capable de savoir qu'il tombe sur un média.
+    media: Vec<acrux_features::media::Media>,
     /// Étiquette de chaque page (`/PageLabels`). Vide quand le document s'en
     /// tient à la numérotation décimale : c'est ce qui distingue « iii sur
     /// 240 » de « 3 sur 240 » dans la barre d'outils et la barre d'état.
@@ -380,6 +384,22 @@ enum PromptKind {
     },
 }
 
+/// Un média ouvert et sa place dans le document.
+struct MediaView {
+    /// Page qui le porte.
+    page: usize,
+    /// Position dans le tableau `/Annots`.
+    index: usize,
+    /// Rectangle de l'annotation, en coordonnées de page.
+    rect: Rect,
+    /// Le lecteur, qui tient le décodeur et la sortie audio.
+    player: crate::platform::media::Player,
+    /// Nom affiché dans la barre d'état.
+    title: String,
+    /// Vrai tant qu'un fil de réveil bat la mesure pour cette lecture.
+    ticking: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
 /// Outil « modifier » : ce qu'il sait de la page en cours d'édition.
 struct ObjectTool {
     /// Page dont les objets sont chargés.
@@ -409,6 +429,25 @@ struct ObjectDrag {
     current: Rect,
     /// Proportions gardées : Maj était enfoncée au début du geste.
     keep_ratio: bool,
+}
+
+/// Rectangle qui garde les proportions d'une image dans une boîte.
+fn fit_box(area: Box2, width: u32, height: u32) -> Box2 {
+    if width == 0 || height == 0 {
+        return area;
+    }
+    let ratio = f64::from(width) / f64::from(height);
+    let (mut w, mut h) = (area.w, area.w / ratio);
+    if h > area.h {
+        h = area.h;
+        w = area.h * ratio;
+    }
+    Box2 {
+        x: area.x + (area.w - w) / 2.0,
+        y: area.y + (area.h - h) / 2.0,
+        w,
+        h,
+    }
 }
 
 /// Jour courant, en jours depuis le 1er janvier 1970.
@@ -523,6 +562,8 @@ pub struct Viewer {
     palette: Option<Palette>,
     /// Outil « modifier » : objets de la page courante et sélection.
     objects: Option<ObjectTool>,
+    /// Média en cours de lecture, s'il y en a un.
+    media: Option<MediaView>,
     /// Résultat de la recherche de mise à jour en cours, s'il y en a une.
     update_rx: Option<std::sync::mpsc::Receiver<Result<crate::update::Release, String>>>,
     /// Version plus récente trouvée, en attente que l'utilisateur en décide.
@@ -634,6 +675,7 @@ impl Viewer {
             tabs: Tabs::new(),
             palette: None,
             objects: None,
+            media: None,
             update_rx: None,
             update_found: None,
             update_asked: false,
@@ -2095,6 +2137,7 @@ impl Viewer {
             .map(|l| (l.number, l.name, l.visible))
             .collect();
         let attachments = collect_attachments(&doc);
+        let media = acrux_features::media::list(&doc).unwrap_or_default();
         let labels = collect_labels(&doc);
         let items = outline(&doc, &page_index).unwrap_or_default();
         let flat = flatten_outline(&items);
@@ -2143,6 +2186,7 @@ impl Viewer {
             comments,
             layers,
             attachments,
+            media,
             labels,
         });
         self.error = None;
@@ -3350,6 +3394,212 @@ impl Viewer {
     }
 
     // -----------------------------------------------------------------
+    // Vidéos et sons.
+    // -----------------------------------------------------------------
+
+    /// Vrai si un média est en train de jouer : c'est ce qui justifie de
+    /// repeindre à chaque réveil, et rien d'autre ne le justifierait.
+    fn media_playing(&self) -> bool {
+        self.media
+            .as_ref()
+            .is_some_and(|v| v.player.state() == crate::platform::media::State::Playing)
+    }
+
+    /// Média sous un point de la vue, s'il y en a un.
+    fn media_at(&self, x: i32, y: i32) -> Option<(usize, acrux_features::media::Media)> {
+        let loaded = self.loaded.as_ref()?;
+        let (page, point) = self.page_at(x, y)?;
+        loaded
+            .media
+            .iter()
+            .enumerate()
+            .find(|(_, m)| {
+                m.page == page
+                    && point.x >= m.rect.x0
+                    && point.x <= m.rect.x1
+                    && point.y >= m.rect.y0
+                    && point.y <= m.rect.y1
+            })
+            .map(|(slot, m)| (slot, m.clone()))
+    }
+
+    /// Rectangle d'un média ouvert, en pixels de la vue.
+    fn media_box(&self) -> Option<Box2> {
+        let view = self.media.as_ref()?;
+        let rect = self.page_rect_to_view(view.page, view.rect)?;
+        Some(Box2 {
+            x: rect.x,
+            y: rect.y,
+            w: rect.w,
+            h: rect.h,
+        })
+    }
+
+    /// Ouvre le média cliqué et le démarre.
+    ///
+    /// Rien n'est joué tout seul : c'est un clic qui déclenche la lecture. Un
+    /// média **hors du document** n'est pas ouvert du tout — un fichier PDF
+    /// est une donnée venue d'ailleurs, et suivre ce qu'il désigne sans rien
+    /// demander reviendrait à exécuter ses instructions.
+    fn open_media(&mut self, media: &acrux_features::media::Media, window: &mut dyn WindowHandle) {
+        use acrux_features::media::Source;
+        match &media.source {
+            Some(Source::Embedded { .. }) => {}
+            Some(Source::External(name)) => {
+                self.set_notice(format!(
+                    "« {name} » est hors du document : Acrux ne l'ouvre pas de lui-même"
+                ));
+                return;
+            }
+            None => {
+                self.set_notice("ce média n'a pas de fichier lisible".into());
+                return;
+            }
+        }
+        // Déjà ouvert : le clic bascule lecture et pause.
+        if self
+            .media
+            .as_ref()
+            .is_some_and(|v| v.page == media.page && v.index == media.index)
+        {
+            self.toggle_media(window);
+            return;
+        }
+        self.close_media();
+
+        let Some(loaded) = &self.loaded else { return };
+        let dir = std::env::temp_dir().join("acrux-medias");
+        let path = match acrux_features::media::extract(&loaded.doc, media, &dir) {
+            Ok(path) => path,
+            Err(e) => {
+                self.set_notice(format!("média illisible : {e}"));
+                return;
+            }
+        };
+        let mut player = match crate::platform::media::Player::open(&path) {
+            Ok(player) => player,
+            Err(e) => {
+                self.set_notice(format!("lecture impossible : {e}"));
+                return;
+            }
+        };
+        player.play();
+        let title = media
+            .name
+            .clone()
+            .unwrap_or_else(|| String::from("le média"));
+        let ticking = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        self.media = Some(MediaView {
+            page: media.page,
+            index: media.index,
+            rect: media.rect,
+            player,
+            title: title.clone(),
+            ticking: std::sync::Arc::clone(&ticking),
+        });
+        Self::start_media_ticker(&ticking, window);
+        self.set_notice(format!("lecture de {title}"));
+    }
+
+    /// Fait battre la mesure : un réveil régulier tant que le média joue.
+    ///
+    /// La fenêtre n'a pas de minuterie et ne repeint que sur événement ; sans
+    /// ce fil, une vidéo s'arrêterait sur sa première image dès que
+    /// l'utilisateur cesse de bouger la souris.
+    fn start_media_ticker(
+        ticking: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+        window: &mut dyn WindowHandle,
+    ) {
+        let waker = window.waker();
+        let flag = std::sync::Arc::clone(ticking);
+        let _ = std::thread::Builder::new()
+            .name("cadence-video".into())
+            .spawn(move || {
+                // Soixante fois par seconde : assez pour toutes les cadences
+                // usuelles, assez peu pour ne pas occuper un cœur.
+                while flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(16));
+                    waker.wake();
+                }
+            });
+    }
+
+    /// Ferme le média en cours, s'il y en a un.
+    fn close_media(&mut self) {
+        if let Some(view) = self.media.take() {
+            view.ticking
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// Bascule entre lecture et pause.
+    fn toggle_media(&mut self, window: &mut dyn WindowHandle) {
+        let Some(view) = &mut self.media else { return };
+        view.player.toggle();
+        let playing = view.player.state() == crate::platform::media::State::Playing;
+        let title = view.title.clone();
+        if playing {
+            let ticking = std::sync::Arc::clone(&view.ticking);
+            if !ticking.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                Self::start_media_ticker(&ticking, window);
+            }
+            self.set_notice(format!("lecture de {title}"));
+        } else {
+            view.ticking
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+            self.set_notice(format!("{title} en pause"));
+        }
+        window.request_redraw();
+    }
+
+    /// Clic dans la zone de document quand un média est ouvert. Rend vrai si
+    /// le clic a été consommé.
+    fn media_mouse_down(&mut self, x: i32, y: i32, window: &mut dyn WindowHandle) -> bool {
+        let Some(area) = self.media_box() else {
+            return false;
+        };
+        let Some(hit) = video_ui::hit(area, f64::from(x), f64::from(y), self.dpi_scale) else {
+            return false;
+        };
+        match hit {
+            VideoHit::Toggle => self.toggle_media(window),
+            VideoHit::Seek(fraction) => {
+                if let Some(view) = &mut self.media {
+                    let target = view.player.duration() * fraction;
+                    view.player.seek(target);
+                }
+                window.request_redraw();
+            }
+            VideoHit::Picture => {}
+        }
+        true
+    }
+
+    /// Dessine l'image courante du média et sa barre de commandes.
+    fn paint_media(&mut self, view_frame: &mut Frame<'_>) {
+        let Some(area) = self.media_box() else { return };
+        let (theme, dpi) = (self.theme, self.dpi_scale);
+        let Some(view) = &mut self.media else { return };
+        let (playing, position, duration) = (
+            view.player.state() == crate::platform::media::State::Playing,
+            view.player.position(),
+            view.player.duration(),
+        );
+        if let Some(frame) = view.player.frame() {
+            let (w, h) = (frame.width, frame.height);
+            // L'image garde ses proportions dans le rectangle de l'annotation,
+            // comme le ferait un lecteur vidéo — une vidéo étirée se voit.
+            let fitted = fit_box(area, w, h);
+            video_ui::paint_frame(view_frame, fitted, &frame.bgra, w, h);
+        }
+        if let Some(text) = &mut self.text {
+            video_ui::paint_controls(
+                view_frame, text, &theme, dpi, area, playing, position, duration,
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------
     // Mises à jour.
     // -----------------------------------------------------------------
 
@@ -4283,10 +4533,11 @@ impl App for Viewer {
                 }
             }
             Event::Wake => {
-                // Un réveil sans nouveau rendu, sans recherche en cours et sans
-                // info-bulle à faire apparaître ne mérite pas de repeindre.
+                // Un réveil sans nouveau rendu, sans recherche en cours, sans
+                // info-bulle à faire apparaître et sans média en train de
+                // jouer ne mérite pas de repeindre.
                 let results = self.collect_results();
-                if !results && !self.search_scanning() && !self.tip_due() {
+                if !results && !self.search_scanning() && !self.tip_due() && !self.media_playing() {
                     return;
                 }
             }
@@ -4595,7 +4846,11 @@ impl App for Viewer {
                     if self.prompt.is_none() && self.loaded.is_none() {
                         self.click_recent(x, y, window);
                     } else if self.prompt.is_none() && x >= 0 && y < self.view_height() as i32 {
-                        if self.objects.is_some() {
+                        if self.media_mouse_down(x, y, window) {
+                            // Le média a pris le clic.
+                        } else if let Some((_, media)) = self.media_at(x, y) {
+                            self.open_media(&media, window);
+                        } else if self.objects.is_some() {
                             self.objects_mouse_down(x, y, modifiers.shift);
                             window.request_redraw();
                         } else if self.place_sign(x, y, window) {
@@ -4774,6 +5029,7 @@ impl App for Viewer {
             }
             self.paint_selection(&mut view);
             self.paint_objects(&mut view);
+            self.paint_media(&mut view);
             self.paint_field_focus(&mut view);
             self.paint_search(&mut view);
         }
@@ -4846,7 +5102,10 @@ impl Viewer {
                 }
             }
             Key::Escape => {
-                if self.objects.is_some() {
+                if self.media.is_some() {
+                    self.close_media();
+                    self.set_notice("lecture arrêtée".into());
+                } else if self.objects.is_some() {
                     self.toggle_objects(window);
                 } else if self.sign_bar.is_some() {
                     self.sign_action(sign::Action::Close, window);
