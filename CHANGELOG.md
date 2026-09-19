@@ -7,7 +7,10 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
-## Non publié
+## 0.3.0 — 19 septembre 2026
+
+Une version d'interface : ce que le logiciel sait faire se voit enfin, et les
+documents s'ouvrent à une taille qu'on peut lire.
 
 ### Interface
 
