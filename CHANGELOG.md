@@ -7,7 +7,10 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
-## Non publié
+## 0.5.0 — 19 septembre 2026
+
+Acrux ne demande plus rien au système : ses questions, ses pointeurs et ses
+cadres d'édition sont à lui.
 
 ### Acrux pose ses propres questions
 
