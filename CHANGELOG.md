@@ -9,6 +9,14 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 
 ## 0.9.0 — 20 septembre 2026
 
+### Correction
+
+- Les chaînes binaires d'un PDF enregistré s'écrivent en **hexadécimal** dès
+  qu'un octet sort de l'ASCII imprimable, au lieu d'échappements octaux de
+  longueur variable. Deux enregistrements du même document donnent ainsi deux
+  fichiers de même taille — ce que l'identifiant `/ID`, tiré au hasard,
+  mettait en défaut une fois sur deux (un test l'a attrapé).
+
 ### Le texte des formulaires se modifie enfin
 
 - Beaucoup de documents — ceux des traitements de texte en particulier —

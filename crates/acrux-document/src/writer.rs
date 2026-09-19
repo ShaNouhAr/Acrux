@@ -82,8 +82,14 @@ fn write_real(r: f64, out: &mut Vec<u8>) {
 /// Chaîne littérale avec échappement des caractères spéciaux ; hexadécimale
 /// si elle contient beaucoup d'octets non imprimables.
 fn write_string(s: &[u8], out: &mut Vec<u8>) {
-    let binary = s.iter().filter(|&&b| !(0x20..=0x7E).contains(&b)).count();
-    if binary * 4 > s.len() && !s.is_empty() {
+    // Dès qu'un octet sort de l'ASCII imprimable, on passe en hexadécimal.
+    // C'est plus court que les échappements octaux, c'est ce qu'écrivent les
+    // autres producteurs, et surtout la longueur du résultat ne dépend plus
+    // des octets : deux enregistrements du même document donnent deux
+    // fichiers de même taille, ce qu'un `/ID` tiré au hasard mettait en
+    // défaut une fois sur deux.
+    let binary = s.iter().any(|&b| !(0x20..=0x7E).contains(&b));
+    if binary && !s.is_empty() {
         out.push(b'<');
         for b in s {
             out.extend_from_slice(format!("{b:02X}").as_bytes());
