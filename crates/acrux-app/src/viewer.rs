@@ -51,12 +51,13 @@ use crate::ui::palette::{Command, Palette};
 use crate::ui::panel::{
     AttachmentRow, CommentRow, OutlineRow, Panel, PanelAction, PanelContent, PanelTab,
 };
-use crate::ui::prefs::{Prefs, ViewMode};
+use crate::ui::prefs::{Fit, Prefs, ViewMode};
 use crate::ui::sign::{self, Bar as SignBar, Capture, Item as SignItem, Saved};
 use crate::ui::tabs::{TabAction, TabInfo, Tabs};
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
 use crate::ui::toolbar::{ToolAction, Toolbar, ToolbarInfo};
+use crate::ui::tools::{ToolsInfo, ToolsPanel};
 use crate::ui::video::{self as video_ui, Box2, Hit as VideoHit};
 use acrux_features::edit_objects::{self, Edit as ObjectEdit, PageObject};
 
@@ -281,6 +282,9 @@ fn row_of(rows: &[(usize, usize)], page: usize) -> usize {
 const GAP: i32 = 16;
 /// Largeur du panneau latéral, en pixels logiques.
 const PANEL_WIDTH: u32 = 240;
+/// Largeur minimale laissée à la page, en pixels logiques. En deçà, la barre
+/// des outils s'efface.
+const MIN_PAGE_WIDTH: u32 = 420;
 /// Paliers de zoom.
 const ZOOM_STEPS: [f64; 16] = [
     0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 6.0,
@@ -524,7 +528,7 @@ pub struct Viewer {
     dpi_scale: f64,
     /// Zoom logique (1.0 = 100 % à 96 dpi).
     zoom: f64,
-    fit_width: bool,
+    fit: Fit,
     scroll_y: f64,
     scroll_x: f64,
     drag_last: Option<(i32, i32)>,
@@ -602,6 +606,10 @@ pub struct Viewer {
     fullscreen: bool,
     /// Champ de formulaire ayant le focus clavier (indice dans `fields`).
     focus_field: Option<usize>,
+    /// Barre des outils, à droite, affichée.
+    tools_open: bool,
+    /// Barre des outils.
+    tools: ToolsPanel,
     /// Panneau latéral affiché.
     panel_open: bool,
     /// Panneau latéral (vignettes, signets).
@@ -655,7 +663,9 @@ impl Viewer {
                 Theme::light()
             },
             zoom: prefs.zoom,
-            fit_width: prefs.fit_width,
+            fit: prefs.fit,
+            tools_open: prefs.tools_open,
+            tools: ToolsPanel::new(),
             panel_open: prefs.panel_open,
             view_mode: prefs.view_mode,
             two_up_cover: prefs.two_up_cover,
@@ -889,7 +899,7 @@ impl Viewer {
             return;
         };
         if matches!(dest.view, View::FitWidth { .. }) {
-            self.fit_width = true;
+            self.fit = Fit::Width;
         }
         if self.view_mode.is_paged() {
             self.anchor = dest.page;
@@ -2365,9 +2375,50 @@ impl Viewer {
         }
     }
 
+    /// Largeur de la barre des outils, à droite.
+    ///
+    /// Elle s'efface d'elle-même quand la fenêtre devient trop étroite : une
+    /// colonne d'outils qui ne laisse plus la place de lire la page ne rend
+    /// service à personne, et l'utilisateur n'a pas à aller la fermer pour
+    /// pouvoir travailler.
+    fn tools_width(&self) -> u32 {
+        if !self.tools_open || self.reading || self.fullscreen {
+            return 0;
+        }
+        let width = (f64::from(crate::ui::tools::WIDTH) * self.dpi_scale).round() as u32;
+        let reste = self
+            .width
+            .saturating_sub(self.view_left())
+            .saturating_sub(width);
+        // Il faut au moins de quoi afficher une page lisible à côté.
+        if reste < (f64::from(MIN_PAGE_WIDTH) * self.dpi_scale) as u32 {
+            0
+        } else {
+            width
+        }
+    }
+
     /// Largeur de la zone de document.
     fn view_width(&self) -> u32 {
-        self.width.saturating_sub(self.view_left())
+        self.width
+            .saturating_sub(self.view_left())
+            .saturating_sub(self.tools_width())
+    }
+
+    /// Ce que la barre des outils doit savoir.
+    fn tools_info(&self) -> ToolsInfo {
+        ToolsInfo {
+            has_document: self.loaded.is_some(),
+            // Les deux outils qui restent ouverts se signalent comme tels :
+            // sans cela, rien ne dirait lequel est en cours.
+            active: if self.sign_bar.is_some() {
+                Some(Command::FillSign)
+            } else if self.objects.is_some() {
+                Some(Command::EditObjects)
+            } else {
+                None
+            },
+        }
     }
 
     /// Hauteur de la zone de document.
@@ -2706,13 +2757,17 @@ impl Viewer {
             Command::ZoomIn => self.zoom_step(1),
             Command::ZoomOut => self.zoom_step(-1),
             Command::ZoomReset => self.set_zoom(1.0),
-            Command::FitWidth => {
-                self.fit_width = true;
-                self.clamp_scroll();
-            }
+            Command::FitWidth => self.set_fit(Fit::Width),
+            Command::FitPage => self.set_fit(Fit::Page),
+            Command::FitAutomatic => self.set_fit(Fit::Automatic),
             Command::CycleViewMode => self.set_view_mode(self.view_mode.next()),
             Command::Fullscreen => self.toggle_fullscreen(window),
             Command::TogglePanel => self.toggle_panel(),
+            Command::ToggleTools => {
+                self.tools_open = !self.tools_open;
+                self.clamp_scroll();
+                self.save_prefs();
+            }
             Command::ShowLayers => {
                 self.panel_open = true;
                 self.panel.tab = PanelTab::Layers;
@@ -3052,13 +3107,14 @@ impl Viewer {
             ToolAction::GoToLabel(text) => self.go_to_label(&text),
             ToolAction::ZoomOut => self.zoom_step(-1),
             ToolAction::ZoomIn => self.zoom_step(1),
-            ToolAction::FitWidth => {
-                self.fit_width = true;
-                self.clamp_scroll();
-            }
+            // Le bouton parcourt les trois ajustements : automatique,
+            // largeur, page. Une liste déroulante pour trois choix serait plus
+            // lourde à ouvrir qu'un clic de plus.
+            ToolAction::FitWidth => self.set_fit(self.fit.next()),
             ToolAction::Search => self.open_search(),
             ToolAction::ToggleTheme => self.toggle_theme(),
             ToolAction::TogglePanel => self.toggle_panel(),
+            ToolAction::ToggleTools => self.run_command(Command::ToggleTools, window),
             ToolAction::RotatePage => self.rotate_current(90, window),
             ToolAction::Save => self.save(false, window),
             ToolAction::Print => self.print(window),
@@ -3094,30 +3150,52 @@ impl Viewer {
 
     /// Échelle de rendu en pixels par point.
     fn scale(&self) -> f64 {
-        let base = self.zoom * self.dpi_scale * (96.0 / 72.0);
-        if self.fit_width {
-            if let Some(l) = &self.loaded {
-                let max_w = l
-                    .pages
-                    .iter()
-                    .take(50)
-                    .map(|p| {
-                        let b = p.crop_box(&l.doc);
-                        match p.rotate(&l.doc) {
-                            90 | 270 => b.height(),
-                            _ => b.width(),
-                        }
-                    })
-                    .fold(1.0_f64, f64::max);
-                // En deux pages, la largeur disponible se partage entre les
-                // deux colonnes et la gouttière qui les sépare.
-                let cols = if self.view_mode.is_two_up() { 2.0 } else { 1.0 };
-                let gaps = f64::from(GAP) * (cols + 1.0);
-                let avail = (f64::from(self.view_width()).max(64.0) - gaps).max(32.0);
-                return (avail / (max_w * cols)).max(0.05);
-            }
+        let cent_pour_cent = self.dpi_scale * (96.0 / 72.0);
+        let base = self.zoom * cent_pour_cent;
+        if self.fit == Fit::Fixed {
+            return base;
         }
-        base
+        let Some(l) = &self.loaded else { return base };
+        // La plus grande page décide : autrement le document se remettrait à
+        // l'échelle à chaque page tournée.
+        let (max_w, max_h) = l
+            .pages
+            .iter()
+            .take(50)
+            .map(|p| {
+                let b = p.crop_box(&l.doc);
+                match p.rotate(&l.doc) {
+                    90 | 270 => (b.height(), b.width()),
+                    _ => (b.width(), b.height()),
+                }
+            })
+            .fold((1.0_f64, 1.0_f64), |(w, h), (pw, ph)| {
+                (w.max(pw), h.max(ph))
+            });
+        // En deux pages, la largeur disponible se partage entre les deux
+        // colonnes et la gouttière qui les sépare.
+        let cols = if self.view_mode.is_two_up() { 2.0 } else { 1.0 };
+        let gaps = f64::from(GAP) * (cols + 1.0);
+        let avail_w = (f64::from(self.view_width()).max(64.0) - gaps).max(32.0);
+        let largeur = (avail_w / (max_w * cols)).max(0.05);
+        match self.fit {
+            Fit::Width => largeur,
+            Fit::Page => {
+                let avail_h =
+                    (f64::from(self.view_height()).max(64.0) - f64::from(GAP) * 2.0).max(32.0);
+                largeur.min(avail_h / max_h).max(0.05)
+            }
+            // Automatique : la largeur, mais jamais d'agrandissement. Une page
+            // plus étroite que la fenêtre s'affiche à sa taille réelle.
+            _ => largeur.min(cent_pour_cent),
+        }
+    }
+
+    /// Change le mode d'ajustement et recale le défilement.
+    fn set_fit(&mut self, fit: Fit) {
+        self.fit = fit;
+        self.clamp_scroll();
+        self.title_dirty = true;
     }
 
     /// Positions des pages : (y, largeur, hauteur) en pixels.
@@ -4228,7 +4306,8 @@ impl Viewer {
         self.prefs.dark_theme = self.theme.canvas == Theme::dark().canvas;
         self.prefs.view_mode = self.view_mode;
         self.prefs.panel_open = self.panel_open;
-        self.prefs.fit_width = self.fit_width;
+        self.prefs.fit = self.fit;
+        self.prefs.tools_open = self.tools_open;
         self.prefs.zoom = self.zoom;
         self.prefs.two_up_cover = self.two_up_cover;
         self.prefs.signature = self.signature.as_ref().map(Saved::encode);
@@ -4262,7 +4341,7 @@ impl Viewer {
         // Conserve le point du document au centre de la vue.
         let old_scale = self.scale();
         let center = (self.scroll_y + f64::from(self.view_height()) / 2.0) / old_scale;
-        self.fit_width = false;
+        self.fit = Fit::Fixed;
         self.zoom = zoom.clamp(0.1, 16.0);
         let new_scale = self.scale();
         self.scroll_y = center * new_scale - f64::from(self.view_height()) / 2.0;
@@ -4482,7 +4561,10 @@ impl Viewer {
                 let right = format!(
                     "{position}   {:.0} %{}   {}   {:.0} ms",
                     zoom * 100.0,
-                    if self.fit_width { " (largeur)" } else { "" },
+                    match self.fit.label() {
+                        "" => String::new(),
+                        mode => format!(" ({mode})"),
+                    },
                     self.view_mode.label(),
                     self.last_render_ms
                 );
@@ -4560,6 +4642,12 @@ impl App for Viewer {
             } => {
                 if self.panel_open && x < self.view_left() as i32 && y >= self.view_top() as i32 {
                     self.panel.wheel(delta);
+                } else if self.tools_width() > 0
+                    && x >= self.width.saturating_sub(self.tools_width()) as i32
+                    && y >= self.view_top() as i32
+                {
+                    let (h, dpi) = (f64::from(self.view_height()), self.dpi_scale);
+                    self.tools.scroll(f64::from(-delta) * 60.0, h, dpi);
                 } else if modifiers.ctrl {
                     self.zoom_step(if delta > 0.0 { 1 } else { -1 });
                 } else if modifiers.shift {
@@ -4732,20 +4820,14 @@ impl App for Viewer {
                         }
                         '+' | '=' => self.zoom_step(1),
                         '-' => self.zoom_step(-1),
-                        '0' => {
-                            self.fit_width = true;
-                            self.clamp_scroll();
-                        }
+                        '0' => self.set_fit(Fit::Automatic),
                         _ => {}
                     }
                 } else {
                     match c {
                         '+' | '=' => self.zoom_step(1),
                         '-' => self.zoom_step(-1),
-                        'f' | 'F' => {
-                            self.fit_width = true;
-                            self.clamp_scroll();
-                        }
+                        'f' | 'F' => self.set_fit(Fit::Width),
                         '1' => self.set_zoom(1.0),
                         't' | 'T' => self.toggle_theme(),
                         'r' => self.rotate_current(90, window),
@@ -4816,6 +4898,17 @@ impl App for Viewer {
                             self.sign_bar.as_ref().and_then(|b| b.mouse_down(x, y))
                         {
                             self.sign_action(action, window);
+                        }
+                    }
+                } else if self.tools_width() > 0
+                    && x >= self.width.saturating_sub(self.tools_width()) as i32
+                {
+                    self.toolbar.blur();
+                    if self.prompt.is_none() {
+                        let info = self.tools_info();
+                        let dpi = self.dpi_scale;
+                        if let Some(command) = self.tools.click(f64::from(y - top), dpi, info) {
+                            self.run_command(command, window);
                         }
                     }
                 } else if self.panel_open && x < self.view_left() as i32 {
@@ -4943,6 +5036,15 @@ impl App for Viewer {
                 } else {
                     hover_changed |= self.panel.mouse_leave();
                 }
+                let in_tools = self.tools_width() > 0
+                    && x >= self.width.saturating_sub(self.tools_width()) as i32
+                    && y >= self.view_top() as i32;
+                if in_tools {
+                    let dpi = self.dpi_scale;
+                    hover_changed |= self.tools.hover(f64::from(y - self.view_top() as i32), dpi);
+                } else {
+                    hover_changed |= self.tools.leave();
+                }
                 let (x, y) = (x - self.view_left() as i32, y - self.view_top() as i32);
                 self.last_mouse = (x >= 0 && y >= 0).then_some((x, y));
                 if self.sel_dragging && dragging {
@@ -5043,6 +5145,17 @@ impl App for Viewer {
             let mut side = frame.sub(0, top, left as u32, vh);
             self.paint_panel(&mut side);
         }
+        let tools_w = self.tools_width();
+        if tools_w > 0 && vh > 0 {
+            let x = self.width.saturating_sub(tools_w) as i32;
+            let mut side = frame.sub(x, top, tools_w, vh);
+            let info = self.tools_info();
+            let (theme, dpi) = (self.theme, self.dpi_scale);
+            if let Some(text) = self.text.as_mut() {
+                self.tools
+                    .paint(&mut side, text, &mut self.raster, &theme, dpi, info);
+            }
+        }
         if !self.fullscreen && !self.reading {
             self.paint_toolbar(frame);
             self.paint_tabs(frame);
@@ -5061,6 +5174,11 @@ impl Viewer {
     fn key(&mut self, key: Key, m: Modifiers, window: &mut dyn WindowHandle) {
         let page_h = f64::from(self.view_height());
         match key {
+            Key::F(3) => {
+                self.tools_open = !self.tools_open;
+                self.clamp_scroll();
+                self.save_prefs();
+            }
             Key::F(4) => self.toggle_panel(),
             Key::F(5) => self.toggle_reading(window),
             Key::F(6) => self.cycle_region(!m.shift, window),

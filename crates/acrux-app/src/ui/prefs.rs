@@ -80,6 +80,75 @@ impl ViewMode {
     }
 }
 
+/// Manière d'ajuster le zoom à la taille de la fenêtre.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Fit {
+    /// **Automatique** : la page occupe la largeur disponible, mais n'est
+    /// jamais agrandie au-delà de sa taille réelle.
+    ///
+    /// C'est le mode d'ouverture, et c'est ce que fait Acrobat. Sur un écran
+    /// large, ajuster bêtement à la largeur donnerait 200 % et un corps de
+    /// texte de deux centimètres de haut : personne ne lit comme ça. Une page
+    /// plus étroite que la fenêtre s'affiche donc à 100 %, centrée.
+    #[default]
+    Automatic,
+    /// Ajuster à la largeur, sans plafond : demandé explicitement.
+    Width,
+    /// La page entière tient dans la fenêtre.
+    Page,
+    /// Zoom fixe, celui que l'utilisateur a choisi.
+    Fixed,
+}
+
+impl Fit {
+    /// Nom court pour la barre d'état.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Fit::Automatic => "auto",
+            Fit::Width => "largeur",
+            Fit::Page => "page",
+            Fit::Fixed => "",
+        }
+    }
+
+    /// Mode suivant dans le cycle du bouton d'ajustement.
+    ///
+    /// Un zoom fixe revient à l'automatique : c'est ce qu'on attend d'un
+    /// bouton « ajuster » quand on a zoomé à la main.
+    #[must_use]
+    pub fn next(self) -> Fit {
+        match self {
+            Fit::Automatic => Fit::Width,
+            Fit::Width => Fit::Page,
+            Fit::Page | Fit::Fixed => Fit::Automatic,
+        }
+    }
+
+    /// Nom enregistré dans le fichier de réglages.
+    #[must_use]
+    pub fn key(self) -> &'static str {
+        match self {
+            Fit::Automatic => "auto",
+            Fit::Width => "width",
+            Fit::Page => "page",
+            Fit::Fixed => "fixed",
+        }
+    }
+
+    /// Lit un nom enregistré.
+    #[must_use]
+    pub fn from_key(key: &str) -> Option<Fit> {
+        match key {
+            "auto" => Some(Fit::Automatic),
+            "width" => Some(Fit::Width),
+            "page" => Some(Fit::Page),
+            "fixed" => Some(Fit::Fixed),
+            _ => None,
+        }
+    }
+}
+
 /// Nombre maximal de fichiers récents conservés.
 pub const MAX_RECENT: usize = 10;
 
@@ -95,9 +164,11 @@ pub struct Prefs {
     pub view_mode: ViewMode,
     /// Panneau latéral ouvert.
     pub panel_open: bool,
-    /// Ajuster à la largeur au lieu d'un zoom fixe.
-    pub fit_width: bool,
-    /// Zoom utilisé quand `fit_width` est faux (1.0 = 100 %).
+    /// Barre des outils ouverte, à droite.
+    pub tools_open: bool,
+    /// Manière d'ajuster le zoom à la fenêtre.
+    pub fit: Fit,
+    /// Zoom utilisé quand l'ajustement est [`Fit::Fixed`] (1.0 = 100 %).
     pub zoom: f64,
     /// Première page seule en mode deux pages (page de couverture).
     pub two_up_cover: bool,
@@ -122,7 +193,8 @@ impl Default for Prefs {
             dark_theme: true,
             view_mode: ViewMode::default(),
             panel_open: false,
-            fit_width: true,
+            tools_open: true,
+            fit: Fit::Automatic,
             zoom: 1.0,
             two_up_cover: false,
             window: (1100, 900),
@@ -189,7 +261,20 @@ impl Prefs {
                     }
                 }
                 "panel" => p.panel_open = value == "1" || value == "true",
-                "fit-width" => p.fit_width = value == "1" || value == "true",
+                // Ancien réglage : un booléen « ajuster à la largeur ».
+                // Le lire encore évite de perdre le choix de qui met à jour.
+                "fit-width" => {
+                    p.fit = if value == "1" || value == "true" {
+                        Fit::Width
+                    } else {
+                        Fit::Fixed
+                    };
+                }
+                "fit" => {
+                    if let Some(f) = Fit::from_key(value) {
+                        p.fit = f;
+                    }
+                }
                 "zoom" => {
                     if let Ok(z) = value.parse::<f64>() {
                         if z.is_finite() && (0.05..=16.0).contains(&z) {
@@ -235,7 +320,7 @@ impl Prefs {
         let _ = writeln!(out, "theme={theme}");
         let _ = writeln!(out, "view={}", self.view_mode.key());
         let _ = writeln!(out, "panel={}", u8::from(self.panel_open));
-        let _ = writeln!(out, "fit-width={}", u8::from(self.fit_width));
+        let _ = writeln!(out, "fit={}", self.fit.key());
         let _ = writeln!(out, "zoom={}", self.zoom);
         let _ = writeln!(out, "two-up-cover={}", u8::from(self.two_up_cover));
         let _ = writeln!(out, "window={}x{}", self.window.0, self.window.1);
@@ -283,7 +368,8 @@ mod tests {
             dark_theme: false,
             view_mode: ViewMode::TwoUp,
             panel_open: true,
-            fit_width: false,
+            tools_open: true,
+            fit: Fit::Fixed,
             zoom: 1.25,
             two_up_cover: true,
             window: (1440, 960),

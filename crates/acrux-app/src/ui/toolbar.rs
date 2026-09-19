@@ -53,6 +53,8 @@ pub enum ToolAction {
     ToggleTheme,
     /// Afficher / masquer le panneau latéral.
     TogglePanel,
+    /// Afficher / masquer la barre des outils, à droite.
+    ToggleTools,
     /// Pivoter la page courante de 90° (modification du document).
     RotatePage,
     /// Enregistrer.
@@ -78,6 +80,7 @@ impl ToolAction {
             ToolAction::Search => Command::Search,
             ToolAction::ToggleTheme => Command::ToggleTheme,
             ToolAction::TogglePanel => Command::TogglePanel,
+            ToolAction::ToggleTools => Command::ToggleTools,
             ToolAction::RotatePage => Command::RotateRight,
             ToolAction::Save => Command::Save,
             ToolAction::Print => Command::Print,
@@ -212,6 +215,11 @@ impl Toolbar {
                 icon: Icon::Search,
                 action: ToolAction::Search,
                 needs_document: true,
+            },
+            Button {
+                icon: Icon::Tools,
+                action: ToolAction::ToggleTools,
+                needs_document: false,
             },
             Button {
                 icon: Icon::Theme,

@@ -55,12 +55,18 @@ pub enum Command {
     ZoomReset,
     /// Ajuster à la largeur.
     FitWidth,
+    /// Afficher la page entière.
+    FitPage,
+    /// Ajustement automatique : la largeur, sans agrandir au-delà de 100 %.
+    FitAutomatic,
     /// Changer la disposition des pages.
     CycleViewMode,
     /// Plein écran.
     Fullscreen,
     /// Panneau latéral.
     TogglePanel,
+    /// Barre des outils, à droite.
+    ToggleTools,
     /// Panneau latéral sur les calques.
     ShowLayers,
     /// Panneau latéral sur les pièces jointes.
@@ -242,6 +248,20 @@ const ENTRIES: &[Entry] = &[
         needs_document: true,
     },
     Entry {
+        label: "Afficher la page entière",
+        shortcut: "",
+        keywords: "page entiere ajuster hauteur tout voir",
+        command: Command::FitPage,
+        needs_document: true,
+    },
+    Entry {
+        label: "Ajustement automatique",
+        shortcut: "Ctrl+0",
+        keywords: "auto automatique defaut largeur sans agrandir",
+        command: Command::FitAutomatic,
+        needs_document: true,
+    },
+    Entry {
         label: "Disposition des pages",
         shortcut: "",
         keywords: "double page continu defilement livre disposition mode",
@@ -261,6 +281,13 @@ const ENTRIES: &[Entry] = &[
         keywords: "vignettes signets sommaire miniatures volet barre",
         command: Command::TogglePanel,
         needs_document: true,
+    },
+    Entry {
+        label: "Barre des outils",
+        shortcut: "F3",
+        keywords: "outils colonne droite modifier signer biffer",
+        command: Command::ToggleTools,
+        needs_document: false,
     },
     Entry {
         label: "Calques (afficher ou masquer le contenu optionnel)",

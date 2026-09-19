@@ -50,6 +50,51 @@ pub enum Icon {
     Print,
     /// Deux rectangles côte à côte (disposition des pages).
     ViewMode,
+    /// Quatre carrés (ouvrir la barre des outils).
+    Tools,
+    /// Crayon (modifier le texte).
+    EditText,
+    /// Rectangle à poignées (modifier les objets).
+    Objects,
+    /// Paraphe sur une ligne (remplir et signer).
+    Sign,
+    /// Pointe de surligneur sur une bande (surligner).
+    Highlight,
+    /// Bulle (poser une note).
+    Note,
+    /// Page avec un plus (insérer des pages).
+    PageInsert,
+    /// Deux pages superposées (dupliquer).
+    PageDuplicate,
+    /// Page avec une flèche sortante (extraire).
+    PageExtract,
+    /// Page avec une croix (supprimer).
+    PageDelete,
+    /// Bande pleine sur une page (biffure).
+    Redact,
+    /// Bande pleine et coche (appliquer les biffures).
+    RedactApply,
+    /// Page et flèche vers la droite (exporter).
+    Export,
+    /// Trombone (joindre un fichier).
+    Attach,
+}
+
+/// Contour d'une page, motif commun à beaucoup d'icônes.
+fn page(path: &mut Path, x: f64, y: f64, w: f64, h: f64) {
+    polyline(
+        path,
+        &[(x, y), (x + w, y), (x + w, y + h), (x, y + h), (x, y)],
+    );
+}
+
+/// Rectangle plein.
+fn bar(path: &mut Path, x: f64, y: f64, w: f64, h: f64) {
+    polyline(
+        path,
+        &[(x, y), (x + w, y), (x + w, y + h), (x, y + h), (x, y)],
+    );
+    path.close();
 }
 
 /// Constante de Bézier pour un quart de cercle.
@@ -180,6 +225,153 @@ pub fn geometry(icon: Icon) -> (Path, Path) {
                     (17.0, 20.0),
                     (17.0, 12.5),
                     (7.0, 12.5),
+                ],
+            );
+        }
+        Icon::Tools => {
+            for (x, y) in [(4.5, 4.5), (13.5, 4.5), (4.5, 13.5), (13.5, 13.5)] {
+                bar(&mut fills, x, y, 6.0, 6.0);
+            }
+        }
+        Icon::EditText => {
+            // Crayon en diagonale, pointe en bas à gauche.
+            polyline(
+                &mut lines,
+                &[
+                    (4.5, 19.5),
+                    (4.5, 16.0),
+                    (16.0, 4.5),
+                    (19.5, 8.0),
+                    (8.0, 19.5),
+                    (4.5, 19.5),
+                ],
+            );
+            polyline(&mut lines, &[(13.5, 7.0), (17.0, 10.5)]);
+        }
+        Icon::Objects => {
+            page(&mut lines, 6.0, 6.5, 12.0, 11.0);
+            for (x, y) in [(4.0, 4.5), (16.0, 4.5), (4.0, 15.5), (16.0, 15.5)] {
+                bar(&mut fills, x, y, 4.0, 4.0);
+            }
+        }
+        Icon::Sign => {
+            // Un paraphe : trois boucles enlevées, puis la ligne de signature.
+            polyline(
+                &mut lines,
+                &[
+                    (4.0, 14.5),
+                    (7.0, 8.0),
+                    (8.5, 14.0),
+                    (11.0, 6.5),
+                    (12.5, 14.0),
+                    (15.0, 9.5),
+                    (17.0, 13.5),
+                    (20.0, 11.0),
+                ],
+            );
+            polyline(&mut lines, &[(4.0, 19.0), (20.0, 19.0)]);
+        }
+        Icon::Highlight => {
+            polyline(
+                &mut lines,
+                &[
+                    (8.0, 13.0),
+                    (15.5, 5.5),
+                    (19.0, 9.0),
+                    (11.5, 16.5),
+                    (8.0, 16.5),
+                    (8.0, 13.0),
+                ],
+            );
+            bar(&mut fills, 4.0, 18.5, 16.0, 2.5);
+        }
+        Icon::Note => {
+            polyline(
+                &mut lines,
+                &[
+                    (4.0, 5.0),
+                    (20.0, 5.0),
+                    (20.0, 15.5),
+                    (11.0, 15.5),
+                    (7.0, 19.5),
+                    (7.0, 15.5),
+                    (4.0, 15.5),
+                    (4.0, 5.0),
+                ],
+            );
+            polyline(&mut lines, &[(8.0, 9.0), (16.0, 9.0)]);
+            polyline(&mut lines, &[(8.0, 12.0), (13.0, 12.0)]);
+        }
+        Icon::PageInsert => {
+            page(&mut lines, 5.0, 3.5, 14.0, 17.0);
+            polyline(&mut lines, &[(12.0, 8.0), (12.0, 16.0)]);
+            polyline(&mut lines, &[(8.0, 12.0), (16.0, 12.0)]);
+        }
+        Icon::PageDuplicate => {
+            page(&mut lines, 4.0, 3.5, 12.0, 14.0);
+            page(&mut lines, 8.0, 6.5, 12.0, 14.0);
+        }
+        Icon::PageExtract => {
+            polyline(
+                &mut lines,
+                &[
+                    (13.0, 3.5),
+                    (5.0, 3.5),
+                    (5.0, 20.5),
+                    (17.0, 20.5),
+                    (17.0, 14.0),
+                ],
+            );
+            polyline(&mut lines, &[(11.0, 10.0), (20.5, 10.0)]);
+            polyline(&mut lines, &[(17.0, 6.5), (20.5, 10.0), (17.0, 13.5)]);
+        }
+        Icon::PageDelete => {
+            page(&mut lines, 5.0, 3.5, 14.0, 17.0);
+            polyline(&mut lines, &[(9.0, 9.0), (15.0, 15.0)]);
+            polyline(&mut lines, &[(15.0, 9.0), (9.0, 15.0)]);
+        }
+        Icon::Redact => {
+            page(&mut lines, 5.0, 3.5, 14.0, 17.0);
+            bar(&mut fills, 7.5, 9.5, 9.0, 5.0);
+        }
+        Icon::RedactApply => {
+            bar(&mut fills, 3.5, 5.0, 11.0, 5.0);
+            polyline(&mut lines, &[(3.5, 14.5), (11.5, 14.5)]);
+            polyline(&mut lines, &[(12.5, 17.0), (15.5, 20.0), (21.0, 12.0)]);
+        }
+        Icon::Export => {
+            polyline(
+                &mut lines,
+                &[
+                    (13.0, 3.5),
+                    (5.0, 3.5),
+                    (5.0, 20.5),
+                    (17.0, 20.5),
+                    (17.0, 12.0),
+                ],
+            );
+            polyline(&mut lines, &[(12.0, 12.5), (20.5, 4.5)]);
+            polyline(&mut lines, &[(14.5, 4.5), (20.5, 4.5), (20.5, 10.5)]);
+        }
+        Icon::Attach => {
+            // Trombone d'un seul trait. Le dessiner à deux traits parallèles,
+            // comme un vrai trombone, les ferait se toucher à dix-huit pixels
+            // et l'icône deviendrait une tache.
+            polyline(
+                &mut lines,
+                &[
+                    (17.5, 7.0),
+                    (17.5, 15.5),
+                    (16.8, 18.2),
+                    (14.0, 19.5),
+                    (11.2, 18.2),
+                    (10.5, 15.5),
+                    (10.5, 7.5),
+                    (11.0, 5.5),
+                    (12.8, 4.5),
+                    (14.6, 5.5),
+                    (15.1, 7.5),
+                    (15.1, 16.0),
                 ],
             );
         }

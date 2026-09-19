@@ -309,6 +309,13 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   écouter.
 - `platform/http` : une requête HTTPS, par **WinHTTP** — le certificat, les redirections et le
   proxy de l'entreprise sont l'affaire du système, pas la nôtre.
+- `ui/tools` : **barre des outils, à droite**. Une barre en haut ne tient que ce qui sert à *lire* ;
+  ce qui sert à *travailler* — modifier, commenter, signer, ranger les pages, biffer — n'y trouve
+  pas de place et finit derrière des raccourcis que personne ne devine. La colonne les nomme. Elle
+  ne connaît ni le document ni le visualiseur : elle reçoit ce qu'elle doit savoir et rend une
+  `Command`, la même que la palette et le clavier, si bien qu'un outil ne peut pas faire autre
+  chose ici qu'ailleurs. Elle s'efface d'elle-même quand la fenêtre devient trop étroite pour
+  laisser la place de lire.
 - `ui/objects` : outil « modifier » — boîte de sélection, huit poignées, redimensionnement sans
   retournement, proportions gardées avec Maj ; la conversion page ↔ vue reste au viewer, qui seul
   connaît le zoom et le défilement.

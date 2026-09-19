@@ -7,6 +7,23 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
+## Non publié
+
+### Interface
+
+- **Barre des outils, à droite.** Tout ce qui sert à travailler — modifier le
+  texte et les objets, surligner, poser une note, remplir et signer, pivoter,
+  insérer, dupliquer, extraire ou supprimer une page, biffer, exporter,
+  joindre, imprimer — est désormais nommé dans une colonne, au lieu d'être
+  caché derrière des raccourcis. L'outil en cours s'y allume. `F3` l'ouvre et
+  la ferme, et elle s'efface d'elle-même sur une fenêtre trop étroite.
+- **Le zoom d'ouverture ne grossit plus les documents.** Ajuster à la largeur
+  sur un écran large donnait 212 % et un corps de texte de deux centimètres.
+  Le nouveau mode **automatique** ajuste à la largeur sans jamais dépasser
+  100 %, comme Acrobat : une page plus étroite que la fenêtre s'affiche à sa
+  taille réelle, centrée. Le bouton d'ajustement parcourt les trois modes —
+  automatique, largeur, page entière — et la barre d'état dit lequel est actif.
+
 ## 0.2.0 — 19 septembre 2026
 
 Cette version a deux sujets : **le multimédia**, qui n'existait pas, et **la

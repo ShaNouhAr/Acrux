@@ -145,6 +145,19 @@ Livrable : version 0.2, parité avec Acrobat Standard hors édition de texte.
   Reste : l'alphabet grec de Symbol et les fleurons de ZapfDingbats, qui restent vides plutôt que
   de sortir une lettre latine à leur place.
 
+## Interface
+
+- [x] **Barre des outils à droite** (`acrux-app/src/ui/tools.rs`) : une barre en haut ne tient que ce
+  qui sert à lire ; les outils de travail finissaient derrière des raccourcis que personne ne
+  devine. Quinze outils groupés par métier (modifier, commenter, signer, pages, protéger,
+  document), l'outil en cours allumé, `F3` pour l'ouvrir et la fermer, effacement automatique sur
+  une fenêtre étroite. La colonne rend une `Command` — la même que la palette et le clavier —,
+  donc un outil ne peut pas se comporter autrement ici qu'ailleurs.
+- [x] **Zoom d'ouverture automatique** : ajuster à la largeur sur un écran large donnait 212 %.
+  Trois modes désormais — automatique (largeur, plafonnée à 100 %), largeur, page entière —, le
+  bouton les parcourt et la barre d'état dit lequel est actif.
+- [ ] Menus classiques, info-bulles détaillées, personnalisation de la colonne d'outils.
+
 ## Phase 5 — Édition de niveau Acrobat (le cœur du « mieux qu'Acrobat »)
 - [x] Reconstruction de paragraphes depuis le contenu, détection des colonnes et des styles (`acrux-features/text/` : blocs, paragraphes avec alignement, retrait et interligne, césures réparées, colonnes par découpe XY, en-têtes et pieds de page, listes, titres, tableaux à filets ou à colonnes alignées, styles gras / italique / couleur au glyphe près ; sorties `to_plain`, `to_markdown`, `to_html`, `to_layout`, `acr text --markdown|--html|--layout`) ; reste : ordre de lecture depuis le balisage (`/StructTreeRoot`), tableaux à cellules fusionnées, texte vertical CJK
 - [~] **Édition de texte in-place avec reflow**, changement de police / taille / couleur / alignement
