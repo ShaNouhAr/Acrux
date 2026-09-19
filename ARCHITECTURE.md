@@ -256,10 +256,12 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   RSA, chaîne de certificats, couverture de tout le fichier, modifications postérieures
   — et `signature/sign` pose une signature par mise à jour incrémentale en réservant le
   `/Contents` puis en écrivant le `/ByteRange` à largeur fixe, sans décaler un octet).
-- `media` : multimédia (§13.2, §13.7) — retrouve les vidéos et les sons derrière les annotations
-  `/Screen`, `/RichMedia` et `/Movie`, en descendant action → rendition → clip → spécification de
-  fichier, et en extrait les octets. Ne décode rien ; refuse d'ouvrir un média extérieur au
-  document.
+- `media` : multimédia (§13.2, §13.3, §13.7) — retrouve les vidéos et les sons derrière les
+  annotations `/Screen`, `/RichMedia`, `/Movie` et `/Sound`, en descendant action → rendition →
+  clip → spécification de fichier, et en extrait les octets. Le `/Sound` fait exception : il ne
+  porte pas un fichier mais des **échantillons bruts**, que l'extraction emballe dans un WAV en
+  retournant les octets (le PDF est gros-boutien, le WAV petit-boutien) et en ramenant les lois µ
+  et A à du PCM. Ne décode rien d'autre ; refuse d'ouvrir un média extérieur au document.
 - `edit_objects` : édition des objets d'une page (images, dessins, groupes, dégradés, blocs de
   texte) — inventaire avec boîte, matrice et **plage d'octets** ; déplacer, redimensionner,
   pivoter, recadrer, réordonner, supprimer, remplacer une image, aligner. Tout passe par une
@@ -302,7 +304,9 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   fenêtre flottante. Le son donne l'heure — la position vient de ce que la carte son déclare avoir
   joué, pas de l'horloge de la machine.
 - `ui/video` : image mise à l'échelle bilinéaire dans la page, barre de commandes (lecture, pause,
-  ligne de temps, durée).
+  ligne de temps, durée), et **panneau d'onde** pour un média sans image — sans lui les commandes
+  d'un son flotteraient sur le texte de la page, et rien ne dirait qu'il y a là quelque chose à
+  écouter.
 - `platform/http` : une requête HTTPS, par **WinHTTP** — le certificat, les redirections et le
   proxy de l'entreprise sont l'affaire du système, pas la nôtre.
 - `ui/objects` : outil « modifier » — boîte de sélection, huit poignées, redimensionnement sans

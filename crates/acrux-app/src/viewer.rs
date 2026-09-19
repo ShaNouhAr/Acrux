@@ -3444,7 +3444,7 @@ impl Viewer {
     fn open_media(&mut self, media: &acrux_features::media::Media, window: &mut dyn WindowHandle) {
         use acrux_features::media::Source;
         match &media.source {
-            Some(Source::Embedded { .. }) => {}
+            Some(Source::Embedded { .. } | Source::Samples { .. }) => {}
             Some(Source::External(name)) => {
                 self.set_notice(format!(
                     "« {name} » est hors du document : Acrux ne l'ouvre pas de lui-même"
@@ -3585,12 +3585,18 @@ impl Viewer {
             view.player.position(),
             view.player.duration(),
         );
+        // Un média sans image — un son — doit quand même se voir : sinon les
+        // commandes flottent sur le texte de la page et rien ne dit qu'il y a
+        // là quelque chose à écouter.
+        let sans_image = view.player.size().is_none();
         if let Some(frame) = view.player.frame() {
             let (w, h) = (frame.width, frame.height);
             // L'image garde ses proportions dans le rectangle de l'annotation,
             // comme le ferait un lecteur vidéo — une vidéo étirée se voit.
             let fitted = fit_box(area, w, h);
             video_ui::paint_frame(view_frame, fitted, &frame.bgra, w, h);
+        } else if sans_image {
+            video_ui::paint_audio_panel(view_frame, area);
         }
         if let Some(text) = &mut self.text {
             video_ui::paint_controls(

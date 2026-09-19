@@ -139,6 +139,44 @@ pub fn paint_frame(frame: &mut Frame<'_>, area: Box2, source: &[u8], src_w: u32,
     }
 }
 
+/// Fond d'un média sans image : du son seul n'a rien à montrer.
+///
+/// Sans ce fond, les commandes flottaient sur le texte de la page — on ne
+/// voyait pas qu'il y avait là quelque chose à écouter, et le trait de la
+/// ligne de temps se perdait dans les lettres. Le panneau assombrit la zone de
+/// l'annotation et y pose une onde, pour que l'objet se lise comme du son.
+pub fn paint_audio_panel(frame: &mut Frame<'_>, area: Box2) {
+    let left = area.x as i32;
+    let top = area.y as i32;
+    let width = area.w as i32;
+    let height = area.h as i32;
+    if width < 4 || height < 4 {
+        return;
+    }
+    veil(frame, left, top, width, height);
+    // Une onde symbolique, faite de barres verticales d'hauteurs variées : la
+    // forme la plus reconnaissable pour « il y a du son ici », et la moins
+    // coûteuse à dessiner.
+    let bar = (BAR * 1.0).min(area.h / 3.0);
+    let zone_h = (area.h - bar).max(0.0);
+    if zone_h < 6.0 {
+        return;
+    }
+    let cy = area.y + zone_h / 2.0;
+    let step = (area.w / 28.0).max(3.0);
+    let mut x = area.x + step;
+    let mut n = 0u32;
+    while x < area.x + area.w - step {
+        // Hauteurs prises dans une suite fixe : la même annotation donne
+        // toujours la même onde, sans quoi elle scintillerait au redessin.
+        let motif = [0.25, 0.55, 0.85, 0.45, 0.7, 0.3, 0.95, 0.5, 0.65, 0.35];
+        let h = zone_h * 0.6 * motif[(n % 10) as usize];
+        fill(frame, x, cy - h / 2.0, (step * 0.45).max(1.0), h);
+        x += step;
+        n += 1;
+    }
+}
+
 /// Dessine la barre de commandes par-dessus le bas de l'image.
 pub fn paint_controls(
     frame: &mut Frame<'_>,

@@ -73,6 +73,15 @@ Livrable : version 0.2, parité avec Acrobat Standard hors édition de texte.
   ligne de temps. Règle de contrôle en amont ajoutée : PDF/A et PDF/X refusent le multimédia.
   À faire : volume et sourdine, plein écran, `/RichMedia` à configurations multiples, lecture
   automatique quand le document la demande (`/AA /PV`), sous-titres.
+- [x] **Le son seul, y compris sans image** (`/Sound`, §13.3) : une annotation `/Sound` ne porte pas
+  un fichier mais des échantillons bruts — fréquence, voies, bits, codage — posés tels quels dans
+  un flux. Ils sont maintenant reconnus, listés avec leurs paramètres, et extraits sous forme de
+  WAV : octets retournés (le PDF est gros-boutien, le WAV petit-boutien), non signé recentré, lois
+  µ et A de la téléphonie décodées en PCM 16 bits. Côté lecture, un média sans piste vidéo ne se
+  terminait jamais — la fin se jugeait à la seule vidéo — et le reliquat de son en fin de flux
+  n'était jamais confié à la carte, donc la dernière fraction de seconde manquait. Les deux sont
+  corrigés, et un test le vérifie sur un fichier **silencieux fabriqué à la volée** : une suite de
+  tests qui se met à chanter est une suite qu'on finit par ne plus lancer.
 
 ## Distribution
 

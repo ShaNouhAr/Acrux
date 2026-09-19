@@ -2847,6 +2847,21 @@ fn cmd_media(path: &str, rest: &[String]) -> acrux_core::Result<()> {
                 Some(n) => format!("incorporé, {} Kio", n / 1024),
                 None => "incorporé".into(),
             },
+            Some(Source::Samples {
+                rate,
+                channels,
+                bits,
+                encoding,
+                ..
+            }) => format!(
+                "échantillons bruts, {rate} Hz, {channels} voie(s), {bits} bits, {}",
+                match encoding {
+                    acrux_features::media::SoundEncoding::Raw => "non signé",
+                    acrux_features::media::SoundEncoding::Signed => "signé",
+                    acrux_features::media::SoundEncoding::MuLaw => "loi µ",
+                    acrux_features::media::SoundEncoding::ALaw => "loi A",
+                }
+            ),
             Some(Source::External(name)) => format!("hors du document : {name}"),
             None => "source introuvable".into(),
         };

@@ -17,6 +17,16 @@ toutes les trois :
 | `/Screen` + action `/Rendition` | §13.2 | la forme courante depuis Acrobat 6 |
 | `/RichMedia` | §13.7 | ce qu'écrit Acrobat récent |
 | `/Movie` | PDF 1.1 | obsolète, encore lu |
+| `/Sound` | §13.3 | du son seul, sans image |
+
+Le `/Sound` est à part. Il ne désigne pas un fichier mais **des échantillons
+bruts** : une fréquence, un nombre de voies, un codage, et les nombres posés
+tels quels dans un flux. Pas d'en-tête, pas de conteneur — du son nu, comme sur
+un disque des années quatre-vingt. L'extraction lui rend donc un en-tête WAV,
+seul moyen d'en faire un fichier que le reste du monde sait ouvrir, en
+retournant au passage les octets : un PDF range ses échantillons en
+gros-boutien, un WAV en petit-boutien. Les lois µ et A de la téléphonie sont
+ramenées à du PCM 16 bits, que tous les lecteurs savent jouer.
 
 Le module **trouve** le média, dit de quoi il s'agit, et sait en extraire les
 octets. Il ne décode rien : la lecture est l'affaire de la plateforme.

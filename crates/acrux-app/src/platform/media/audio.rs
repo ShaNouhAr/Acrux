@@ -220,12 +220,40 @@ impl Output {
         free * self.chunk
     }
 
+    /// Vrai si la carte son n'a plus rien à jouer : tous les tampons prêtés
+    /// lui ont été rendus, et il ne reste aucun reste en attente.
+    #[must_use]
+    pub fn drained(&self) -> bool {
+        self.leftover.is_empty()
+            && self
+                .slots
+                .iter()
+                .all(|s| !s.prepared || s.header.flags & WHDR_DONE != 0)
+    }
+
     /// Ajoute du son à jouer.
     pub fn push(&mut self, bytes: &[u8]) {
         self.leftover.extend_from_slice(bytes);
         while self.leftover.len() >= self.chunk {
             let Some(index) = self.free_slot() else { break };
             let piece: Vec<u8> = self.leftover.drain(..self.chunk).collect();
+            self.submit(index, &piece);
+        }
+    }
+
+    /// Confie à la carte ce qui reste, même si cela ne fait pas un tampon
+    /// plein.
+    ///
+    /// [`Output::push`] n'envoie que des morceaux entiers, pour ne pas hacher
+    /// le son en petits bouts. À la fin d'un média il reste donc presque
+    /// toujours un reliquat plus court qu'un tampon : sans ce vidage, il ne
+    /// serait jamais joué — la dernière fraction de seconde manquerait, et le
+    /// lecteur, attendant un son qui ne vient pas, ne se terminerait jamais.
+    pub fn flush(&mut self) {
+        while !self.leftover.is_empty() {
+            let Some(index) = self.free_slot() else { break };
+            let take = self.leftover.len().min(self.chunk);
+            let piece: Vec<u8> = self.leftover.drain(..take).collect();
             self.submit(index, &piece);
         }
     }

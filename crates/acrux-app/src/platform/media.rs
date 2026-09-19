@@ -70,6 +70,8 @@ pub struct Player {
     audio: Option<audio::Output>,
     /// Le flux vidéo est épuisé.
     video_done: bool,
+    /// Le flux audio est épuisé.
+    audio_done: bool,
     /// Les images arrivent du bas vers le haut (pas de ligne négatif).
     flipped: bool,
 }
@@ -111,6 +113,7 @@ impl Player {
             anchor_instant: Instant::now(),
             audio: None,
             video_done: false,
+            audio_done: false,
             flipped: false,
         };
         player.duration = player.read_duration();
@@ -372,6 +375,7 @@ impl Player {
         self.current = None;
         self.pending = None;
         self.video_done = false;
+        self.audio_done = false;
         self.anchor_time = target;
         self.anchor_instant = Instant::now();
         if let Some(out) = &mut self.audio {
@@ -409,10 +413,26 @@ impl Player {
                 break;
             }
         }
-        if self.video_done && self.pending.is_none() && self.state == State::Playing {
+        if self.state == State::Playing && self.exhausted() {
             self.finish();
         }
         self.current.as_ref()
+    }
+
+    /// Vrai quand toutes les pistes présentes sont épuisées.
+    ///
+    /// Un média sans image ne finissait jamais : la fin se jugeait à la seule
+    /// vidéo, et faute de vidéo la condition ne se réalisait pas. Le son doit
+    /// en plus avoir été **joué**, pas seulement décodé — la carte son a
+    /// toujours quelques dixièmes de seconde d'avance sur nous, et couper là
+    /// mangerait la dernière note.
+    fn exhausted(&self) -> bool {
+        let video = self.size.is_none() || (self.video_done && self.pending.is_none());
+        let audio = match &self.audio {
+            Some(out) => self.audio_done && out.drained(),
+            None => true,
+        };
+        video && audio
     }
 
     /// Marque la fin de la lecture.
@@ -521,6 +541,14 @@ impl Player {
     /// Fournit au son de quoi tenir jusqu'au prochain passage.
     fn fill_audio(&mut self) {
         let Some(out) = &self.audio else { return };
+        if self.audio_done {
+            // Piste finie : il reste le reliquat à confier à la carte. Tant
+            // qu'il n'y a pas de tampon libre, on repassera au prochain tour.
+            if let Some(out) = &mut self.audio {
+                out.flush();
+            }
+            return;
+        }
         let mut needed = out.needed_bytes();
         while needed > 0 {
             let Some((bytes, _)) = self.decode_audio() else {
@@ -532,6 +560,11 @@ impl Player {
             needed = needed.saturating_sub(bytes.len());
             if let Some(out) = &mut self.audio {
                 out.push(&bytes);
+            }
+        }
+        if self.audio_done {
+            if let Some(out) = &mut self.audio {
+                out.flush();
             }
         }
     }
@@ -555,6 +588,7 @@ impl Player {
             )
         };
         if hr < 0 || flags & mf::END_OF_STREAM != 0 {
+            self.audio_done = true;
             return None;
         }
         let sample = Com(sample);
