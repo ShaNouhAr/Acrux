@@ -7,7 +7,10 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
-## Non publié
+## 0.4.0 — 19 septembre 2026
+
+On choisit un outil, on entre dans un mode, et c'est la page elle-même qui
+devient l'outil — sans sélectionner d'abord.
 
 ### Modifier le PDF, comme dans Acrobat
 
