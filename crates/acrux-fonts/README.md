@@ -63,6 +63,44 @@ Ce qui manque : les largeurs de ZapfDingbats. Les inventer serait pire que
 l'absence — `width_by_name` rend `None`, et l'appelant sait qu'il doit se
 rabattre ailleurs.
 
+## La police de secours (`fallback`)
+
+Sur une machine sans une seule police installée — un conteneur, une image de
+compilation minimale — il n'y a rien à substituer, et la page reste blanche
+alors que le fichier est parfaitement valide. Acrobat embarque pour ce cas
+Adobe Sans MM. Voici la nôtre.
+
+Chaque lettre est décrite comme on la tracerait à la plume, puis épaissie :
+
+```
+("H", 722.0, "M 140 0 L 140 700 M 582 0 L 582 700 M 140 350 L 582 350"),
+("O", 778.0, "A 389 350 320 350 0 360"),
+```
+
+| Commande | Effet |
+|---|---|
+| `M x y` | commence un trait |
+| `L x y` | segment droit |
+| `C x1 y1 x2 y2 x y` | cubique de Bézier |
+| `A cx cy rx ry a0 a1` | arc d'ellipse, angles en degrés |
+| `. x y` | point (celui du `i`, celui du `?`) |
+
+Repères, en millièmes d'em : ligne de base 0, hauteur d'œil 500, capitale 700,
+hampes 730, jambages −210, plume 80.
+
+Le squelette a un avantage qui n'est pas la brièveté : **il ne peut pas se
+tromper de sens**. Un contour rempli doit tourner dans le bon sens et ses
+contre-formes dans l'autre ; une erreur et la lettre se remplit à l'envers.
+Ici tous les morceaux engendrés tournent pareil, le remplissage non nul les
+réunit, et corriger un `g` revient à déplacer un nombre et à regarder.
+
+La chasse est ensuite ajustée à celle que le document déclare, si bien que les
+lignes tombent juste même quand les lettres ne sont pas les bonnes.
+
+Couverture : tout WinAnsiEncoding, accents compris (composés à la volée sur
+leur lettre). Pas le grec de Symbol ni les fleurons de ZapfDingbats — ceux-là
+restent vides plutôt que de sortir une lettre latine à leur place.
+
 ## Ce qui n'est pas encore couvert
 
 - **Hinting** : instructions TrueType (`fpgm`, `prep`, `cvt `, instructions

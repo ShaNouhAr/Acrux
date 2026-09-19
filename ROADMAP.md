@@ -118,12 +118,18 @@ Livrable : version 0.2, parité avec Acrobat Standard hors édition de texte.
   sur une machine où Calibri est installée recevait Arial. Les noms de fichiers de Windows se
   devinent par radical et suffixe (`calibrib.ttf`, `georgiai.ttf`) sans ouvrir les quatre cents
   polices installées.
-- [ ] **Police de secours dessinée par nous** — dernier trou connu. Sur une machine sans aucune
-  police utilisable (conteneur, image de compilation minimale), la géométrie est maintenant juste
-  mais **rien ne s'affiche** : faute de programme de glyphes, il n'y a pas de contour à remplir.
-  Acrobat embarque pour cela Adobe Sans MM et Adobe Serif MM. Il nous faut la nôtre : un alphabet
-  latin complet tracé à la main dans `acrux-fonts`, que `substitution_fit` mettra ensuite à la
-  chasse voulue. Vérifiable par `ACRUX_FONT_DIR` pointé sur un répertoire vide.
+- [x] **Police de secours dessinée par nous** (`acrux-fonts/fallback.rs`) : sur une machine sans
+  aucune police utilisable — conteneur, image de compilation minimale — la page restait blanche
+  alors que le fichier était valide. Acrobat embarque pour ce cas Adobe Sans MM ; voici la nôtre.
+  Une linéale géométrique couvrant tout WinAnsiEncoding : les 95 caractères ASCII imprimables, les
+  accents composés à la volée sur leur lettre, les ligatures et les signes courants. Chaque lettre
+  est un **squelette** — quelques traits et quelques arcs — épaissi ensuite d'une plume constante,
+  ce qui la rend courte à écrire et impossible à remplir à l'envers ; quelqu'un qui veut corriger
+  un `g` déplace un nombre et regarde. `substitution_fit` la met ensuite à la chasse déclarée, si
+  bien que les lignes tombent juste. Vérifié par `crates/acrux-render/tests/fallback_font.rs`, qui
+  coupe l'accès aux polices du système avec `ACRUX_FONT_DIR`.
+  Reste : l'alphabet grec de Symbol et les fleurons de ZapfDingbats, qui restent vides plutôt que
+  de sortir une lettre latine à leur place.
 
 ## Phase 5 — Édition de niveau Acrobat (le cœur du « mieux qu'Acrobat »)
 - [x] Reconstruction de paragraphes depuis le contenu, détection des colonnes et des styles (`acrux-features/text/` : blocs, paragraphes avec alignement, retrait et interligne, césures réparées, colonnes par découpe XY, en-têtes et pieds de page, listes, titres, tableaux à filets ou à colonnes alignées, styles gras / italique / couleur au glyphe près ; sorties `to_plain`, `to_markdown`, `to_html`, `to_layout`, `acr text --markdown|--html|--layout`) ; reste : ordre de lecture depuis le balisage (`/StructTreeRoot`), tableaux à cellules fusionnées, texte vertical CJK

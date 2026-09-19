@@ -19,6 +19,7 @@ use acrux_core::{Matrix, Path, Result};
 use acrux_document::{Dict, Document, Name, Object};
 use acrux_fonts::cmap::CMap;
 use acrux_fonts::encodings::{self, glyph_name_to_unicode};
+use acrux_fonts::fallback;
 use acrux_fonts::standard::Standard;
 use acrux_fonts::{CffFont, TrueTypeFont, Type1Font};
 
@@ -50,7 +51,11 @@ pub enum Program {
         /// `/Resources` propres à la police.
         resources: Option<Dict>,
     },
-    /// Aucun programme (police absente et substitution impossible).
+    /// Notre propre police de secours : aucune police du système n'est
+    /// utilisable. Voir [`acrux_fonts::fallback`].
+    Fallback,
+    /// Aucun programme (ni police du système, ni glyphe de secours pour ce
+    /// nom : les écritures que notre police de secours ne couvre pas).
     None,
 }
 
@@ -61,6 +66,7 @@ impl std::fmt::Debug for Program {
             Program::Cff(_) => write!(f, "CFF"),
             Program::Type1(_) => write!(f, "Type1"),
             Program::Type3 { .. } => write!(f, "Type3"),
+            Program::Fallback => write!(f, "Fallback"),
             Program::None => write!(f, "None"),
         }
     }
@@ -590,6 +596,10 @@ impl LoadedFont {
 
     /// Largeur d'avance depuis le programme de police (unités texte).
     fn program_advance(&self, code: u32) -> Option<f64> {
+        if matches!(self.program, Program::Fallback) {
+            let name = self.glyph_name(code)?;
+            return fallback::advance(name).map(|a| a / fallback::units_per_em());
+        }
         let gid = self.gid_for(code)?;
         match &self.program {
             Program::TrueType(tt) => {
@@ -659,7 +669,9 @@ impl LoadedFont {
                         None => Some(cid),
                     }
                 }
-                Program::Type1(_) | Program::Type3 { .. } | Program::None => Some(cid),
+                Program::Type1(_) | Program::Type3 { .. } | Program::Fallback | Program::None => {
+                    Some(cid)
+                }
             };
         }
         let name = self.glyph_name(code);
@@ -733,7 +745,8 @@ impl LoadedFont {
                 });
                 result.filter(|g| *g != 0 || code == 0)
             }
-            Program::Type3 { .. } | Program::None => None,
+            // La police de secours s'adresse par nom, jamais par indice.
+            Program::Type3 { .. } | Program::Fallback | Program::None => None,
         }
     }
 
@@ -752,6 +765,17 @@ impl LoadedFont {
     /// Contour d'un glyphe dans l'espace texte unitaire (1 = taille de police 1).
     #[must_use]
     pub fn glyph_path(&self, glyph: &GlyphRef) -> Option<Path> {
+        if matches!(self.program, Program::Fallback) {
+            let name = self.fallback_name(glyph)?;
+            let unit = 1.0 / fallback::units_per_em();
+            let path = fallback::glyph(&name)?
+                .path
+                .transform(&Matrix::scale(unit, unit));
+            return match self.substitution_fit(glyph) {
+                Some(fit) => Some(path.transform(&Matrix::scale(fit, 1.0))),
+                None => Some(path),
+            };
+        }
         let gid = self.gid_for(glyph.cid)?;
         let path = match &self.program {
             Program::TrueType(tt) => {
@@ -774,6 +798,23 @@ impl LoadedFont {
         }
     }
 
+    /// Nom du glyphe à demander à la police de secours.
+    ///
+    /// Pour une police simple c'est son nom d'encodage. Pour une composite, le
+    /// code n'est qu'un identifiant interne au document : seul le
+    /// `/ToUnicode` dit quelle lettre il désigne.
+    fn fallback_name(&self, glyph: &GlyphRef) -> Option<String> {
+        if !self.is_composite() {
+            if let Some(name) = self.glyph_name(glyph.cid) {
+                if fallback::has(name) {
+                    return Some(name.to_string());
+                }
+            }
+        }
+        let text = self.to_unicode(glyph)?;
+        fallback::name_for_char(text.chars().next()?).map(str::to_string)
+    }
+
     /// Étirement horizontal à appliquer au contour d'un glyphe de
     /// substitution, pour qu'il occupe l'avance que le document déclare.
     ///
@@ -793,7 +834,12 @@ impl LoadedFont {
         if !self.substituted || glyph.width <= 0.0 {
             return None;
         }
-        let natural = self.program_advance(glyph.cid)?;
+        let natural = if matches!(self.program, Program::Fallback) {
+            let name = self.fallback_name(glyph)?;
+            fallback::advance(&name)? / fallback::units_per_em()
+        } else {
+            self.program_advance(glyph.cid)?
+        };
         if natural <= 0.0 {
             return None;
         }
@@ -1103,7 +1149,9 @@ fn substitute(base_font: &str, flags: u32) -> Program {
             }
         }
     }
-    Program::None
+    // Aucune police du système : la nôtre. Un fichier valide doit s'afficher,
+    // même sur une machine qui n'a pas une seule police installée.
+    Program::Fallback
 }
 
 /// Table complète (256 codes) d'un encodage prédéfini.

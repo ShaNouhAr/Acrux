@@ -104,6 +104,10 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   d'une machine à l'autre. Les accentués prennent l'avance de leur lettre de base, sauf `oslash` et
   le `i` accentué, qui se bâtit sur `dotlessi`. Recoupées par test avec les polices métriquement
   compatibles du système.
+- `fallback` : notre propre police, pour les machines qui n'en ont aucune. Chaque lettre est un
+  squelette de traits et d'arcs, épaissi d'une plume constante : le remplissage non nul réunit les
+  morceaux, et il n'y a aucun sens de parcours à respecter — c'est ce qui rend ce fichier sûr à
+  modifier. Couvre WinAnsiEncoding, accents compris, composés à la volée.
 - `subset` : production d'une police TrueType valide contenant un ensemble de glyphes choisi
   (tables `head hhea maxp hmtx loca glyf cmap name post` recalculées, descriptions `glyf`
   recopiées octet pour octet, composantes des glyphes composites renumérotées, fusion de
@@ -148,7 +152,9 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   n'a pas les chasses de l'absente, et dessinée telle quelle chaque lettre flotte dans sa place ou
   en déborde. Acrobat fait cela avec des polices à axes variables ; nous étirons le contour, ce qui
   condense un peu la lettre mais la fait tomber au bon endroit — et c'est cela qui décide si une
-  page ressemble à son original. Un masque souple ou un groupe de
+  page ressemble à son original. Enfin, s'il n'y a **aucune** police sur la machine, le dernier
+  recours est `acrux_fonts::fallback`, la police que nous dessinons nous-mêmes : un fichier valide
+  doit s'afficher partout, c'est tout le sens d'un moteur sans dépendances. Un masque souple ou un groupe de
   transparence n'est rendu hors écran **que dans sa `/BBox`** ramenée en pixels, jamais en
   pleine page, et une découpe de `/BBox` qui couvre déjà toute la cible n'est pas posée :
   sur une page à huit masques imbriqués, cela fait passer le rendu de 259 à 170 ms (150 dpi,
