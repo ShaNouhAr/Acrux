@@ -647,6 +647,9 @@ pub struct Viewer {
     welcome_thumbs: HashMap<PathBuf, (Option<Bitmap>, Instant)>,
     /// Zone du bouton « Ouvrir un document ».
     welcome_open: Option<(i32, i32, i32, i32)>,
+    /// L'accueil est affiché par-dessus le document ouvert, qui reste dans
+    /// son onglet : c'est un retour à la base, pas une fermeture.
+    home: bool,
     /// La décoration de la fenêtre a déjà été accordée au thème.
     frame_themed: bool,
     /// Horloge des animations.
@@ -798,6 +801,7 @@ impl Viewer {
             sign_panel: None,
             welcome_thumbs: HashMap::new(),
             welcome_open: None,
+            home: false,
             frame_themed: false,
             clock: Clock::default(),
             ticker: None,
@@ -1456,6 +1460,36 @@ impl Viewer {
         let thumb = render_thumbnail(&path, 186.0 * scale, 148.0 * scale);
         self.welcome_thumbs.insert(path, (thumb, Instant::now()));
         true
+    }
+
+    /// Montre l'accueil, sans rien fermer.
+    fn show_home(&mut self, window: &mut dyn WindowHandle) {
+        self.home = !self.home || self.loaded.is_none();
+        if self.home {
+            // Les modes d'édition n'ont pas de sens sur l'accueil.
+            self.edit = None;
+            self.annot_tool = None;
+            self.sign_panel = None;
+            self.capture = None;
+            self.wake_anim();
+            self.set_notice("accueil".into());
+        }
+        self.title_dirty = true;
+        window.request_redraw();
+    }
+
+    /// Vrai si l'accueil prend la place du document.
+    fn showing_home(&self) -> bool {
+        self.home || self.loaded.is_none()
+    }
+
+    /// Quitte l'accueil pour revenir au document ouvert.
+    pub(super) fn leave_home(&mut self) {
+        if self.home {
+            self.home = false;
+            self.wake_anim();
+            self.title_dirty = true;
+        }
     }
 
     /// Ouvre le document récent situé sous `(x, y)`, le cas échéant.
@@ -2351,6 +2385,7 @@ impl Viewer {
     }
 
     fn open(&mut self, path: &Path, window: &mut dyn WindowHandle) {
+        self.leave_home();
         match Document::load(path).and_then(|doc| {
             let pages = collect_pages(&doc)?;
             Ok((doc, pages))
@@ -3144,6 +3179,7 @@ impl Viewer {
     fn run_command(&mut self, command: Command, window: &mut dyn WindowHandle) {
         log_line(&format!("palette : {command:?}"));
         match command {
+            Command::Home => self.show_home(window),
             Command::Open => {
                 if let Some(p) = window.open_file_dialog() {
                     self.open(&p, window);
@@ -3500,6 +3536,7 @@ impl Viewer {
     /// Exécute une action de la barre d'outils.
     fn tool_action(&mut self, action: ToolAction, window: &mut dyn WindowHandle) {
         match action {
+            ToolAction::Home => self.show_home(window),
             ToolAction::Open => {
                 if let Some(p) = window.open_file_dialog() {
                     self.open(&p, window);
@@ -3789,6 +3826,7 @@ impl Viewer {
 
     /// Remet le document actif dans la liste et en active un autre.
     fn select_tab(&mut self, index: usize) {
+        self.leave_home();
         self.edit = None;
         self.annot_tool = None;
         if index == self.active_tab || index >= self.tab_count() {
@@ -4218,6 +4256,7 @@ impl Viewer {
 
     /// Ouvre ou ferme l'outil « modifier ».
     fn toggle_objects(&mut self, window: &mut dyn WindowHandle) {
+        self.leave_home();
         self.edit = None;
         self.annot_tool = None;
         if self.objects.is_some() {
@@ -4510,6 +4549,7 @@ impl Viewer {
     /// fenêtre de capture s'ouvre aussitôt : c'est le geste attendu, on ne
     /// choisit pas « Signature » avant d'en avoir une.
     fn toggle_fillsign(&mut self, window: &mut dyn WindowHandle) {
+        self.leave_home();
         if self.loaded.is_none() {
             return;
         }
@@ -5973,9 +6013,11 @@ impl App for Viewer {
         };
         if vw > 0 && vh > 0 {
             let mut view = frame.sub(left, top, vw, vh);
-            self.paint_document(&mut view);
-            if self.loaded.is_none() {
+            if self.showing_home() {
+                view.clear(t.canvas.0, t.canvas.1, t.canvas.2);
                 self.paint_welcome(&mut view);
+            } else {
+                self.paint_document(&mut view);
             }
             self.paint_selection(&mut view);
             self.paint_edit(&mut view);

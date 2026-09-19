@@ -7,6 +7,25 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
+## 0.9.0 — 20 septembre 2026
+
+### Le texte des formulaires se modifie enfin
+
+- Beaucoup de documents — ceux des traitements de texte en particulier —
+  n'écrivent pas leur texte dans la page mais dans un **XObject de
+  formulaire** que la page appelle. Acrux refusait de les modifier ; il
+  rouvre désormais ce flux comme s'il était la page et le réécrit. Sur le
+  corpus, la part du texte modifiable passe de **88 % à 94 %**.
+- Un test mesure cette couverture et **refuse de la laisser redescendre**.
+- Restent à traiter : les blocs en biais (filigranes) et les rares
+  opérations qui dessinent deux textes à la fois.
+
+### Accueil
+
+- **Un bouton maison**, tout à gauche de la barre : il montre l'accueil et
+  ses documents récents **sans fermer** ce qui est ouvert ; un second clic
+  revient au document. La commande « Accueil » existe aussi dans la palette.
+
 ## 0.8.0 — 20 septembre 2026
 
 Une interface finie, et du texte qui se laisse modifier partout.

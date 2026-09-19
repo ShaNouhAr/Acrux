@@ -102,6 +102,7 @@ impl Viewer {
         if self.loaded.is_none() {
             return;
         }
+        self.leave_home();
         if let Some(mode) = &mut self.edit {
             if mode.bar.tool == tool {
                 // Recliquer l'outil actif ressort du mode, comme dans Acrobat.

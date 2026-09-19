@@ -26,6 +26,9 @@ use crate::ui::theme::Theme;
 /// Une action de l'application, déclenchable depuis la palette.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
+    /// Revenir à l'accueil : les documents récents, sans fermer ce qui est
+    /// ouvert.
+    Home,
     /// Ouvrir un document.
     Open,
     /// Enregistrer.
@@ -153,6 +156,13 @@ pub fn describe(command: Command) -> Option<(&'static str, &'static str)> {
 
 /// Toutes les commandes, dans l'ordre d'affichage quand rien n'est filtré.
 const ENTRIES: &[Entry] = &[
+    Entry {
+        label: "Accueil",
+        shortcut: "",
+        keywords: "accueil maison récents démarrage base",
+        command: Command::Home,
+        needs_document: false,
+    },
     Entry {
         label: "Ouvrir un document",
         shortcut: "Ctrl+O",

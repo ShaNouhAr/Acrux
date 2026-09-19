@@ -256,6 +256,10 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   RSA, chaîne de certificats, couverture de tout le fichier, modifications postérieures
   — et `signature/sign` pose une signature par mise à jour incrémentale en réservant le
   `/Contents` puis en écrivant le `/ByteRange` à largeur fixe, sans décaler un octet).
+- `edit_text` sait modifier le texte **d'un XObject de formulaire** comme celui d'une page :
+  `scan::scan_form` rebalaye le flux du XObject en repartant de la matrice en vigueur au moment du
+  `Do`, si bien que les glyphes y ont les mêmes coordonnées qu'à l'écran et que toute la mécanique
+  de recomposition s'applique sans changement ; seul le flux réécrit diffère (`Stream::Form`).
 - `edit_text` pour l'édition en direct : `text_units` découpe la page en **blocs d'un seul tenant**
   (morceaux de lignes empilés dans une même colonne) — un paragraphe qui enjambe deux colonnes ou
   une ligne « titre … date » en font plusieurs ; `open_paragraph` relève la boîte d'un bloc (figée

@@ -521,3 +521,49 @@ fn une_ligne_seule_souvre_et_se_modifie() {
         "la ligne modifiée est absente de la page"
     );
 }
+
+#[test]
+fn le_texte_dun_xobject_de_formulaire_se_modifie() {
+    // Filigrane et en-tête sont posés dans des XObjects de formulaire : c'est
+    // ainsi qu'écrivent beaucoup de producteurs, traitements de texte en
+    // tête. On doit pouvoir les modifier comme le reste.
+    let path = corpus("synthese/filigrane-entete-bates.pdf");
+    let doc = Document::load(path).unwrap();
+    let pages = collect_pages(&doc).unwrap();
+    let text = extract_page_text(&doc, &pages[0]).unwrap();
+    let units = acrux_features::edit_text::text_units(&text);
+    let (index, opened) = units
+        .iter()
+        .enumerate()
+        .find_map(|(i, u)| {
+            let opened = open_unit(&doc, &pages[0], &text, u).ok()?;
+            opened
+                .text
+                .contains("Diffusion restreinte")
+                .then_some((i, opened))
+        })
+        .unwrap_or_else(|| panic!("l'en-tête ne s'ouvre pas"));
+    let _ = index;
+    let avant = page_text(&doc, 0);
+    assert!(avant.contains("Diffusionrestreinte"), "{avant}");
+    let nouveau = opened
+        .text
+        .replace("Diffusion restreinte", "Diffusion libre");
+    set_paragraph_text(&doc, &pages[0], &opened.frame, &opened.drawn, &nouveau)
+        .expect("l'en-tête doit se recomposer");
+    let apres = page_text(&doc, 0);
+    assert!(apres.contains("Diffusionlibre"), "{apres}");
+    assert!(!apres.contains("Diffusionrestreinte"));
+    // Le reste de la page n'a pas bougé.
+    assert!(apres.contains("Rapporttrimestriel"), "{apres}");
+    assert!(apres.contains("Total:137k€"), "{apres}");
+    // Et le fichier enregistré se relit.
+    let bytes = doc.save_full().unwrap();
+    let relu = Document::from_bytes(bytes).expect("le fichier enregistré se relit");
+    let pages = collect_pages(&relu).unwrap();
+    let text = extract_page_text(&relu, &pages[0]).unwrap();
+    assert!(text
+        .lines
+        .iter()
+        .any(|l| l.text().contains("Diffusion libre")));
+}

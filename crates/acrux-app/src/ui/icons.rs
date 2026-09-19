@@ -24,6 +24,8 @@ use crate::platform::Frame;
 /// Icônes disponibles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Icon {
+    /// Maison (accueil).
+    Home,
     /// Dossier (ouvrir).
     Open,
     /// Chevron gauche (page précédente).
@@ -411,6 +413,19 @@ pub fn geometry(icon: Icon) -> (Path, Path) {
                     (13.0, 19.0),
                     (13.0, 5.0),
                 ],
+            );
+        }
+        Icon::Home => {
+            // Un toit et deux murs : la maison la plus simple qui se lise à
+            // seize pixels.
+            polyline(&mut lines, &[(3.0, 11.5), (12.0, 4.0), (21.0, 11.5)]);
+            polyline(
+                &mut lines,
+                &[(5.5, 10.0), (5.5, 20.0), (18.5, 20.0), (18.5, 10.0)],
+            );
+            polyline(
+                &mut lines,
+                &[(9.8, 20.0), (9.8, 14.5), (14.2, 14.5), (14.2, 20.0)],
             );
         }
         Icon::Sidebar => {

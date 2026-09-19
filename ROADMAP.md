@@ -177,7 +177,11 @@ Livrable : version 0.2, parité avec Acrobat Standard hors édition de texte.
   seul tenant coulerait le texte par-dessus l'autre colonne. Sûreté : un bloc n'est recomposé que
   s'il porte exactement le texte attendu ; s'il s'est mêlé à un voisin, la frappe est refusée
   plutôt que d'écraser ce voisin.
-  À faire : gras, italique, famille et couleur d'un bloc existant ; images dans le même mode
+  Le texte dessiné dans un **XObject de formulaire** se modifie comme celui de la page (son flux
+  est rouvert et réécrit) ; un bloc qu'aucune opération ne laisse recomposer entier retombe sur
+  **la ligne cliquée**. Un test mesure la part du corpus modifiable (94 %) et interdit qu'elle
+  baisse. À faire : blocs en biais (filigranes), opérations qui dessinent deux textes à la fois ;
+  gras, italique, famille et couleur d'un bloc existant ; images dans le même mode
   (« Modifier les objets » reste un outil à part) ; texte ajouté hors WinAnsi (police standard) ;
   poignées pour élargir une zone.
 - [x] **Les questions d'Acrux sont dessinées par Acrux** (`acrux-app/src/ui/dialog.rs`,

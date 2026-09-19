@@ -1333,11 +1333,40 @@ struct Target {
     scale: f64,
     font: Name,
     size_text: f64,
+    /// Flux à réécrire : celui de la page, ou celui d'un XObject.
+    stream: Stream,
+}
+
+/// Où vit le texte qu'on modifie.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Stream {
+    /// Le flux de contenu de la page.
+    Page,
+    /// Le flux d'un XObject de formulaire.
+    Form(acrux_document::ObjectRef),
 }
 
 impl Target {
+    /// Retrouve le bloc dans le flux qui le dessine.
+    ///
+    /// Beaucoup de documents — ceux des traitements de texte en particulier —
+    /// n'écrivent pas leur texte dans la page mais dans un **XObject de
+    /// formulaire** que la page appelle. Refuser de les modifier reviendrait
+    /// à refuser une bonne part des fichiers réels ; on rouvre donc ce flux
+    /// comme s'il était la page, et c'est lui qu'on réécrit.
     fn find(doc: &Document, page: &Page, text: &PageText, unit: &TextUnit) -> Result<Target> {
-        let scan = scan::scan(doc, page)?;
+        let page_scan = scan::scan(doc, page)?;
+        match form_of(&page_scan, text, unit) {
+            Some(site) => {
+                let scan = scan::scan_form(doc, &site, page)?;
+                Self::build(text, unit, scan, Stream::Form(site.reference))
+            }
+            None => Self::build(text, unit, page_scan, Stream::Page),
+        }
+    }
+
+    /// Construit la cible dans un flux déjà balayé.
+    fn build(text: &PageText, unit: &TextUnit, scan: scan::Scan, stream: Stream) -> Result<Target> {
         let glyph_index = GlyphIndex::new(&scan);
         // 1. Tous les glyphes du bloc, et les opérations qui les ont produits.
         let mut sites: Vec<usize> = Vec::new();
@@ -1380,7 +1409,7 @@ impl Target {
             let site = &scan.glyphs[*i].site;
             if site.in_form {
                 return Err(Error::Unsupported(
-                    "paragraphe dessiné dans un XObject de formulaire : non modifiable".into(),
+                    "paragraphe dessiné dans un XObject imbriqué : non modifiable".into(),
                 ));
             }
             *by_op.entry(site.op).or_default() += 1;
@@ -1427,8 +1456,34 @@ impl Target {
             scale,
             font,
             size_text,
+            stream,
         })
     }
+}
+
+/// XObject de formulaire qui dessine **tout** le bloc, s'il y en a un.
+///
+/// Un bloc dont les glyphes viennent de deux formulaires différents, ou
+/// partiellement de la page, n'est pas d'un seul tenant : on le laisse à la
+/// procédure ordinaire, qui dira pourquoi elle refuse.
+fn form_of(scan: &scan::Scan, text: &PageText, unit: &TextUnit) -> Option<scan::FormSite> {
+    let index = GlyphIndex::new(scan);
+    let mut site: Option<scan::FormSite> = None;
+    for piece in &unit.pieces {
+        for glyph in piece_words(piece, text)
+            .iter()
+            .flat_map(|w| w.glyphs.iter())
+        {
+            let found = index.find(scan, glyph)?;
+            let form = scan.glyphs[found].site.form?;
+            match site {
+                Some(known) if known != form => return None,
+                Some(_) => {}
+                None => site = Some(form),
+            }
+        }
+    }
+    site
 }
 
 /// Recompose un paragraphe et rend sa mise en page.
@@ -1534,8 +1589,42 @@ fn write_paragraph(
         });
     }
     let content = super::rewrite_bytes(&t.scan.content, &replacements)?;
-    super::set_page_content(doc, page, content)?;
+    match t.stream {
+        Stream::Page => super::set_page_content(doc, page, content)?,
+        Stream::Form(reference) => set_form_content(doc, reference, content)?,
+    }
     Ok(laid)
+}
+
+/// Remplace le flux d'un XObject de formulaire.
+///
+/// Le dictionnaire est conservé tel quel — `/BBox`, `/Matrix`, `/Resources`
+/// disent où et comment le dessin se pose — sauf la longueur et le filtre :
+/// on réécrit en clair.
+fn set_form_content(
+    doc: &Document,
+    reference: acrux_document::ObjectRef,
+    content: Vec<u8>,
+) -> Result<()> {
+    let object = acrux_document::Object::Reference(reference);
+    let resolved = doc.resolve(&object)?;
+    let acrux_document::Object::Stream { dict, .. } = &*resolved else {
+        return Err(Error::Corrupt(
+            "le XObject de formulaire n'est pas un flux".into(),
+        ));
+    };
+    let mut dict = dict.clone();
+    dict.remove(&Name::new("Filter"));
+    dict.remove(&Name::new("DecodeParms"));
+    dict.insert(
+        Name::new("Length"),
+        acrux_document::Object::Integer(i64::try_from(content.len()).unwrap_or(0)),
+    );
+    doc.set(
+        reference,
+        acrux_document::Object::Stream { dict, raw: content },
+    );
+    Ok(())
 }
 
 /// Ajoute un bloc de texte neuf à la page, dans sa boîte.

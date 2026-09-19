@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use acrux_core::{Matrix, Point, Result};
-use acrux_document::{Dict, Document, Name, Object, Page};
+use acrux_document::{Dict, Document, Name, Object, ObjectRef, Page};
 use acrux_render::content::ContentLexer;
 use acrux_render::font::LoadedFont;
 use acrux_render::page::page_content;
@@ -135,8 +135,22 @@ pub(crate) struct Site {
     pub end: usize,
     /// Matrice texte avant ce glyphe.
     pub tm_before: Matrix,
-    /// Le glyphe vient d'un XObject de formulaire : non modifiable ici.
+    /// Le glyphe vient d'un XObject de formulaire : son flux à lui porte le
+    /// texte, et c'est celui-là qu'il faudra réécrire.
     pub in_form: bool,
+    /// Le formulaire d'où il vient : sa référence et la matrice en vigueur au
+    /// moment du `Do` (matrice `/Matrix` comprise). De quoi rouvrir ce flux
+    /// **comme s'il était une page** et y retrouver les mêmes glyphes.
+    pub form: Option<FormSite>,
+}
+
+/// Un XObject de formulaire rencontré pendant le balayage.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct FormSite {
+    /// Objet indirect du flux.
+    pub reference: ObjectRef,
+    /// Matrice courante à l'intérieur du formulaire.
+    pub ctm: Matrix,
 }
 
 /// Glyphe localisé : la clé géométrique sert à le retrouver dans le
@@ -381,6 +395,7 @@ impl Scanner<'_> {
                         end: offset + width,
                         tm_before: st.tm,
                         in_form: !top,
+                        form: None,
                     },
                 });
             }
@@ -389,6 +404,7 @@ impl Scanner<'_> {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // une suite de vérifications, lue de haut en bas
     fn do_form(&mut self, resources: &Dict, name: &Name, st: &TextSnapshot, index: usize) {
         if self.depth > MAX_DEPTH {
             return;
@@ -401,6 +417,11 @@ impl Scanner<'_> {
             .and_then(|x| x.as_dict().and_then(|d| d.get(name).cloned()))
         else {
             return;
+        };
+        // La référence sert à réécrire ce flux-là si l'on y modifie du texte.
+        let reference = match &xobj {
+            Object::Reference(r) => Some(*r),
+            _ => None,
         };
         let Ok(resolved) = self.doc.resolve(&xobj) else {
             return;
@@ -433,10 +454,14 @@ impl Scanner<'_> {
         self.depth += 1;
         let before = self.glyphs.len();
         self.run(&content.data, &res, ctm, false);
-        // Les glyphes d'un formulaire renvoient à l'opération `Do` de la page.
+        // Les glyphes d'un formulaire renvoient à l'opération `Do` de la page,
+        // mais gardent de quoi retrouver leur propre flux.
         for g in &mut self.glyphs[before..] {
             g.site.op = index;
             g.site.in_form = true;
+            if g.site.form.is_none() {
+                g.site.form = reference.map(|reference| FormSite { reference, ctm });
+            }
         }
         self.depth -= 1;
     }
@@ -446,6 +471,51 @@ impl Scanner<'_> {
 ///
 /// # Errors
 /// Ressources illisibles.
+/// Balaye le flux d'un XObject de formulaire **comme s'il était une page**.
+///
+/// Même code, même état : les glyphes y ont les mêmes coordonnées qu'à
+/// l'écran, puisqu'on repart de la matrice en vigueur au moment du `Do`. Ce
+/// qui en sort se réécrit exactement comme le flux d'une page.
+///
+/// # Errors
+/// Objet absent, pas un flux, ou flux illisible.
+pub(crate) fn scan_form(doc: &Document, site: &FormSite, page: &Page) -> Result<Scan> {
+    let object = Object::Reference(site.reference);
+    let resolved = doc.resolve(&object)?;
+    let Object::Stream { dict, .. } = &*resolved else {
+        return Err(acrux_core::Error::Corrupt(
+            "le XObject de formulaire n'est pas un flux".into(),
+        ));
+    };
+    let content = doc.stream_data(&resolved)?;
+    let resources = doc
+        .dict_get(dict, "Resources")
+        .ok()
+        .flatten()
+        .and_then(|r| r.as_dict().cloned())
+        .or_else(|| {
+            doc.dict_get(&page.dict, "Resources")
+                .ok()
+                .flatten()
+                .and_then(|r| r.as_dict().cloned())
+        })
+        .unwrap_or_default();
+    let mut sc = Scanner {
+        doc,
+        fonts: HashMap::new(),
+        ops: Vec::new(),
+        glyphs: Vec::new(),
+        count: 0,
+        depth: 0,
+    };
+    sc.run(&content.data, &resources, site.ctm, true);
+    Ok(Scan {
+        ops: sc.ops,
+        glyphs: sc.glyphs,
+        content: content.data,
+    })
+}
+
 pub(crate) fn scan(doc: &Document, page: &Page) -> Result<Scan> {
     let resources = doc
         .dict_get(&page.dict, "Resources")?

@@ -28,6 +28,8 @@ use crate::ui::theme::Theme;
 // Pas `Copy` : `GoToLabel` porte le texte tapé dans le champ de page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolAction {
+    /// Revenir à l'accueil.
+    Home,
     /// Ouvrir un fichier.
     Open,
     /// Page précédente.
@@ -72,6 +74,7 @@ impl ToolAction {
     #[must_use]
     fn command(&self) -> Option<Command> {
         Some(match self {
+            ToolAction::Home => Command::Home,
             ToolAction::Open => Command::Open,
             ToolAction::PrevPage => Command::PrevPage,
             ToolAction::NextPage => Command::NextPage,
@@ -151,6 +154,13 @@ impl Toolbar {
     pub fn new() -> Self {
         use Item::{Button, PageBox, Separator, Spacer, ZoomLabel};
         let items = vec![
+            // L'accueil d'abord, tout à gauche : c'est le retour à la base,
+            // et on le cherche là.
+            Button {
+                icon: Icon::Home,
+                action: ToolAction::Home,
+                needs_document: false,
+            },
             Button {
                 icon: Icon::Sidebar,
                 action: ToolAction::TogglePanel,
@@ -685,7 +695,20 @@ mod tests {
         assert_eq!(tb.key(Key::Enter, &info), Some(ToolAction::GoToPage(7)));
         assert!(!tb.has_focus());
         // Le bouton « ouvrir » marche sans document, « suivant » non.
-        tb.rects[1] = (0, 0, 32, 32);
+        let open = tb
+            .items
+            .iter()
+            .position(|it| {
+                matches!(
+                    it,
+                    Item::Button {
+                        action: ToolAction::Open,
+                        ..
+                    }
+                )
+            })
+            .unwrap_or_default();
+        tb.rects[open] = (0, 0, 32, 32);
         let no_doc = ToolbarInfo {
             has_document: false,
             ..info.clone()
