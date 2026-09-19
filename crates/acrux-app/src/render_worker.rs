@@ -123,6 +123,24 @@ pub enum EditOp {
         /// Nom de la pièce jointe.
         name: String,
     },
+    /// Donner un nouveau texte à un paragraphe, ou créer une zone de texte.
+    ///
+    /// C'est l'opération du mode « Modifier le PDF ». Elle est rejouable :
+    /// appliquée au fichier d'origine, elle retrouve le paragraphe par sa
+    /// boîte et par le texte qu'il portait (`expected`), et donne le même
+    /// résultat que toute la session de frappe. L'historique n'en garde donc
+    /// qu'une par paragraphe modifié, et l'annulation défait la session
+    /// entière d'un coup, comme dans Acrobat.
+    Paragraph {
+        /// Indice de page.
+        page: usize,
+        /// Boîte du paragraphe, relevée à l'ouverture.
+        frame: acrux_features::edit_text::ParagraphFrame,
+        /// Texte dessiné avant, sans blancs.
+        expected: String,
+        /// Texte à écrire.
+        text: String,
+    },
     /// Donner une valeur à un champ de formulaire (apparences régénérées).
     SetField {
         /// Nom qualifié du champ.
@@ -219,6 +237,19 @@ impl EditOp {
             .map(|_| ()),
             EditOp::Detach { name } => acrux_features::attach::remove_attachment(doc, name),
             EditOp::SetField { name, value } => set_field_value(doc, name, value.clone()),
+            EditOp::Paragraph {
+                page,
+                frame,
+                expected,
+                text,
+            } => {
+                let pages = collect_pages(doc)?;
+                let page = pages.get(*page).ok_or_else(|| {
+                    acrux_core::Error::Corrupt(format!("page {} absente", page + 1))
+                })?;
+                acrux_features::edit_text::set_paragraph_text(doc, page, frame, expected, text)
+                    .map(|_| ())
+            }
         }
     }
 }

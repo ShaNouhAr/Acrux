@@ -7,6 +7,27 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
+## Non publié
+
+### Modifier le PDF, comme dans Acrobat
+
+- **On entre dans le mode, on clique, on tape.** Plus besoin de sélectionner
+  d'abord : « Modifier le PDF » encadre tout le texte de la page, un clic dans
+  un bloc y pose le curseur, et l'on édite comme dans un traitement de texte.
+  Le bloc se recompose **à chaque frappe, dans sa vraie police et sur son vrai
+  fond** : ce qu'on voit est ce qui sera enregistré. Retrait de première
+  ligne, justification et interligne sont conservés.
+- **Ajouter du texte** pose une zone neuve où l'on clique, dans la taille et la
+  couleur choisies dans la barre du mode.
+- **Annuler** défait toute une saisie d'un coup.
+- Un paragraphe qui continue dans la colonne suivante, ou une ligne qui porte
+  un titre à gauche et une date à droite, se modifient en blocs séparés —
+  comme dans Acrobat, et pour la même raison : les recomposer d'un seul tenant
+  coulerait le texte par-dessus l'autre colonne.
+- **Surligner, Poser une note et Biffer sont devenus des outils** : on les
+  choisit dans la colonne de droite, puis on glisse sur le texte ou on clique
+  sur la page. Une barre dit l'outil en cours et comment en sortir.
+
 ## 0.3.0 — 19 septembre 2026
 
 Une version d'interface : ce que le logiciel sait faire se voit enfin, et les

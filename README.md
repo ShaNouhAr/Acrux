@@ -272,6 +272,7 @@ dans la barre d'outils et « page iii (3 / 240) » dans la barre d'état, et sai
 | `N` | poser une note à la position de la souris |
 | clic sur une vidéo ou un son | lecture ; re-clic pour mettre en pause, clic sur la ligne de temps pour se déplacer |
 | `F3` | barre des outils, à droite (modifier, commenter, signer, pages, biffer) |
+| `Ctrl+Maj+E` | **modifier le PDF** : tout le texte s'encadre, on clique dedans et on tape |
 | `O` | modifier les objets : sélection, poignées, ordre, suppression |
 | `S` | remplir et signer : signature tracée, tapée ou importée, texte, marques |
 | `M`, `Maj+M` | biffure : marquer (réversible), puis appliquer définitivement |

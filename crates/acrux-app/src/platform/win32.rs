@@ -331,6 +331,7 @@ extern "system" {
     fn OpenClipboard(owner: HWND) -> BOOL;
     fn EmptyClipboard() -> BOOL;
     fn SetClipboardData(format: UINT, handle: *mut c_void) -> *mut c_void;
+    fn GetClipboardData(format: UINT) -> *mut c_void;
     fn CloseClipboard() -> BOOL;
 }
 
@@ -392,6 +393,7 @@ extern "system" {
     fn GlobalLock(handle: *mut c_void) -> *mut c_void;
     fn GlobalUnlock(handle: *mut c_void) -> BOOL;
     fn GlobalFree(handle: *mut c_void) -> *mut c_void;
+    fn GlobalSize(handle: *mut c_void) -> usize;
 }
 
 /// Copie du texte dans le presse-papiers (format Unicode).
@@ -421,6 +423,33 @@ fn set_clipboard_text(hwnd: HWND, text: &str) {
             }
         }
         CloseClipboard();
+    }
+}
+
+/// Lit le texte du presse-papiers (format Unicode).
+fn clipboard_text(hwnd: HWND) -> Option<String> {
+    // SAFETY : séquence documentée par Windows. Le bloc rendu par
+    // GetClipboardData appartient au système : on le verrouille le temps de
+    // le copier, sans jamais lire au-delà de la taille que GlobalSize annonce,
+    // puis on le rend.
+    unsafe {
+        if OpenClipboard(hwnd) == 0 {
+            return None;
+        }
+        let handle = GetClipboardData(CF_UNICODETEXT);
+        let mut out = None;
+        if !handle.is_null() {
+            let src = GlobalLock(handle).cast::<u16>();
+            if !src.is_null() {
+                let units = GlobalSize(handle) / 2;
+                let slice = std::slice::from_raw_parts(src, units);
+                let end = slice.iter().position(|u| *u == 0).unwrap_or(units);
+                out = String::from_utf16(&slice[..end]).ok();
+                GlobalUnlock(handle);
+            }
+        }
+        CloseClipboard();
+        out
     }
 }
 
@@ -619,6 +648,18 @@ impl WindowHandle for Handle<'_> {
 
     fn set_clipboard_text(&mut self, text: &str) {
         self.state.clipboard = Some(text.to_string());
+    }
+
+    fn clipboard_text(&mut self) -> Option<String> {
+        // Un texte copié dans ce même tour n'est pas encore passé au
+        // système : on le rend tel quel.
+        if let Some(t) = &self.state.clipboard {
+            return Some(t.clone());
+        }
+        if headless() {
+            return None;
+        }
+        clipboard_text(self.state.hwnd)
     }
 
     fn open_url(&mut self, url: &str) {

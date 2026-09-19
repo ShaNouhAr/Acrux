@@ -156,6 +156,31 @@ Livrable : version 0.2, parité avec Acrobat Standard hors édition de texte.
 - [x] **Zoom d'ouverture automatique** : ajuster à la largeur sur un écran large donnait 212 %.
   Trois modes désormais — automatique (largeur, plafonnée à 100 %), largeur, page entière —, le
   bouton les parcourt et la barre d'état dit lequel est actif.
+- [x] **Mode « Modifier le PDF »**, comme dans Acrobat (`acrux-app/src/viewer/editmode.rs`,
+  `acrux-app/src/ui/editpdf.rs`, `acrux-features/edit_text/reflow.rs`) : on n'a plus à sélectionner
+  d'abord. On entre dans le mode, **tout le texte s'encadre**, un clic dans un bloc y pose le curseur
+  et l'on tape, efface, se déplace (flèches, Ctrl+flèches, Début/Fin, Maj pour sélectionner,
+  double-clic sur un mot, triple-clic sur le bloc, Ctrl+A/C/X/V). Le bloc se recompose **à chaque
+  frappe, dans sa vraie police et sur son vrai fond** — environ 25 ms sur une vraie page, rendu
+  compris — donc ce qu'on voit est ce qui sera enregistré. Entrée coupe la ligne. Cliquer dans un
+  bloc ne déplace rien : le curseur se pose sur le dessin d'origine, la recomposition n'arrive
+  qu'à la première frappe. **Ajouter du texte** pose une zone neuve où l'on clique, qui grandit en
+  largeur jusqu'à la marge puis coule à la ligne ; rien n'est écrit tant qu'aucune lettre n'est
+  tapée. Barre du mode : outil, taille (du bloc en cours ou du texte ajouté), couleur du texte
+  ajouté, Terminer. **Annuler défait toute une saisie d'un coup** : l'historique ne garde qu'une
+  opération par bloc, rejouable sur le fichier d'origine (vérifié par test). Les blocs sont ceux
+  d'Acrobat et non les paragraphes de l'extraction : un paragraphe qui se poursuit dans la colonne
+  suivante fait deux blocs, un en-tête « titre à gauche, date à droite » aussi — les recomposer d'un
+  seul tenant coulerait le texte par-dessus l'autre colonne. Sûreté : un bloc n'est recomposé que
+  s'il porte exactement le texte attendu ; s'il s'est mêlé à un voisin, la frappe est refusée
+  plutôt que d'écraser ce voisin.
+  À faire : gras, italique, famille et couleur d'un bloc existant ; images dans le même mode
+  (« Modifier les objets » reste un outil à part) ; texte ajouté hors WinAnsi (police standard) ;
+  poignées pour élargir une zone.
+- [x] **Outils d'annotation en mode**, eux aussi : « Surligner », « Poser une note » et « Biffer »
+  s'allument dans la colonne et agissent directement sur la page — glisser surligne ou marque, un
+  clic pose une note — avec une barre qui dit l'outil en cours et comment en sortir. Du texte déjà
+  sélectionné est traité dès qu'on choisit l'outil.
 - [ ] Menus classiques, info-bulles détaillées, personnalisation de la colonne d'outils.
 
 ## Phase 5 — Édition de niveau Acrobat (le cœur du « mieux qu'Acrobat »)

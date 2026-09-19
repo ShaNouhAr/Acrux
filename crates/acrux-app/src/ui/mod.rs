@@ -4,6 +4,8 @@
 //!
 //! | Module    | Rôle                                                  |
 //! |-----------|-------------------------------------------------------|
+//! | `editpdf` | mode « Modifier le PDF » : saisie et barre du mode    |
+//! | `modebar` | barre fine d'un outil en cours : nom, consigne, sortie |
 //! | `text`    | rendu de texte d'interface avec une police système    |
 //! | `theme`   | couleurs et dimensions                                |
 //! | `input`   | champ de saisie sur une ligne                         |
@@ -20,8 +22,10 @@
 //!
 //! À venir : menus, info-bulles détaillées.
 
+pub mod editpdf;
 pub mod icons;
 pub mod input;
+pub mod modebar;
 pub mod objects;
 pub mod palette;
 pub mod panel;

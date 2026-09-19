@@ -71,7 +71,8 @@ enum Row {
 /// signe, puis on range les pages, puis on protège, puis on sort le document.
 const ROWS: &[Row] = &[
     Row::Heading("Modifier"),
-    Row::Tool("Modifier le texte", Icon::EditText, Command::EditText, true),
+    Row::Tool("Modifier le PDF", Icon::EditText, Command::EditPdf, true),
+    Row::Tool("Ajouter du texte", Icon::AddText, Command::AddTextBox, true),
     Row::Tool(
         "Modifier les objets",
         Icon::Objects,
@@ -79,8 +80,8 @@ const ROWS: &[Row] = &[
         true,
     ),
     Row::Heading("Commenter"),
-    Row::Tool("Surligner", Icon::Highlight, Command::Highlight, true),
-    Row::Tool("Poser une note", Icon::Note, Command::Note, true),
+    Row::Tool("Surligner", Icon::Highlight, Command::HighlightTool, true),
+    Row::Tool("Poser une note", Icon::Note, Command::NoteTool, true),
     Row::Heading("Signer"),
     Row::Tool("Remplir et signer", Icon::Sign, Command::FillSign, true),
     Row::Heading("Pages"),
@@ -110,7 +111,7 @@ const ROWS: &[Row] = &[
         true,
     ),
     Row::Heading("Protéger"),
-    Row::Tool("Biffer", Icon::Redact, Command::MarkRedaction, true),
+    Row::Tool("Biffer", Icon::Redact, Command::RedactTool, true),
     Row::Tool(
         "Appliquer les biffures",
         Icon::RedactApply,
@@ -335,10 +336,10 @@ mod tests {
         assert_eq!(panel.click(PAD + 2.0, 1.0, info), None);
         // Le premier outil est juste dessous.
         let premier = PAD + HEADING + ROW / 2.0;
-        assert_eq!(panel.click(premier, 1.0, info), Some(Command::EditText));
+        assert_eq!(panel.click(premier, 1.0, info), Some(Command::EditPdf));
         // Le deuxième suit.
         let second = premier + ROW;
-        assert_eq!(panel.click(second, 1.0, info), Some(Command::EditObjects));
+        assert_eq!(panel.click(second, 1.0, info), Some(Command::AddTextBox));
     }
 
     #[test]
@@ -360,7 +361,7 @@ mod tests {
             active: None,
         };
         let premier = (PAD + HEADING + ROW / 2.0) * 1.5;
-        assert_eq!(panel.click(premier, 1.5, info), Some(Command::EditText));
+        assert_eq!(panel.click(premier, 1.5, info), Some(Command::EditPdf));
     }
 
     #[test]
@@ -384,7 +385,7 @@ mod tests {
         assert!(!panel.scroll(100.0, ToolsPanel::content_height() + 50.0, 1.0));
         // Zone courte : on peut descendre, mais pas au-delà du contenu.
         let courte = 200.0;
-        assert!(panel.scroll(500.0, courte, 1.0));
+        assert!(panel.scroll(10_000.0, courte, 1.0));
         let max = ToolsPanel::content_height() - courte;
         assert!((panel.scroll - max).abs() < 1e-6, "{}", panel.scroll);
         assert!(!panel.scroll(100.0, courte, 1.0), "déjà en bas");

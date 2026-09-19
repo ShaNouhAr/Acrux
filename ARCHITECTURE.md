@@ -256,6 +256,13 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   RSA, chaîne de certificats, couverture de tout le fichier, modifications postérieures
   — et `signature/sign` pose une signature par mise à jour incrémentale en réservant le
   `/Contents` puis en écrivant le `/ByteRange` à largeur fixe, sans décaler un octet).
+- `edit_text` pour l'édition en direct : `text_units` découpe la page en **blocs d'un seul tenant**
+  (morceaux de lignes empilés dans une même colonne) — un paragraphe qui enjambe deux colonnes ou
+  une ligne « titre … date » en font plusieurs ; `open_paragraph` relève la boîte d'un bloc (figée
+  pendant toute l'édition, sans quoi elle rétrécirait d'un mot à chaque frappe) et la position de
+  chaque caractère sur le dessin d'origine ; `set_paragraph_text` recompose en respectant les
+  retours à la ligne tapés, retrouve le bloc par sa boîte **et** par le texte qu'il porte, et refuse
+  s'il s'est mêlé à un voisin ; `new_text_frame` prépare une zone neuve sans rien écrire.
 - `media` : multimédia (§13.2, §13.3, §13.7) — retrouve les vidéos et les sons derrière les
   annotations `/Screen`, `/RichMedia`, `/Movie` et `/Sound`, en descendant action → rendition →
   clip → spécification de fichier, et en extrait les octets. Le `/Sound` fait exception : il ne
@@ -316,6 +323,15 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   `Command`, la même que la palette et le clavier, si bien qu'un outil ne peut pas faire autre
   chose ici qu'ailleurs. Elle s'efface d'elle-même quand la fenêtre devient trop étroite pour
   laisser la place de lire.
+- `ui/editpdf` et `viewer/editmode` : **mode « Modifier le PDF »**. `editpdf` tient ce qui ne dépend
+  pas du document — la saisie (`Buffer` : texte, curseur, sélection, en indices de caractères) et
+  la barre du mode ; `editmode` le relie au document. Une frappe : la saisie change, le moteur
+  recompose le bloc (`set_paragraph_text`) et rend la position de chaque caractère **tel qu'il
+  vient d'être écrit**, la page est rendue tout de suite sur ce fil (attendre le fil de rendu
+  montrerait une page blanche entre deux lettres), et l'historique garde une seule opération par
+  bloc, mise à jour à chaque frappe.
+- `ui/modebar` : barre fine d'un outil d'annotation en cours — son nom, sa consigne, « Terminer ».
+  Un outil qui change ce que fait un clic sur la page doit le dire.
 - `ui/objects` : outil « modifier » — boîte de sélection, huit poignées, redimensionnement sans
   retournement, proportions gardées avec Maj ; la conversion page ↔ vue reste au viewer, qui seul
   connaît le zoom et le défilement.

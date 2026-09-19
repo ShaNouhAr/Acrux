@@ -524,6 +524,21 @@ fn find_system_font(base_font: &str, missing: &[char]) -> Option<TrueTypeFont> {
 }
 
 /// Police standard la plus proche (§9.6.2.2), ajoutée aux ressources.
+/// Ajoute (ou retrouve) une des quatorze polices standard dans les
+/// ressources de la page, et rend son nom de ressource.
+///
+/// # Errors
+/// Page non indirecte.
+pub(crate) fn standard_font(
+    doc: &Document,
+    page: &Page,
+    family: &str,
+    bold: bool,
+    italic: bool,
+) -> Result<Name> {
+    standard(doc, page, family, bold, italic).map(|p| p.resource)
+}
+
 fn standard(
     doc: &Document,
     page: &Page,

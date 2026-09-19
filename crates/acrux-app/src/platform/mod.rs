@@ -341,6 +341,8 @@ pub trait WindowHandle {
     fn set_cursor(&mut self, cursor: Cursor);
     /// Place du texte dans le presse-papiers du système.
     fn set_clipboard_text(&mut self, text: &str);
+    /// Texte du presse-papiers du système, s'il en contient.
+    fn clipboard_text(&mut self) -> Option<String>;
     /// Ouvre une adresse `http(s)`/`mailto` dans l'application par défaut.
     /// Les autres schémas sont refusés par la plateforme.
     fn open_url(&mut self, url: &str);

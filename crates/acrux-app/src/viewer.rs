@@ -61,6 +61,11 @@ use crate::ui::tools::{ToolsInfo, ToolsPanel};
 use crate::ui::video::{self as video_ui, Box2, Hit as VideoHit};
 use acrux_features::edit_objects::{self, Edit as ObjectEdit, PageObject};
 
+mod editmode;
+use crate::ui::editpdf::EditTool;
+use crate::ui::modebar::ModeBar;
+use editmode::EditMode;
+
 /// Rectangle semi-transparent (alpha 0..255) composé sur le tampon.
 // Position, taille, couleur, alpha : primitive de dessin à coordonnées courtes.
 #[allow(clippy::too_many_arguments, clippy::many_single_char_names)]
@@ -285,6 +290,44 @@ const PANEL_WIDTH: u32 = 240;
 /// Largeur minimale laissée à la page, en pixels logiques. En deçà, la barre
 /// des outils s'efface.
 const MIN_PAGE_WIDTH: u32 = 420;
+/// Outil d'annotation en cours : on agit directement sur la page, sans
+/// sélectionner d'abord.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AnnotTool {
+    /// Glisser sur du texte le surligne.
+    Highlight,
+    /// Un clic pose une note.
+    Note,
+    /// Glisser sur du texte le marque pour biffure.
+    Redact,
+}
+
+impl AnnotTool {
+    /// Nom et consigne affichés dans la barre de l'outil.
+    fn describe(self) -> (&'static str, &'static str) {
+        match self {
+            AnnotTool::Highlight => ("Surligner", "Faites glisser sur le texte à surligner."),
+            AnnotTool::Note => (
+                "Poser une note",
+                "Cliquez sur la page, à l'endroit de la note.",
+            ),
+            AnnotTool::Redact => (
+                "Biffer",
+                "Faites glisser sur le texte à biffer, puis « Appliquer les biffures ».",
+            ),
+        }
+    }
+
+    /// Commande de la colonne d'outils qui l'allume.
+    fn command(self) -> Command {
+        match self {
+            AnnotTool::Highlight => Command::HighlightTool,
+            AnnotTool::Note => Command::NoteTool,
+            AnnotTool::Redact => Command::RedactTool,
+        }
+    }
+}
+
 /// Paliers de zoom.
 const ZOOM_STEPS: [f64; 16] = [
     0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 6.0,
@@ -606,6 +649,12 @@ pub struct Viewer {
     fullscreen: bool,
     /// Champ de formulaire ayant le focus clavier (indice dans `fields`).
     focus_field: Option<usize>,
+    /// Mode « Modifier le PDF », quand il est actif.
+    edit: Option<EditMode>,
+    /// Outil d'annotation en cours.
+    annot_tool: Option<AnnotTool>,
+    /// Barre de l'outil d'annotation.
+    mode_bar: ModeBar,
     /// Barre des outils, à droite, affichée.
     tools_open: bool,
     /// Barre des outils.
@@ -664,6 +713,9 @@ impl Viewer {
             },
             zoom: prefs.zoom,
             fit: prefs.fit,
+            edit: None,
+            annot_tool: None,
+            mode_bar: ModeBar::default(),
             tools_open: prefs.tools_open,
             tools: ToolsPanel::new(),
             panel_open: prefs.panel_open,
@@ -2231,6 +2283,56 @@ impl Viewer {
         Toolbar::height(&self.theme, self.dpi_scale as f32) as u32
             + self.tabs_height()
             + self.sign_height()
+            + self.edit_bar_height()
+            + self.mode_bar_height()
+    }
+
+    /// Hauteur de la barre d'un outil d'annotation.
+    fn mode_bar_height(&self) -> u32 {
+        if self.annot_tool.is_some() && !self.fullscreen && !self.reading {
+            ModeBar::height(self.dpi_scale as f32).max(0) as u32
+        } else {
+            0
+        }
+    }
+
+    /// Allume un outil d'annotation, ou l'éteint s'il l'était déjà.
+    fn toggle_annot_tool(&mut self, tool: AnnotTool, window: &mut dyn WindowHandle) {
+        if self.loaded.is_none() {
+            return;
+        }
+        if self.annot_tool == Some(tool) {
+            self.annot_tool = None;
+            window.request_redraw();
+            return;
+        }
+        // Un seul outil à la fois.
+        self.edit = None;
+        self.sign_bar = None;
+        self.objects = None;
+        self.annot_tool = Some(tool);
+        // Du texte déjà sélectionné est traité tout de suite : choisir
+        // « surligner » après avoir sélectionné fait ce qu'on attend.
+        self.apply_annot_tool(window);
+        window.request_redraw();
+    }
+
+    /// Applique l'outil courant à la sélection, s'il y en a une.
+    fn apply_annot_tool(&mut self, window: &mut dyn WindowHandle) {
+        if self.selection.is_none_or(|s| s.is_empty()) {
+            return;
+        }
+        match self.annot_tool {
+            Some(AnnotTool::Highlight) => {
+                self.highlight_selection(window);
+                self.selection = None;
+            }
+            Some(AnnotTool::Redact) => {
+                self.mark_redaction(window);
+                self.selection = None;
+            }
+            _ => {}
+        }
     }
 
     /// Hauteur de la barre « remplir et signer », nulle quand l'outil dort.
@@ -2411,7 +2513,14 @@ impl Viewer {
             has_document: self.loaded.is_some(),
             // Les deux outils qui restent ouverts se signalent comme tels :
             // sans cela, rien ne dirait lequel est en cours.
-            active: if self.sign_bar.is_some() {
+            active: if let Some(tool) = self.annot_tool {
+                Some(tool.command())
+            } else if let Some(tool) = self.edit_tool() {
+                Some(match tool {
+                    EditTool::Select => Command::EditPdf,
+                    EditTool::AddText => Command::AddTextBox,
+                })
+            } else if self.sign_bar.is_some() {
                 Some(Command::FillSign)
             } else if self.objects.is_some() {
                 Some(Command::EditObjects)
@@ -2801,6 +2910,17 @@ impl Viewer {
             Command::Undo => self.undo(window),
             Command::Redo => self.redo_edit(window),
             Command::EditText => self.start_text_edit(window),
+            Command::EditPdf => {
+                self.annot_tool = None;
+                self.enter_edit(EditTool::Select, window);
+            }
+            Command::HighlightTool => self.toggle_annot_tool(AnnotTool::Highlight, window),
+            Command::NoteTool => self.toggle_annot_tool(AnnotTool::Note, window),
+            Command::RedactTool => self.toggle_annot_tool(AnnotTool::Redact, window),
+            Command::AddTextBox => {
+                self.annot_tool = None;
+                self.enter_edit(EditTool::AddText, window);
+            }
             Command::Highlight => self.highlight_selection(window),
             Command::Note => self.start_note(),
             Command::CheckUpdates => self.install_update(window),
@@ -2850,6 +2970,12 @@ impl Viewer {
     /// une (elles ne sont pas toutes inversibles), le document est rechargé
     /// puis l'historique conservé est réappliqué.
     fn replay(&mut self, ops: Vec<EditOp>, redo: Vec<EditOp>, window: &mut dyn WindowHandle) {
+        // La saisie en cours désigne un état du document qui va disparaître :
+        // elle se referme, le mode reste ouvert.
+        if let Some(mode) = &mut self.edit {
+            mode.active = None;
+            mode.units.clear();
+        }
         let Some(l) = &self.loaded else { return };
         let (path, password) = (l.path.clone(), l.password.clone());
         let (scroll_x, scroll_y, anchor) = (self.scroll_x, self.scroll_y, self.anchor);
@@ -3369,6 +3495,8 @@ impl Viewer {
 
     /// Remet le document actif dans la liste et en active un autre.
     fn select_tab(&mut self, index: usize) {
+        self.edit = None;
+        self.annot_tool = None;
         if index == self.active_tab || index >= self.tab_count() {
             return;
         }
@@ -3798,6 +3926,8 @@ impl Viewer {
 
     /// Ouvre ou ferme l'outil « modifier ».
     fn toggle_objects(&mut self, window: &mut dyn WindowHandle) {
+        self.edit = None;
+        self.annot_tool = None;
         if self.objects.is_some() {
             self.objects = None;
             self.set_notice("modification des objets : terminé".into());
@@ -4096,6 +4226,8 @@ impl Viewer {
         if self.loaded.is_none() {
             return;
         }
+        self.edit = None;
+        self.annot_tool = None;
         if self.sign_bar.is_some() {
             self.sign_bar = None;
             self.capture = None;
@@ -4625,7 +4757,12 @@ impl App for Viewer {
                 // info-bulle à faire apparaître et sans média en train de
                 // jouer ne mérite pas de repeindre.
                 let results = self.collect_results();
-                if !results && !self.search_scanning() && !self.tip_due() && !self.media_playing() {
+                if !results
+                    && !self.search_scanning()
+                    && !self.tip_due()
+                    && !self.media_playing()
+                    && !self.edit_on()
+                {
                     return;
                 }
             }
@@ -4667,6 +4804,16 @@ impl App for Viewer {
                         self.run_command(c, window);
                     }
                 }
+            }
+            Event::Key(Key::Escape, _)
+                if self.annot_tool.is_some() && self.prompt.is_none() && self.palette.is_none() =>
+            {
+                self.annot_tool = None;
+            }
+            Event::Key(key, m)
+                if self.edit_on() && self.prompt.is_none() && self.edit_key(key, m, window) => {}
+            Event::Char(c, m)
+                if self.editing_text() && self.prompt.is_none() && self.edit_char(c, m, window) => {
             }
             Event::Key(key, _)
                 if self.objects.is_some()
@@ -4802,6 +4949,7 @@ impl App for Viewer {
                                 self.print(window);
                             }
                         }
+                        'e' | 'E' if m.shift => self.enter_edit(EditTool::Select, window),
                         'e' | 'E' => self.export(window),
                         'i' | 'I' => self.insert_pages(window),
                         'c' | 'C' => {
@@ -4891,6 +5039,15 @@ impl App for Viewer {
                             TabAction::None => {}
                         }
                     }
+                } else if y < top && self.annot_tool.is_some() && !self.edit_on() {
+                    if self.mode_bar.closes(x, y) {
+                        self.annot_tool = None;
+                    }
+                } else if y < top && self.edit_on() {
+                    // Barre du mode « Modifier le PDF ».
+                    if self.prompt.is_none() {
+                        self.edit_bar_click(x, y, window);
+                    }
                 } else if y < top {
                     // Barre « remplir et signer ».
                     if self.prompt.is_none() {
@@ -4945,7 +5102,12 @@ impl App for Viewer {
                     if self.prompt.is_none() && self.loaded.is_none() {
                         self.click_recent(x, y, window);
                     } else if self.prompt.is_none() && x >= 0 && y < self.view_height() as i32 {
-                        if self.media_mouse_down(x, y, window) {
+                        if self.edit_on() {
+                            self.edit_mouse_down(x, y, clicks, modifiers.shift, window);
+                        } else if self.annot_tool == Some(AnnotTool::Note) {
+                            self.last_mouse = Some((x, y));
+                            self.start_note();
+                        } else if self.media_mouse_down(x, y, window) {
                             // Le média a pris le clic.
                         } else if let Some((_, media)) = self.media_at(x, y) {
                             self.open_media(&media, window);
@@ -4998,6 +5160,7 @@ impl App for Viewer {
                 self.sign_action(action, window);
             }
             Event::MouseUp { .. } => {
+                self.edit_mouse_up();
                 if self.panel.dragging() {
                     let action = self.panel.mouse_up();
                     self.panel_action(action, window);
@@ -5005,9 +5168,13 @@ impl App for Viewer {
                     let _ = self.panel.mouse_up();
                 }
                 self.drag_last = None;
+                let was_selecting = self.sel_dragging;
                 self.sel_dragging = false;
                 if self.selection.is_some_and(|s| s.is_empty()) {
                     self.selection = None;
+                }
+                if was_selecting {
+                    self.apply_annot_tool(window);
                 }
             }
             Event::MouseMove { x, y, dragging } => {
@@ -5047,6 +5214,13 @@ impl App for Viewer {
                 }
                 let (x, y) = (x - self.view_left() as i32, y - self.view_top() as i32);
                 self.last_mouse = (x >= 0 && y >= 0).then_some((x, y));
+                if self.edit_on() && self.prompt.is_none() && self.drag_last.is_none() {
+                    self.edit_mouse_move(x, y, dragging, window);
+                    if hover_changed {
+                        window.request_redraw();
+                    }
+                    return;
+                }
                 if self.sel_dragging && dragging {
                     if let Some((pos, _)) = self.text_pos_at(x, y) {
                         if let Some(sel) = &mut self.selection {
@@ -5136,6 +5310,7 @@ impl App for Viewer {
                 self.paint_welcome(&mut view);
             }
             self.paint_selection(&mut view);
+            self.paint_edit(&mut view);
             self.paint_objects(&mut view);
             self.paint_media(&mut view);
             self.paint_field_focus(&mut view);
@@ -5160,6 +5335,21 @@ impl App for Viewer {
             self.paint_toolbar(frame);
             self.paint_tabs(frame);
             self.paint_sign_bar(frame);
+            if self.edit_on() {
+                self.paint_edit_bar(frame);
+            }
+            if let Some(tool) = self.annot_tool {
+                let y = Toolbar::height(&self.theme, self.dpi_scale as f32)
+                    + self.tabs_height() as i32
+                    + self.sign_height() as i32
+                    + self.edit_bar_height() as i32;
+                let (title, hint) = tool.describe();
+                let (theme, dpi) = (self.theme, self.dpi_scale as f32);
+                if let Some(text) = self.text.as_mut() {
+                    self.mode_bar
+                        .paint(frame, text, &theme, dpi, y, title, hint);
+                }
+            }
             self.paint_status(frame);
         }
         self.paint_capture(frame);

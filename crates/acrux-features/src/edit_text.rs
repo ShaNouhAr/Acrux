@@ -79,7 +79,11 @@ use acrux_render::page::page_content;
 
 use crate::text::{extract_page_text, Glyph, PageText};
 
-pub use reflow::{reflow_paragraph, ReflowOptions};
+pub use reflow::{
+    new_text_frame, normalized, open_paragraph, reflow_paragraph, set_paragraph_text, text_units,
+    CaretLine, CaretMap, CaretStop, OpenedParagraph, ParagraphFrame, Piece, ReflowOptions,
+    TextUnit,
+};
 
 use scan::{Scan, ScannedOp, TextSnapshot};
 

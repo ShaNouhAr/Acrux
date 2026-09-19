@@ -54,6 +54,8 @@ pub enum Icon {
     Tools,
     /// Crayon (modifier le texte).
     EditText,
+    /// Un T dans un cadre (ajouter une zone de texte).
+    AddText,
     /// Rectangle à poignées (modifier les objets).
     Objects,
     /// Paraphe sur une ligne (remplir et signer).
@@ -247,6 +249,20 @@ pub fn geometry(icon: Icon) -> (Path, Path) {
                 ],
             );
             polyline(&mut lines, &[(13.5, 7.0), (17.0, 10.5)]);
+        }
+        Icon::AddText => {
+            // Cadre en pointillé : quatre coins seulement, comme une zone
+            // qu'on vient de tracer.
+            for (a, b, c) in [
+                ((3.5, 7.5), (3.5, 3.5), (7.5, 3.5)),
+                ((16.5, 3.5), (20.5, 3.5), (20.5, 7.5)),
+                ((20.5, 16.5), (20.5, 20.5), (16.5, 20.5)),
+                ((7.5, 20.5), (3.5, 20.5), (3.5, 16.5)),
+            ] {
+                polyline(&mut lines, &[a, b, c]);
+            }
+            polyline(&mut lines, &[(8.0, 8.0), (16.0, 8.0)]);
+            polyline(&mut lines, &[(12.0, 8.0), (12.0, 17.0)]);
         }
         Icon::Objects => {
             page(&mut lines, 6.0, 6.5, 12.0, 11.0);

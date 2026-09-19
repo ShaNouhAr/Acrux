@@ -101,8 +101,18 @@ pub enum Command {
     Redo,
     /// Modifier le texte sélectionné.
     EditText,
+    /// Mode « Modifier le PDF » : tout le texte devient éditable.
+    EditPdf,
+    /// Poser une zone de texte neuve.
+    AddTextBox,
     /// Surligner la sélection.
     Highlight,
+    /// Outil « surligner » : on glisse sur le texte, il se surligne.
+    HighlightTool,
+    /// Outil « note » : un clic sur la page pose une note.
+    NoteTool,
+    /// Outil « biffer » : on glisse sur le texte, il est marqué.
+    RedactTool,
     /// Poser une note.
     Note,
     /// Chercher une version plus récente.
@@ -409,10 +419,45 @@ const ENTRIES: &[Entry] = &[
         needs_document: true,
     },
     Entry {
+        label: "Modifier le PDF",
+        shortcut: "Ctrl+Maj+E",
+        keywords: "editer edition modifier texte corriger paragraphe acrobat",
+        command: Command::EditPdf,
+        needs_document: true,
+    },
+    Entry {
+        label: "Ajouter du texte",
+        shortcut: "",
+        keywords: "zone texte ajouter ecrire inserer boite",
+        command: Command::AddTextBox,
+        needs_document: true,
+    },
+    Entry {
         label: "Surligner la sélection",
         shortcut: "H",
         keywords: "surlignage annotation marqueur couleur",
         command: Command::Highlight,
+        needs_document: true,
+    },
+    Entry {
+        label: "Outil surligneur",
+        shortcut: "",
+        keywords: "surligner surligneur marquer fluo outil",
+        command: Command::HighlightTool,
+        needs_document: true,
+    },
+    Entry {
+        label: "Outil note",
+        shortcut: "",
+        keywords: "note commentaire bulle poser outil",
+        command: Command::NoteTool,
+        needs_document: true,
+    },
+    Entry {
+        label: "Outil biffure",
+        shortcut: "",
+        keywords: "biffer caviarder masquer noircir outil",
+        command: Command::RedactTool,
         needs_document: true,
     },
     Entry {
