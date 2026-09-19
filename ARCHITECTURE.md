@@ -340,6 +340,10 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   question ne bloque rien : elle est posée, et l'action attend la réponse (`Then`). Les boutons
   nomment ce qu'ils font (« Enregistrer », « Ne pas enregistrer »), ce qu'un « Oui / Non » du
   système ne permet pas. Tant qu'une fenêtre est ouverte, elle reçoit seule le clavier et la souris.
+- La **décoration de la fenêtre** suit le thème : `WindowHandle::set_frame_theme` demande le mode
+  sombre (`DWMWA_USE_IMMERSIVE_DARK_MODE`) puis, quand le système sait les prendre, la couleur
+  exacte de la barre de titre, de son texte et de la bordure. Les attributs inconnus d'un système
+  plus ancien sont refusés sans dommage : on demande, on ne teste pas la version.
 - `ui/cursors` : **pointeurs dessinés** (ajouter du texte, surligneur, note, biffure, déplacement),
   décrits sur une grille de 32 × 32 et rasterisés à la taille des pointeurs du système ; `platform`
   les confie au système (`CreateIconIndirect` sous Windows).

@@ -371,6 +371,15 @@ pub trait WindowHandle {
     /// Passe la fenêtre en plein écran (sans bordure, sur tout le moniteur)
     /// ou la restaure.
     fn set_fullscreen(&mut self, on: bool);
+    /// Accorde la décoration de la fenêtre (barre de titre, bordure) au
+    /// thème de l'application : sombre ou clair, et les couleurs exactes si
+    /// le système sait les prendre.
+    ///
+    /// Sans cela, une application sombre garde une barre de titre blanche
+    /// collée en haut, et l'illusion tombe.
+    fn set_frame_theme(&mut self, dark: bool, caption: (u8, u8, u8), text: (u8, u8, u8)) {
+        let _ = (dark, caption, text);
+    }
 }
 
 /// Application pilotée par la plateforme.

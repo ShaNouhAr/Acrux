@@ -7,6 +7,17 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
+## 0.7.1 — 20 septembre 2026
+
+### Corrections
+
+- **« Refaire » et « Retirer » répondent enfin** : les deux boutons sont posés
+  sur la carte de la signature, qui couvre toute la largeur du panneau ; c'est
+  elle qui prenait le clic. Le dernier élément dessiné l'emporte désormais.
+- **La fenêtre suit le thème** : la barre de titre, son texte et la bordure
+  prennent les couleurs de l'application — plus de bandeau blanc au-dessus
+  d'une interface sombre. Le basculement de thème (T) les change aussi.
+
 ## 0.7.0 — 19 septembre 2026
 
 Voir ce qu'on signe, et voir ce qu'on ouvre.

@@ -643,6 +643,8 @@ pub struct Viewer {
     welcome_thumbs: HashMap<PathBuf, Option<Bitmap>>,
     /// Zone du bouton « Ouvrir un document ».
     welcome_open: Option<(i32, i32, i32, i32)>,
+    /// La décoration de la fenêtre a déjà été accordée au thème.
+    frame_themed: bool,
     /// Place de la signature qu'on est en train de refaire, s'il y en a une.
     replacing: Option<usize>,
     /// Tracé au stylo en cours, en coordonnées de page.
@@ -776,6 +778,7 @@ impl Viewer {
             sign_panel: None,
             welcome_thumbs: HashMap::new(),
             welcome_open: None,
+            frame_themed: false,
             replacing: None,
             inking: None,
             capture: None,
@@ -3041,7 +3044,7 @@ impl Viewer {
                 let info = self.toolbar_info();
                 self.toolbar.focus_page(&info);
             }
-            Command::ToggleTheme => self.toggle_theme(),
+            Command::ToggleTheme => self.toggle_theme(window),
             Command::Search => self.open_search(),
             Command::Copy => {
                 let text = self.selected_text();
@@ -3317,14 +3320,23 @@ impl Viewer {
         }
     }
 
-    fn toggle_theme(&mut self) {
+    fn toggle_theme(&mut self, window: &mut dyn WindowHandle) {
         self.theme = if self.theme.canvas == Theme::dark().canvas {
             Theme::light()
         } else {
             Theme::dark()
         };
+        self.apply_frame_theme(window);
         self.save_prefs();
         log_line(&format!("thème basculé : canvas {:?}", self.theme.canvas));
+    }
+
+    /// Accorde la barre de titre du système au thème.
+    fn apply_frame_theme(&self, window: &mut dyn WindowHandle) {
+        let dark = self.theme.canvas == Theme::dark().canvas;
+        // La barre de titre prolonge la barre d'outils : même couleur, même
+        // texte. C'est ce qui fait que la fenêtre a l'air d'une seule pièce.
+        window.set_frame_theme(dark, self.theme.bar, self.theme.text);
     }
 
     /// Exécute une action de la barre d'outils.
@@ -3351,7 +3363,7 @@ impl Viewer {
             // lourde à ouvrir qu'un clic de plus.
             ToolAction::FitWidth => self.set_fit(self.fit.next()),
             ToolAction::Search => self.open_search(),
-            ToolAction::ToggleTheme => self.toggle_theme(),
+            ToolAction::ToggleTheme => self.toggle_theme(window),
             ToolAction::TogglePanel => self.toggle_panel(),
             ToolAction::ToggleTools => self.run_command(Command::ToggleTools, window),
             ToolAction::RotatePage => self.rotate_current(90),
@@ -5147,6 +5159,10 @@ impl App for Viewer {
                 self.check_updates(false, window);
             }
         }
+        if !self.frame_themed {
+            self.frame_themed = true;
+            self.apply_frame_theme(window);
+        }
         log_event(&event);
         if self.dialog_event(&event, window) {
             if self.title_dirty {
@@ -5405,7 +5421,7 @@ impl App for Viewer {
                         '-' => self.zoom_step(-1),
                         'f' | 'F' => self.set_fit(Fit::Width),
                         '1' => self.set_zoom(1.0),
-                        't' | 'T' => self.toggle_theme(),
+                        't' | 'T' => self.toggle_theme(window),
                         'r' => self.rotate_current(90),
                         'R' => self.rotate_current(-90),
                         ' ' => self.activate_focused_field(),

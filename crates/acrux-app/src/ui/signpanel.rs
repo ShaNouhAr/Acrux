@@ -107,9 +107,13 @@ impl SignPanel {
 
     /// Action sous un point, s'il y en a une.
     #[must_use]
+    /// Le **dernier** dessiné l'emporte : « Refaire » et « Retirer » sont
+    /// posés sur la carte de la signature, qui couvre toute la largeur — les
+    /// chercher dans l'ordre du dessin rendrait ces boutons inatteignables.
     pub fn action_at(&self, x: i32, y: i32) -> Option<Action> {
         self.hits
             .iter()
+            .rev()
             .find(|&&(bx, by, bw, bh, _)| x >= bx && x < bx + bw && y >= by && y < by + bh)
             .map(|(_, _, _, _, action)| action.clone())
     }
@@ -665,5 +669,18 @@ mod tests {
         assert!((p.scroll - 500.0).abs() < 0.01, "on ne dépasse pas le bas");
         p.wheel(9_000.0, 400.0);
         assert!(p.scroll.abs() < 0.01, "ni le haut");
+    }
+
+    #[test]
+    fn refaire_et_retirer_passent_devant_la_carte() {
+        // La carte couvre toute la largeur ; ses deux boutons sont posés
+        // dessus. Un clic dessus doit les atteindre, pas la carte.
+        let mut p = SignPanel::default();
+        p.hits.push((0, 0, 200, 80, Action::Use(0, false)));
+        p.hits.push((150, 8, 46, 24, Action::Edit(0, false)));
+        p.hits.push((150, 40, 46, 24, Action::Delete(0, false)));
+        assert_eq!(p.action_at(160, 16), Some(Action::Edit(0, false)));
+        assert_eq!(p.action_at(160, 48), Some(Action::Delete(0, false)));
+        assert_eq!(p.action_at(20, 40), Some(Action::Use(0, false)));
     }
 }

@@ -367,6 +367,16 @@ impl super::Waker for Win32Waker {
     }
 }
 
+#[link(name = "dwmapi")]
+extern "system" {
+    fn DwmSetWindowAttribute(
+        hwnd: HWND,
+        attribute: DWORD,
+        value: *const c_void,
+        size: DWORD,
+    ) -> i32;
+}
+
 #[link(name = "gdi32")]
 extern "system" {
     fn CreateBitmap(
@@ -569,6 +579,10 @@ struct Handle<'a> {
     state: &'a mut WindowStateActions,
 }
 
+/// Thème demandé pour la décoration : sombre, couleur de barre, couleur du
+/// texte.
+type FrameTheme = (bool, (u8, u8, u8), (u8, u8, u8));
+
 /// Actions différées (appliquées après le retour de l'application, pour ne
 /// pas réentrer dans user32 pendant qu'on emprunte l'état).
 #[derive(Default)]
@@ -581,6 +595,7 @@ struct WindowStateActions {
     clipboard: Option<String>,
     url: Option<String>,
     fullscreen: Option<bool>,
+    frame_theme: Option<FrameTheme>,
 }
 
 impl WindowHandle for Handle<'_> {
@@ -694,6 +709,10 @@ impl WindowHandle for Handle<'_> {
 
     fn set_fullscreen(&mut self, on: bool) {
         self.state.fullscreen = Some(on);
+    }
+
+    fn set_frame_theme(&mut self, dark: bool, caption: (u8, u8, u8), text: (u8, u8, u8)) {
+        self.state.frame_theme = Some((dark, caption, text));
     }
 
     fn waker(&self) -> Box<dyn super::Waker> {
@@ -1120,6 +1139,9 @@ fn deliver(state: &mut WindowState, event: Event) {
     if let Some(u) = actions.url {
         open_url(state.hwnd, &u);
     }
+    if let Some((dark, caption, text)) = actions.frame_theme {
+        apply_frame_theme(state.hwnd, dark, caption, text);
+    }
     if let Some(on) = actions.fullscreen {
         set_fullscreen(state, on);
     }
@@ -1543,6 +1565,38 @@ fn program_icon(instance: HINSTANCE, metric_x: i32, metric_y: i32) -> HICON {
             LR_SHARED,
         )
         .cast()
+    }
+}
+
+/// Accorde la décoration de la fenêtre au thème de l'application.
+///
+/// Trois attributs, du plus ancien au plus récent : le mode sombre (Windows
+/// 10 1809), puis la couleur exacte de la barre et du texte (Windows 11).
+/// Chacun est refusé sans dommage par les systèmes qui ne le connaissent
+/// pas — on ne teste donc pas la version, on demande et on regarde.
+fn apply_frame_theme(hwnd: HWND, dark: bool, caption: (u8, u8, u8), text: (u8, u8, u8)) {
+    if hwnd.is_null() {
+        return;
+    }
+    let mode: DWORD = DWORD::from(dark);
+    // SAFETY : `hwnd` est la fenêtre de l'application ; chaque attribut reçoit
+    // un pointeur vers une valeur de la taille annoncée, valide pendant
+    // l'appel. Un attribut inconnu du système rend une erreur, sans effet.
+    unsafe {
+        let value = (&raw const mode).cast::<c_void>();
+        // 20 depuis Windows 10 2004 ; 19 sur les versions 1809-1909.
+        if DwmSetWindowAttribute(hwnd, 20, value, 4) != 0 {
+            DwmSetWindowAttribute(hwnd, 19, value, 4);
+        }
+        let colorref = |(r, g, b): (u8, u8, u8)| -> DWORD {
+            DWORD::from(r) | (DWORD::from(g) << 8) | (DWORD::from(b) << 16)
+        };
+        let caption = colorref(caption);
+        DwmSetWindowAttribute(hwnd, 35, (&raw const caption).cast::<c_void>(), 4);
+        let text = colorref(text);
+        DwmSetWindowAttribute(hwnd, 36, (&raw const text).cast::<c_void>(), 4);
+        let border = caption;
+        DwmSetWindowAttribute(hwnd, 34, (&raw const border).cast::<c_void>(), 4);
     }
 }
 
