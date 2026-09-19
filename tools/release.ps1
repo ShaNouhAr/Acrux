@@ -60,8 +60,32 @@ Get-ChildItem $dist -File | Where-Object { $_.Name -ne 'SHA256SUMS.txt' } |
     } | Set-Content -Path $sommes -Encoding ascii
 
 # --- Notes de version -------------------------------------------------------
+# Ce qui change dans cette version vient de CHANGELOG.md : la page de version
+# et le journal disent alors la meme chose, parce que c'est le meme texte.
+$journal = ''
+$chemin = Join-Path $racine 'CHANGELOG.md'
+if (Test-Path $chemin) {
+    $lignes = Get-Content $chemin -Encoding utf8
+    $debut = -1
+    for ($i = 0; $i -lt $lignes.Count; $i++) {
+        if ($lignes[$i] -match "^## $([regex]::Escape($Version))(\s|$)") { $debut = $i + 1; break }
+    }
+    if ($debut -ge 0) {
+        $fin = $lignes.Count
+        for ($i = $debut; $i -lt $lignes.Count; $i++) {
+            if ($lignes[$i] -match '^## ') { $fin = $i; break }
+        }
+        $journal = ($lignes[$debut..($fin - 1)] -join "`n").Trim()
+    }
+}
+if (-not $journal) {
+    Write-Warning "CHANGELOG.md n'a pas de section pour $Version : la page de version sera vide de nouveautes."
+}
+
 $notes = @"
 ## Acrux $Version
+
+$journal
 
 **Installer** : telechargez ``acrux-setup.exe`` et lancez-le. L'installation se
 fait dans votre compte, **sans droits d'administrateur**, et se defait depuis
