@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 362 64" width="362" height="64" role="img" aria-label="Acrux">
+  <title>Acrux</title>
+  <!-- Mot-symbole géométrique : hauteur de capitale 64, graisse 16, les mêmes
+       proportions que la lettre du logo. Aucune police n'est nécessaire, tout
+       est en contours. Les extrémités libres sont coupées en biais. -->
+  <g fill="#17171B">
+    <!-- A -->
+    <path fill-rule="evenodd"
+          d="M27 6 L41 0 L68 64 L0 64 Z
+             M35 23 L27 40 L42 40 Z
+             M21 54 L48 54 L52 64 L16 64 Z"/>
+    <!-- C -->
+    <path d="M82 0 H142 L132 16 H98 V48 H132 L142 64 H82 Z"/>
+    <!-- R -->
+    <path d="M156 0 H172 V64 H156 Z
+             M172 0 H204 L214 12 V44 H198 V16 H172 Z
+             M172 28 H204 V44 H172 Z
+             M184 44 H200 L214 64 H198 Z"/>
+    <!-- U -->
+    <path d="M228 0 H244 V48 H272 V0 H288 V54 L278 64 H238 L228 54 Z"/>
+    <!-- X -->
+    <path d="M302 0 H318 L362 64 H346 Z
+             M346 0 H362 L318 64 H302 Z"/>
+  </g>
+</svg>

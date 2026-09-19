@@ -1,0 +1,826 @@
+//! Palette de commandes : une liste filtrable de tout ce que l'application
+//! sait faire, avec le raccourci de chaque entrée. C'est ce qui rend les
+//! fonctions trouvables sans barre de menus — et c'est aussi la
+//! documentation vivante des raccourcis.
+//!
+//! Le filtrage est « approximatif par sous-séquence » : `bif` trouve
+//! « Biffure : marquer la sélection », `enrs` trouve « Enregistrer sous ».
+//! Les entrées dont le libellé contient la requête d'un seul tenant
+//! remontent en tête.
+
+// Coordonnées d'écran entières.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::many_single_char_names
+)]
+
+use crate::platform::{Frame, Key};
+use crate::ui::input::{InputAction, TextInput};
+use crate::ui::text::TextRenderer;
+use crate::ui::theme::Theme;
+
+/// Une action de l'application, déclenchable depuis la palette.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Command {
+    /// Ouvrir un document.
+    Open,
+    /// Enregistrer.
+    Save,
+    /// Enregistrer sous.
+    SaveAs,
+    /// Imprimer.
+    Print,
+    /// Convertir le document dans un autre format.
+    Export,
+    /// Fermer l'onglet.
+    CloseTab,
+    /// Onglet suivant.
+    NextTab,
+    /// Page précédente.
+    PrevPage,
+    /// Page suivante.
+    NextPage,
+    /// Première page.
+    FirstPage,
+    /// Dernière page.
+    LastPage,
+    /// Zoom avant.
+    ZoomIn,
+    /// Zoom arrière.
+    ZoomOut,
+    /// Zoom 100 %.
+    ZoomReset,
+    /// Ajuster à la largeur.
+    FitWidth,
+    /// Changer la disposition des pages.
+    CycleViewMode,
+    /// Plein écran.
+    Fullscreen,
+    /// Panneau latéral.
+    TogglePanel,
+    /// Panneau latéral sur les calques.
+    ShowLayers,
+    /// Panneau latéral sur les pièces jointes.
+    ShowAttachments,
+    /// Joindre un fichier au document.
+    AddAttachment,
+    /// Saisir un numéro ou une étiquette de page dans la barre d'outils.
+    GoToPage,
+    /// Thème clair / sombre.
+    ToggleTheme,
+    /// Rechercher.
+    Search,
+    /// Copier la sélection.
+    Copy,
+    /// Tout sélectionner.
+    SelectAll,
+    /// Pivoter la page à droite.
+    RotateRight,
+    /// Pivoter la page à gauche.
+    RotateLeft,
+    /// Supprimer la page.
+    DeletePage,
+    /// Insérer les pages d'un autre fichier avant la page courante.
+    InsertPages,
+    /// Dupliquer la page courante.
+    DuplicatePage,
+    /// Enregistrer la page courante dans un nouveau fichier.
+    ExtractPage,
+    /// Annuler.
+    Undo,
+    /// Rétablir.
+    Redo,
+    /// Modifier le texte sélectionné.
+    EditText,
+    /// Surligner la sélection.
+    Highlight,
+    /// Poser une note.
+    Note,
+    /// Chercher une version plus récente.
+    CheckUpdates,
+    /// Ouvrir ou fermer l'outil « modifier les objets ».
+    EditObjects,
+    /// Ouvrir ou fermer l'outil « remplir et signer ».
+    FillSign,
+    /// Marquer la sélection pour biffure.
+    MarkRedaction,
+    /// Appliquer les biffures.
+    ApplyRedactions,
+}
+
+/// Une entrée de la palette.
+struct Entry {
+    label: &'static str,
+    shortcut: &'static str,
+    /// Synonymes sans accent : ce que l'utilisateur tape quand il ne connaît
+    /// pas le libellé exact (« rotation » pour « Pivoter la page »).
+    keywords: &'static str,
+    command: Command,
+    /// Vrai si l'entrée n'a de sens qu'avec un document ouvert.
+    needs_document: bool,
+}
+
+/// Libellé et raccourci d'une commande. La palette est la source unique de
+/// ces textes : les info-bulles de la barre d'outils les reprennent, ce qui
+/// évite qu'un raccourci change ici sans changer là.
+#[must_use]
+pub fn describe(command: Command) -> Option<(&'static str, &'static str)> {
+    ENTRIES
+        .iter()
+        .find(|e| e.command == command)
+        .map(|e| (e.label, e.shortcut))
+}
+
+/// Toutes les commandes, dans l'ordre d'affichage quand rien n'est filtré.
+const ENTRIES: &[Entry] = &[
+    Entry {
+        label: "Ouvrir un document",
+        shortcut: "Ctrl+O",
+        keywords: "fichier parcourir ouverture",
+        command: Command::Open,
+        needs_document: false,
+    },
+    Entry {
+        label: "Enregistrer",
+        shortcut: "Ctrl+S",
+        keywords: "sauvegarder ecrire disque enregistrement",
+        command: Command::Save,
+        needs_document: true,
+    },
+    Entry {
+        label: "Enregistrer sous",
+        shortcut: "Ctrl+Maj+S",
+        keywords: "sauvegarder copie nouveau nom enregistrement",
+        command: Command::SaveAs,
+        needs_document: true,
+    },
+    Entry {
+        label: "Imprimer",
+        shortcut: "Ctrl+P",
+        keywords: "impression papier imprimante",
+        command: Command::Print,
+        needs_document: true,
+    },
+    Entry {
+        label: "Exporter (page web, Word, Excel, images, texte)",
+        shortcut: "Ctrl+E",
+        keywords: "conversion convertir html docx xlsx png jpeg markdown texte",
+        command: Command::Export,
+        needs_document: true,
+    },
+    Entry {
+        label: "Fermer l'onglet",
+        shortcut: "Ctrl+W",
+        keywords: "quitter fermeture document",
+        command: Command::CloseTab,
+        needs_document: true,
+    },
+    Entry {
+        label: "Onglet suivant",
+        shortcut: "Ctrl+Tab",
+        keywords: "changer basculer document",
+        command: Command::NextTab,
+        needs_document: true,
+    },
+    Entry {
+        label: "Page précédente",
+        shortcut: "Ctrl+Page préc.",
+        keywords: "reculer precedent avant haut",
+        command: Command::PrevPage,
+        needs_document: true,
+    },
+    Entry {
+        label: "Page suivante",
+        shortcut: "Ctrl+Page suiv.",
+        keywords: "avancer suivant apres bas",
+        command: Command::NextPage,
+        needs_document: true,
+    },
+    Entry {
+        label: "Première page",
+        shortcut: "Origine",
+        keywords: "debut origine haut commencement",
+        command: Command::FirstPage,
+        needs_document: true,
+    },
+    Entry {
+        label: "Dernière page",
+        shortcut: "Fin",
+        keywords: "fin bas terminer",
+        command: Command::LastPage,
+        needs_document: true,
+    },
+    Entry {
+        label: "Zoom avant",
+        shortcut: "+",
+        keywords: "agrandir grossir loupe plus zoomer",
+        command: Command::ZoomIn,
+        needs_document: true,
+    },
+    Entry {
+        label: "Zoom arrière",
+        shortcut: "-",
+        keywords: "reduire diminuer loupe moins dezoomer",
+        command: Command::ZoomOut,
+        needs_document: true,
+    },
+    Entry {
+        label: "Zoom 100 %",
+        shortcut: "1",
+        keywords: "taille reelle cent reinitialiser",
+        command: Command::ZoomReset,
+        needs_document: true,
+    },
+    Entry {
+        label: "Ajuster à la largeur",
+        shortcut: "F",
+        keywords: "adapter adaptation pleine largeur",
+        command: Command::FitWidth,
+        needs_document: true,
+    },
+    Entry {
+        label: "Disposition des pages",
+        shortcut: "",
+        keywords: "double page continu defilement livre disposition mode",
+        command: Command::CycleViewMode,
+        needs_document: true,
+    },
+    Entry {
+        label: "Plein écran",
+        shortcut: "F11",
+        keywords: "presentation ecran entier diaporama",
+        command: Command::Fullscreen,
+        needs_document: false,
+    },
+    Entry {
+        label: "Panneau latéral (vignettes, signets)",
+        shortcut: "F4",
+        keywords: "vignettes signets sommaire miniatures volet barre",
+        command: Command::TogglePanel,
+        needs_document: true,
+    },
+    Entry {
+        label: "Calques (afficher ou masquer le contenu optionnel)",
+        shortcut: "",
+        keywords: "couches contenu optionnel ocg plan visibilite",
+        command: Command::ShowLayers,
+        needs_document: true,
+    },
+    Entry {
+        label: "Pièces jointes du document",
+        shortcut: "",
+        keywords: "fichiers joints attachements annexes incorpores enregistrer extraire",
+        command: Command::ShowAttachments,
+        needs_document: true,
+    },
+    Entry {
+        label: "Joindre un fichier au document",
+        shortcut: "",
+        keywords: "piece jointe attacher incorporer ajouter annexe fichier",
+        command: Command::AddAttachment,
+        needs_document: true,
+    },
+    Entry {
+        label: "Aller à une page (numéro ou étiquette)",
+        shortcut: "Ctrl+G",
+        keywords: "atteindre saut numero etiquette folio romain i ii iii annexe",
+        command: Command::GoToPage,
+        needs_document: true,
+    },
+    Entry {
+        label: "Thème clair / sombre",
+        shortcut: "T",
+        keywords: "nuit jour sombre clair couleurs apparence",
+        command: Command::ToggleTheme,
+        needs_document: false,
+    },
+    Entry {
+        label: "Rechercher dans le document",
+        shortcut: "Ctrl+F",
+        keywords: "trouver chercher recherche texte occurrences",
+        command: Command::Search,
+        needs_document: true,
+    },
+    Entry {
+        label: "Copier la sélection",
+        shortcut: "Ctrl+C",
+        keywords: "presse papiers copie duplication",
+        command: Command::Copy,
+        needs_document: true,
+    },
+    Entry {
+        label: "Tout sélectionner",
+        shortcut: "Ctrl+A",
+        keywords: "selection totale integralite",
+        command: Command::SelectAll,
+        needs_document: true,
+    },
+    Entry {
+        label: "Pivoter la page à droite",
+        shortcut: "R",
+        keywords: "rotation tourner orientation horaire pivotement",
+        command: Command::RotateRight,
+        needs_document: true,
+    },
+    Entry {
+        label: "Pivoter la page à gauche",
+        shortcut: "Maj+R",
+        keywords: "rotation tourner orientation antihoraire pivotement",
+        command: Command::RotateLeft,
+        needs_document: true,
+    },
+    Entry {
+        label: "Supprimer la page",
+        shortcut: "Ctrl+Suppr",
+        keywords: "effacer retirer enlever suppression",
+        command: Command::DeletePage,
+        needs_document: true,
+    },
+    Entry {
+        label: "Insérer les pages d'un fichier",
+        shortcut: "Ctrl+I",
+        keywords: "ajouter importer fusionner coller document",
+        command: Command::InsertPages,
+        needs_document: true,
+    },
+    Entry {
+        label: "Dupliquer la page",
+        shortcut: "",
+        keywords: "copier doubler repeter",
+        command: Command::DuplicatePage,
+        needs_document: true,
+    },
+    Entry {
+        label: "Extraire la page dans un fichier",
+        shortcut: "",
+        keywords: "exporter isoler separer decouper",
+        command: Command::ExtractPage,
+        needs_document: true,
+    },
+    Entry {
+        label: "Annuler",
+        shortcut: "Ctrl+Z",
+        keywords: "revenir defaire annulation historique",
+        command: Command::Undo,
+        needs_document: true,
+    },
+    Entry {
+        label: "Rétablir",
+        shortcut: "Ctrl+Y",
+        keywords: "refaire retablissement historique",
+        command: Command::Redo,
+        needs_document: true,
+    },
+    Entry {
+        label: "Modifier le texte sélectionné",
+        shortcut: "E",
+        keywords: "corriger remplacer retoucher saisir mot phrase",
+        command: Command::EditText,
+        needs_document: true,
+    },
+    Entry {
+        label: "Surligner la sélection",
+        shortcut: "H",
+        keywords: "surlignage annotation marqueur couleur",
+        command: Command::Highlight,
+        needs_document: true,
+    },
+    Entry {
+        label: "Poser une note",
+        shortcut: "N",
+        keywords: "commentaire annotation bulle remarque",
+        command: Command::Note,
+        needs_document: true,
+    },
+    Entry {
+        label: "Rechercher les mises à jour",
+        shortcut: "",
+        keywords: "version nouvelle telecharger installer maj update",
+        command: Command::CheckUpdates,
+        needs_document: false,
+    },
+    Entry {
+        label: "Modifier : objets de la page",
+        shortcut: "O",
+        keywords: "image deplacer redimensionner recadrer ordre supprimer objet dessin logo",
+        command: Command::EditObjects,
+        needs_document: true,
+    },
+    Entry {
+        label: "Remplir et signer",
+        shortcut: "S",
+        keywords: "signature signer parapher initiales coche croix formulaire manuscrite",
+        command: Command::FillSign,
+        needs_document: true,
+    },
+    Entry {
+        label: "Biffure : marquer la sélection",
+        shortcut: "M",
+        keywords: "caviarder censurer masquer confidentiel expurger",
+        command: Command::MarkRedaction,
+        needs_document: true,
+    },
+    Entry {
+        label: "Biffure : appliquer définitivement",
+        shortcut: "Maj+M",
+        keywords: "caviarder censurer expurger definitif confidentiel",
+        command: Command::ApplyRedactions,
+        needs_document: true,
+    },
+];
+
+/// Score de correspondance : plus il est petit, mieux c'est ; `None` si la
+/// requête ne correspond pas du tout.
+fn fold(text: &str) -> String {
+    text.to_lowercase()
+        .chars()
+        .map(|c| match c {
+            'à' | 'á' | 'â' | 'ä' | 'ã' => 'a',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'í' | 'ì' | 'î' | 'ï' => 'i',
+            'ó' | 'ò' | 'ô' | 'ö' | 'õ' => 'o',
+            'ú' | 'ù' | 'û' | 'ü' => 'u',
+            'ç' => 'c',
+            'ñ' => 'n',
+            other => other,
+        })
+        .collect()
+}
+
+/// Score d'une entrée : son libellé d'abord, ses synonymes ensuite (pénalisés
+/// pour qu'une correspondance dans le libellé reste toujours devant).
+fn entry_score(entry: &Entry, query: &str) -> Option<usize> {
+    score(entry.label, query).or_else(|| score(entry.keywords, query).map(|s| s + 2000))
+}
+
+fn score(label: &str, query: &str) -> Option<usize> {
+    if query.is_empty() {
+        return Some(1000);
+    }
+    let label_low = fold(label);
+    let query_low = fold(query);
+    if let Some(at) = label_low.find(&query_low) {
+        // Correspondance d'un seul tenant : d'autant meilleure qu'elle est tôt.
+        return Some(at);
+    }
+    // Sinon, sous-séquence : toutes les lettres dans l'ordre.
+    let mut chars = label_low.chars();
+    let mut spread = 0usize;
+    for want in query_low.chars() {
+        let mut steps = 0;
+        loop {
+            let c = chars.next()?;
+            steps += 1;
+            if c == want {
+                break;
+            }
+        }
+        spread += steps;
+    }
+    Some(500 + spread)
+}
+
+/// Palette de commandes.
+pub struct Palette {
+    /// Champ de filtrage.
+    pub input: TextInput,
+    /// Indices dans [`ENTRIES`], filtrés et triés.
+    filtered: Vec<usize>,
+    /// Entrée sélectionnée dans `filtered`.
+    selected: usize,
+    /// Rectangles des lignes au dernier dessin.
+    rows: Vec<(i32, i32, i32, i32)>,
+    /// Un document est ouvert.
+    has_document: bool,
+}
+
+impl Palette {
+    /// Palette ouverte, filtre vide.
+    #[must_use]
+    pub fn new(has_document: bool) -> Self {
+        let mut p = Self {
+            input: TextInput::new("Tapez une commande"),
+            filtered: Vec::new(),
+            selected: 0,
+            rows: Vec::new(),
+            has_document,
+        };
+        p.refilter();
+        p
+    }
+
+    /// Recalcule la liste filtrée.
+    fn refilter(&mut self) {
+        let query = self.input.value.clone();
+        let mut scored: Vec<(usize, usize)> = ENTRIES
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| self.has_document || !e.needs_document)
+            .filter_map(|(i, e)| entry_score(e, &query).map(|s| (s, i)))
+            .collect();
+        scored.sort_by_key(|&(s, i)| (s, i));
+        self.filtered = scored.into_iter().map(|(_, i)| i).collect();
+        self.selected = 0;
+    }
+
+    /// Commande actuellement sélectionnée.
+    #[must_use]
+    pub fn current(&self) -> Option<Command> {
+        self.filtered
+            .get(self.selected)
+            .and_then(|&i| ENTRIES.get(i))
+            .map(|e| e.command)
+    }
+
+    /// Touche ; `Some(commande)` quand l'utilisateur valide.
+    pub fn key(&mut self, key: Key, shift: bool) -> (Option<Command>, bool) {
+        match key {
+            Key::Up => {
+                if self.selected > 0 {
+                    self.selected -= 1;
+                }
+                (None, false)
+            }
+            Key::Down => {
+                if self.selected + 1 < self.filtered.len() {
+                    self.selected += 1;
+                }
+                (None, false)
+            }
+            Key::Tab => {
+                if self.filtered.is_empty() {
+                    return (None, false);
+                }
+                let n = self.filtered.len();
+                self.selected = if shift {
+                    (self.selected + n - 1) % n
+                } else {
+                    (self.selected + 1) % n
+                };
+                (None, false)
+            }
+            other => match self.input.key(other, shift) {
+                InputAction::Submit => (self.current(), true),
+                InputAction::Cancel => (None, true),
+                InputAction::Changed => {
+                    self.refilter();
+                    (None, false)
+                }
+                InputAction::None => (None, false),
+            },
+        }
+    }
+
+    /// Caractère saisi.
+    pub fn char(&mut self, c: char) {
+        if self.input.insert_char(c) == InputAction::Changed {
+            self.refilter();
+        }
+    }
+
+    /// Clic : `Some(commande)` si une ligne a été choisie.
+    #[must_use]
+    pub fn mouse_down(&self, x: i32, y: i32) -> Option<Command> {
+        let index = self
+            .rows
+            .iter()
+            .position(|&(rx, ry, rw, rh)| x >= rx && x < rx + rw && y >= ry && y < ry + rh)?;
+        self.filtered
+            .get(index)
+            .and_then(|&i| ENTRIES.get(i))
+            .map(|e| e.command)
+    }
+
+    /// Survol : sélectionne la ligne sous le pointeur ; vrai si ça a changé.
+    pub fn mouse_move(&mut self, x: i32, y: i32) -> bool {
+        let Some(index) = self
+            .rows
+            .iter()
+            .position(|&(rx, ry, rw, rh)| x >= rx && x < rx + rw && y >= ry && y < ry + rh)
+        else {
+            return false;
+        };
+        let changed = index != self.selected;
+        self.selected = index;
+        changed
+    }
+
+    /// Dessine la palette par-dessus la vue.
+    pub fn paint(
+        &mut self,
+        frame: &mut Frame<'_>,
+        text: &mut TextRenderer,
+        theme: &Theme,
+        dpi: f32,
+    ) {
+        let t = theme;
+        let size = t.font_size * dpi;
+        let pad = (14.0 * dpi) as i32;
+        let row = (size * 2.3) as i32;
+        let field = (32.0 * dpi) as i32;
+        let width = (560.0 * dpi).min(f32::from(frame.width as u16) * 0.9) as i32;
+        let shown = self.filtered.len().min(12);
+        let height = pad * 2 + field + shown as i32 * row;
+        let x = (frame.width as i32 - width) / 2;
+        let y = ((frame.height as i32 - height) / 3).max(pad);
+        frame.fill_rect(
+            x - 1,
+            y - 1,
+            width + 2,
+            height + 2,
+            t.separator.0,
+            t.separator.1,
+            t.separator.2,
+        );
+        frame.fill_rect(x, y, width, height, t.bar.0, t.bar.1, t.bar.2);
+        self.input.draw(
+            frame,
+            text,
+            t,
+            dpi,
+            x + pad,
+            y + pad,
+            width - 2 * pad,
+            field,
+        );
+        self.rows.clear();
+        let mut ry = y + pad + field + (4.0 * dpi) as i32;
+        for (index, &entry) in self.filtered.iter().take(shown).enumerate() {
+            let Some(e) = ENTRIES.get(entry) else {
+                continue;
+            };
+            if index == self.selected {
+                frame.fill_rect(x + 4, ry, width - 8, row, t.hover.0, t.hover.1, t.hover.2);
+            }
+            let baseline = ry as f32 + f32::midpoint(row as f32, text.ascent(size)) - 1.0;
+            let color = if index == self.selected {
+                t.text
+            } else {
+                t.text_dim
+            };
+            text.draw_clipped(
+                frame,
+                (x + pad) as f32,
+                baseline,
+                size,
+                e.label,
+                color,
+                (width - 2 * pad - (110.0 * dpi) as i32) as f32,
+            );
+            if !e.shortcut.is_empty() {
+                let w = text.measure(size * 0.92, e.shortcut);
+                text.draw(
+                    frame,
+                    (x + width - pad) as f32 - w,
+                    baseline,
+                    size * 0.92,
+                    e.shortcut,
+                    t.text_dim,
+                );
+            }
+            self.rows.push((x + 4, ry, width - 8, row));
+            ry += row;
+        }
+        if self.filtered.is_empty() {
+            let baseline = ry as f32 + text.ascent(size);
+            text.draw(
+                frame,
+                (x + pad) as f32,
+                baseline,
+                size,
+                "Aucune commande",
+                t.text_dim,
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)] // tests : l'absence de résultat est l'échec cherché
+mod tests {
+    use super::*;
+
+    /// Tape une requête dans une palette neuve et renvoie la commande en tête.
+    fn top(query: &str) -> Option<Command> {
+        let mut p = Palette::new(true);
+        for c in query.chars() {
+            p.char(c);
+        }
+        p.current()
+    }
+
+    #[test]
+    fn synonyms_find_commands_whose_label_uses_another_word() {
+        assert_eq!(top("rotation"), Some(Command::RotateRight));
+        assert_eq!(top("caviarder"), Some(Command::MarkRedaction));
+        assert_eq!(top("sombre"), Some(Command::ToggleTheme));
+        assert_eq!(top("trouver"), Some(Command::Search));
+        assert_eq!(top("diaporama"), Some(Command::Fullscreen));
+    }
+
+    #[test]
+    fn accents_are_optional_in_both_directions() {
+        assert_eq!(top("derniere"), Some(Command::LastPage));
+        assert_eq!(top("Première"), Some(Command::FirstPage));
+        assert_eq!(top("theme"), Some(Command::ToggleTheme));
+        assert_eq!(top("retablir"), Some(Command::Redo));
+    }
+
+    #[test]
+    fn label_matches_always_win_over_synonym_matches() {
+        // « page » est dans plusieurs libellés et dans les synonymes de
+        // « Copier » (presse-papiers) : un libellé doit passer devant.
+        let first = top("page").expect("au moins une commande");
+        assert!(
+            matches!(
+                first,
+                Command::PrevPage
+                    | Command::NextPage
+                    | Command::FirstPage
+                    | Command::LastPage
+                    | Command::CycleViewMode
+                    | Command::RotateRight
+                    | Command::RotateLeft
+                    | Command::DeletePage
+            ),
+            "{first:?} n'a pas « page » dans son libellé"
+        );
+    }
+
+    #[test]
+    fn filtering_finds_commands_by_prefix_and_subsequence() {
+        let mut p = Palette::new(true);
+        assert_eq!(
+            p.filtered.len(),
+            ENTRIES.len(),
+            "tout est proposé au départ"
+        );
+        for c in "biff".chars() {
+            p.char(c);
+        }
+        let first = p.current().expect("une commande correspond");
+        assert!(matches!(
+            first,
+            Command::MarkRedaction | Command::ApplyRedactions
+        ));
+        p.input.clear();
+        p.refilter();
+        // Correspondance d'un seul tenant, unique dans la liste.
+        for c in "sous".chars() {
+            p.char(c);
+        }
+        assert_eq!(p.current(), Some(Command::SaveAs));
+        p.input.clear();
+        p.refilter();
+        // Sous-séquence pure : « plécr » n'est le fragment d'aucun libellé.
+        for c in "plécr".chars() {
+            p.char(c);
+        }
+        assert_eq!(p.current(), Some(Command::Fullscreen));
+    }
+
+    #[test]
+    fn without_a_document_only_global_commands_are_listed() {
+        let p = Palette::new(false);
+        let labels: Vec<&str> = p
+            .filtered
+            .iter()
+            .filter_map(|&i| ENTRIES.get(i))
+            .map(|e| e.label)
+            .collect();
+        assert!(labels.contains(&"Ouvrir un document"));
+        assert!(!labels.iter().any(|l| l.contains("Enregistrer")));
+    }
+
+    #[test]
+    fn navigation_and_validation() {
+        let mut p = Palette::new(true);
+        let first = p.current();
+        let (cmd, close) = p.key(Key::Down, false);
+        assert!(cmd.is_none() && !close);
+        assert_ne!(p.current(), first, "la sélection a bougé");
+        let (cmd, close) = p.key(Key::Up, false);
+        assert!(cmd.is_none() && !close);
+        assert_eq!(p.current(), first);
+        // Entrée valide, Échap ferme sans rien faire.
+        let (cmd, close) = p.key(Key::Enter, false);
+        assert_eq!((cmd, close), (first, true));
+        let (cmd, close) = p.key(Key::Escape, false);
+        assert_eq!((cmd, close), (None, true));
+    }
+
+    #[test]
+    fn unknown_query_lists_nothing() {
+        let mut p = Palette::new(true);
+        for c in "zzzqqq".chars() {
+            p.char(c);
+        }
+        assert!(p.filtered.is_empty());
+        assert_eq!(p.current(), None);
+        let (cmd, close) = p.key(Key::Enter, false);
+        assert_eq!((cmd, close), (None, true));
+    }
+}

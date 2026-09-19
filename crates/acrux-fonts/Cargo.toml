@@ -1,0 +1,15 @@
+[package]
+name = "acrux-fonts"
+description = "Parseurs et rasteriseurs TrueType, CFF, Type1, Type3, encodages, CMaps, shaping"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+acrux-core = { workspace = true }
+
+[lints]
+workspace = true

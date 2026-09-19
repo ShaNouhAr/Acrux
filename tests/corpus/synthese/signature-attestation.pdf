@@ -1,0 +1,41 @@
+%PDF-1.7
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 300] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 664 >>
+stream
+BT /F1 16 Tf 40 250 Td (Attestation de test) Tj ET
+BT /F1 10 Tf 40 222 Td (Ce document sert a eprouver la pose et la verification) Tj ET
+BT /F1 10 Tf 40 208 Td (d'une signature numerique par AcrobatKiller.) Tj ET
+0.2 0.2 0.5 RG 1 w 40 200 m 380 200 l S
+BT /F1 9 Tf 40 176 Td (Article 1 : les octets de ce fichier ne doivent pas bouger.) Tj ET
+BT /F1 9 Tf 40 162 Td (Article 2 : la signature est ajoutee par mise a jour incrementale.) Tj ET
+BT /F1 9 Tf 40 148 Td (Article 3 : un seul octet modifie doit invalider le condense.) Tj ET
+0.5 0.5 0.5 RG 0.5 w 40 60 m 380 60 l S
+BT /F1 8 Tf 40 46 Td (Corpus de synthese AcrobatKiller - materiel de test sans valeur) Tj ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000121 00000 n 
+0000000247 00000 n 
+0000000962 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R /ID [<41434B5349474E415455524553544553543031> <41434B5349474E415455524553544553543031>] >>
+startxref
+1059
+%%EOF

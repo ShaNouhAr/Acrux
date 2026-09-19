@@ -1,0 +1,19 @@
+[package]
+name = "acrux-render"
+description = "Interpréteur de contenu de page et rendu (ISO 32000-2 ch. 8-9)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+acrux-core = { workspace = true }
+acrux-document = { workspace = true }
+acrux-codecs = { workspace = true }
+acrux-fonts = { workspace = true }
+acrux-graphics = { workspace = true }
+
+[lints]
+workspace = true

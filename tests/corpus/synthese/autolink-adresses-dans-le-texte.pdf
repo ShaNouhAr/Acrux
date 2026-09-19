@@ -1,0 +1,46 @@
+%PDF-1.7
+%âãÏÓ
+1 0 obj
+<< /Pages 2 0 R /Type /Catalog >>
+endobj
+2 0 obj
+<< /Count 1 /Kids [5 0 R] /Type /Pages >>
+endobj
+3 0 obj
+<< /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding /Subtype /Type1 /Type /Font >>
+endobj
+4 0 obj
+<< /BaseFont /Helvetica /Encoding /WinAnsiEncoding /Subtype /Type1 /Type /Font >>
+endobj
+5 0 obj
+<< /Contents 6 0 R /MediaBox [0 0 420 240] /Parent 2 0 R /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Type /Page >>
+endobj
+6 0 obj
+<< /Length 657 >>
+stream
+0.12 0.14 0.20 rg
+BT /F1 16 Tf 40 214 Td (Adresses dans le texte) Tj ET
+BT /F2 11 Tf 40 186 Td (Le site officiel est https://exemple.test/documentation.) Tj ET
+BT /F2 11 Tf 40 168 Td (Voir aussi \(https://exemple.test/annexe\) pour le d\351tail.) Tj ET
+BT /F2 11 Tf 40 140 Td (La page compl\350te se trouve \340 https://exemple.test/rapports/) Tj ET
+BT /F2 11 Tf 40 124 Td (2024/synthese-finale.html et rien d'autre.) Tj ET
+BT /F2 11 Tf 40 96 Td (\311crire \340 mailto:contact@exemple.test ou visiter www.exemple.test.) Tj ET
+BT /F2 11 Tf 40 68 Td (Le www est ancien ; ce fichier.pdf n'est pas une adresse.) Tj ET
+0.55 0.57 0.62 RG 1 w 40 206 m 380 206 l S
+
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000019 00000 n 
+0000000068 00000 n 
+0000000125 00000 n 
+0000000227 00000 n 
+0000000324 00000 n 
+0000000460 00000 n 
+trailer
+<< /ID [<A75CC99337793282415F71DBC0D34C28> <A75CC99337793282415F71DBC0D34C28>] /Root 1 0 R /Size 7 >>
+startxref
+1168
+%%EOF

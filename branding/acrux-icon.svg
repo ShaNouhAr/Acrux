@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Acrux">
+  <title>Acrux</title>
+  <!-- Tuile : carré aux coins arrondis, rouge braise en haut, rouge profond en bas. -->
+  <defs>
+    <linearGradient id="acrux-tile" x1="0" y1="0" x2="0" y2="128" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E44630"/>
+      <stop offset="1" stop-color="#B41020"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="30" ry="30" fill="url(#acrux-tile)"/>
+  <!-- Le « A » : silhouette, contre-forme, ouverture sous la barre. Le sommet
+       n'est pas une pointe mais une facette coupée en biais. -->
+  <path fill="#FFFFFF" fill-rule="evenodd"
+        d="M57 38 L71 32 L98 96 L30 96 Z
+           M65 55 L57 72 L72 72 Z
+           M51 86 L78 86 L82 96 L46 96 Z"/>
+</svg>

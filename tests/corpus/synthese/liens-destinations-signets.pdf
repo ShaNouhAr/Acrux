@@ -1,0 +1,106 @@
+%PDF-1.7
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R /Outlines 9 0 R /Names << /Dests 12 0 R >> /PageMode /UseOutlines >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 6 0 R /Resources << /Font << /F1 8 0 R >> >> /Annots [13 0 R 14 0 R 15 0 R 16 0 R] >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 7 0 R /Resources << /Font << /F1 8 0 R >> >> /Annots [17 0 R] >>
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 18 0 R /Resources << /Font << /F1 8 0 R >> >> >>
+endobj
+6 0 obj
+<< /Length 223 >>
+stream
+BT /F1 14 Tf
+1 0 0 1 20 180 Tm (Page 1 : liens) Tj
+1 0 0 1 24 156 Tm (> vers la page 2) Tj
+1 0 0 1 24 116 Tm (> vers la page 3 (nom)) Tj
+1 0 0 1 24 76 Tm (> derniere page) Tj
+1 0 0 1 24 36 Tm (> https://example.org/) Tj
+ET
+endstream
+endobj
+7 0 obj
+<< /Length 85 >>
+stream
+BT /F1 14 Tf
+1 0 0 1 20 180 Tm (Page 2) Tj
+1 0 0 1 24 156 Tm (> premiere page) Tj
+ET
+endstream
+endobj
+8 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+9 0 obj
+<< /Type /Outlines /First 10 0 R /Last 11 0 R /Count 3 >>
+endobj
+10 0 obj
+<< /Title (Page 2 : explicite) /Parent 9 0 R /Next 11 0 R /Dest [4 0 R /XYZ 0 200 0] /Count 1 /First 19 0 R /Last 19 0 R >>
+endobj
+11 0 obj
+<< /Title (Page 3 : nommÈe) /Parent 9 0 R /Prev 10 0 R /A << /S /GoTo /D (troisieme) >> >>
+endobj
+12 0 obj
+<< /Names [(deuxieme) [4 0 R /Fit] (troisieme) [5 0 R /FitH 200]] >>
+endobj
+13 0 obj
+<< /Type /Annot /Subtype /Link /Rect [20 150 140 172] /Border [0 0 1] /C [0 0 1] /Dest [4 0 R /XYZ 0 200 0] >>
+endobj
+14 0 obj
+<< /Type /Annot /Subtype /Link /Rect [20 110 140 132] /Border [0 0 1] /C [0 0 1] /A << /S /GoTo /D (troisieme) >> >>
+endobj
+15 0 obj
+<< /Type /Annot /Subtype /Link /Rect [20 70 140 92] /Border [0 0 1] /C [0 0 1] /A << /S /Named /N /LastPage >> >>
+endobj
+16 0 obj
+<< /Type /Annot /Subtype /Link /Rect [20 30 200 52] /Border [0 0 1] /C [0 0 1] /A << /S /URI /URI (https://example.org/) >> >>
+endobj
+17 0 obj
+<< /Type /Annot /Subtype /Link /Rect [20 150 140 172] /Border [0 0 1] /C [0 0 1] /A << /S /Named /N /FirstPage >> >>
+endobj
+18 0 obj
+<< /Length 57 >>
+stream
+BT /F1 14 Tf
+1 0 0 1 20 180 Tm (Page 3 (derniere)) Tj
+ET
+endstream
+endobj
+19 0 obj
+<< /Title (Sous-section) /Parent 10 0 R /Dest (deuxieme) >>
+endobj
+xref
+0 20
+0000000000 65535 f 
+0000000015 00000 n 
+0000000130 00000 n 
+0000000199 00000 n 
+0000000363 00000 n 
+0000000506 00000 n 
+0000000633 00000 n 
+0000000906 00000 n 
+0000001040 00000 n 
+0000001110 00000 n 
+0000001183 00000 n 
+0000001323 00000 n 
+0000001430 00000 n 
+0000001515 00000 n 
+0000001642 00000 n 
+0000001775 00000 n 
+0000001905 00000 n 
+0000002048 00000 n 
+0000002181 00000 n 
+0000002288 00000 n 
+trailer
+<< /Size 20 /Root 1 0 R >>
+startxref
+2364
+%%EOF

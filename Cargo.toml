@@ -1,0 +1,62 @@
+# Workspace Acrux — voir ARCHITECTURE.md pour le rôle de chaque crate.
+# Règle : les dépendances vont toujours vers le bas (app -> features -> render -> graphics/fonts/codecs -> document -> core).
+[workspace]
+resolver = "2"
+members = [
+    "crates/acrux-core",
+    "crates/acrux-document",
+    "crates/acrux-codecs",
+    "crates/acrux-fonts",
+    "crates/acrux-graphics",
+    "crates/acrux-render",
+    "crates/acrux-features",
+    "crates/acrux-winres",
+    "crates/acrux-setup",
+    "crates/acrux-app",
+    "crates/acrux-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/ShaNouhAr/Acrux"
+authors = ["Contributeurs Acrux"]
+
+# Dépendances internes uniquement. Toute dépendance externe doit être justifiée dans
+# docs/DEPENDANCES.md avant d'être ajoutée ici.
+[workspace.dependencies]
+acrux-core = { path = "crates/acrux-core" }
+acrux-document = { path = "crates/acrux-document" }
+acrux-codecs = { path = "crates/acrux-codecs" }
+acrux-fonts = { path = "crates/acrux-fonts" }
+acrux-graphics = { path = "crates/acrux-graphics" }
+acrux-render = { path = "crates/acrux-render" }
+acrux-features = { path = "crates/acrux-features" }
+acrux-winres = { path = "crates/acrux-winres" }
+
+[workspace.lints.rust]
+# `deny` et non `forbid` : seul crates/acrux-app/src/platform/ lève l'interdiction (FFI système, voir CHARTE §1.2).
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+# La doc cite des noms de filtres, de normes et de fichiers (FlateDecode, CHARTE_PROJET.md…) ;
+# exiger des backticks partout rend les commentaires illisibles.
+doc_markdown = "allow"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.dev]
+opt-level = 1

@@ -1,0 +1,16 @@
+[package]
+name = "acrux-document"
+description = "Modèle objet PDF : lexer, objets, xref, flux, pages, écriture (ISO 32000-2 ch. 7)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+acrux-core = { workspace = true }
+acrux-codecs = { workspace = true }
+
+[lints]
+workspace = true

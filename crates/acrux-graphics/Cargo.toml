@@ -1,0 +1,15 @@
+[package]
+name = "acrux-graphics"
+description = "Rasteriseur 2D : chemins, anti-aliasing, clip, dégradés, transparence, couleur"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+acrux-core = { workspace = true }
+
+[lints]
+workspace = true

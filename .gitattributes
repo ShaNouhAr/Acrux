@@ -1,0 +1,16 @@
+# Les fichiers texte du dépôt sont en LF ; Git ne convertit rien à la volée,
+# pour que les sommes de contrôle et les tests qui comparent des octets
+# donnent le même résultat sur toutes les machines.
+* text=auto eol=lf
+
+# Les images de référence du rendu et les PDF du corpus sont des données
+# binaires : les toucher, ne serait-ce que d'un octet, casserait les tests.
+*.png binary
+*.pdf binary
+*.ico binary
+*.der binary
+*.ttf binary
+*.otf binary
+
+# Les scripts PowerShell gardent les fins de ligne de Windows.
+*.ps1 text eol=crlf

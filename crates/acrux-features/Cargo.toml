@@ -1,0 +1,20 @@
+[package]
+name = "acrux-features"
+description = "Fonctionnalités métier : édition, pages, annotations, formulaires, signatures, sécurité…"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+acrux-core = { workspace = true }
+acrux-document = { workspace = true }
+acrux-codecs = { workspace = true }
+acrux-fonts = { workspace = true }
+acrux-graphics = { workspace = true }
+acrux-render = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,9 @@
+/target
+/dist
+**/*.rs.bk
+*.pdb
+/tests/corpus/private/
+/tests/reference/actual/
+.DS_Store
+Thumbs.db
+/target-gnu

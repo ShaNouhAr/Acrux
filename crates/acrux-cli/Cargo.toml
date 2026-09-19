@@ -1,0 +1,26 @@
+[package]
+name = "acrux-cli"
+description = "Outil en ligne de commande acr (inspection, conversion, tests)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+acrux-core = { workspace = true }
+acrux-document = { workspace = true }
+acrux-render = { workspace = true }
+acrux-features = { workspace = true }
+acrux-graphics = { workspace = true }
+
+[build-dependencies]
+acrux-winres = { workspace = true }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "acr"
+path = "src/main.rs"

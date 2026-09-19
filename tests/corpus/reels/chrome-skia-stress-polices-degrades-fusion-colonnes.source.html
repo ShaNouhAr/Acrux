@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Stress AcrobatKiller</title>
+<style>
+  @page { size: A4; margin: 12mm; }
+  body { font-family: "Segoe UI", Arial, sans-serif; font-size: 11pt; color: #222; }
+  h1 { font-family: Georgia, serif; font-size: 22pt; color: #123; margin: 0 0 6pt; }
+  h2 { font-size: 13pt; margin: 10pt 0 4pt; border-bottom: 1px solid #888; }
+  .row { display: flex; gap: 8pt; align-items: flex-start; }
+  .box { width: 70pt; height: 50pt; border-radius: 6pt; }
+  .grad1 { background: linear-gradient(135deg, #ff8800, #0066ff); }
+  .grad2 { background: radial-gradient(circle at 30% 30%, #fff, #c00 70%); }
+  .grad3 { background: conic-gradient(from 0deg, red, yellow, lime, cyan, blue, magenta, red); }
+  .dashed { border: 2pt dashed #060; }
+  .dotted { border: 3pt dotted #906; }
+  .shadow { box-shadow: 4pt 4pt 6pt rgba(0,0,0,.5); background: #eef; }
+  .alpha { background: rgba(0, 128, 255, .35); }
+  .rot { transform: rotate(-20deg); display: inline-block; padding: 4pt; background: #ffe; border: 1pt solid #cc0; }
+  .mono { font-family: "Courier New", monospace; }
+  .cal { font-family: Calibri, sans-serif; }
+  .tnr { font-family: "Times New Roman", serif; }
+  .blend { position: relative; width: 120pt; height: 60pt; }
+  .blend .a, .blend .b { position: absolute; width: 70pt; height: 45pt; }
+  .blend .a { left: 0; top: 0; background: #f4a; }
+  .blend .b { left: 40pt; top: 12pt; background: #4af; mix-blend-mode: multiply; }
+  table { border-collapse: collapse; font-size: 9.5pt; }
+  td, th { border: 0.75pt solid #444; padding: 2pt 6pt; }
+  th { background: #dde; }
+  .clip { width: 90pt; height: 40pt; overflow: hidden; border: 1pt solid #000; }
+  .clip div { width: 200pt; height: 200pt; background: repeating-linear-gradient(45deg, #fc0 0 6pt, #333 6pt 12pt); }
+  svg { vertical-align: top; }
+  .small { font-size: 6pt; }
+  .big { font-size: 28pt; letter-spacing: 4pt; }
+  .outline { -webkit-text-stroke: 1pt #a00; color: transparent; font-size: 24pt; font-weight: bold; }
+  ul { margin: 4pt 0; }
+  .col2 { column-count: 2; column-gap: 12pt; column-rule: 1pt solid #ccc; font-size: 9pt; text-align: justify; }
+</style>
+</head>
+<body>
+<h1>Document de contrainte — polices, dégradés, transparence</h1>
+<p>Texte en <b>gras</b>, <i>italique</i>, <b><i>gras italique</i></b>, <u>souligné</u>, <s>barré</s>,
+<span class="mono">monospace 0O1lI</span>, <span class="cal">Calibri</span>, <span class="tnr">Times New Roman</span>,
+exposant x<sup>2</sup>, indice H<sub>2</sub>O, ligatures fi fl ffi, guillemets « français », apostrophe’,
+symboles © ® € £ ¥ ½ ¾ → ← ↑ ↓ ∑ ∞ ≠ ≤ ≥ ± × ÷ ° µ, accents ÀÉÎÕÜ àéîõü ç ñ ß.</p>
+<p class="small">Texte à 6 points : la quantification des glyphes et l'anticrénelage doivent rester lisibles. Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>
+<p class="big">GRAND ESPACÉ</p>
+<p class="outline">Contour seul</p>
+<p><span class="rot">Bloc pivoté de −20°</span> &nbsp; <span style="transform: scale(1.4, .8); display:inline-block">Étiré</span></p>
+
+<h2>Dégradés, bordures, ombres, transparence</h2>
+<div class="row">
+  <div class="box grad1"></div>
+  <div class="box grad2"></div>
+  <div class="box grad3"></div>
+  <div class="box dashed"></div>
+  <div class="box dotted"></div>
+  <div class="box shadow"></div>
+  <div class="box alpha" style="margin-left:-30pt"></div>
+</div>
+<div class="row" style="margin-top:8pt">
+  <div class="blend"><div class="a"></div><div class="b"></div></div>
+  <div class="clip"><div></div></div>
+  <svg width="140" height="70" viewBox="0 0 140 70">
+    <defs>
+      <linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="#0f0"/><stop offset="1" stop-color="#00f" stop-opacity=".3"/></linearGradient>
+      <pattern id="p" width="8" height="8" patternUnits="userSpaceOnUse"><circle cx="4" cy="4" r="2" fill="#c33"/></pattern>
+    </defs>
+    <path d="M5 60 C 30 5, 60 5, 70 60 S 120 90, 135 20" fill="none" stroke="url(#g)" stroke-width="6" stroke-linecap="round"/>
+    <rect x="10" y="10" width="40" height="30" fill="url(#p)" stroke="#000" stroke-dasharray="4 2"/>
+    <polygon points="90,10 110,10 120,30 100,45 80,30" fill="#fa0" fill-opacity=".6" stroke="#630" stroke-width="2" stroke-linejoin="round"/>
+    <text x="60" y="66" font-size="10" font-family="Arial" transform="rotate(-8 60 66)">SVG texte</text>
+  </svg>
+</div>
+
+<h2>Tableau et images</h2>
+<div class="row">
+<table>
+  <tr><th>Produit</th><th>Qté</th><th>Prix</th></tr>
+  <tr><td>Écran 27″</td><td style="text-align:right">2</td><td style="text-align:right">399,00 €</td></tr>
+  <tr><td>Clavier</td><td style="text-align:right">1</td><td style="text-align:right">79,90 €</td></tr>
+  <tr><td colspan="2"><b>Total</b></td><td style="text-align:right"><b>877,90 €</b></td></tr>
+</table>
+<img width="64" height="64" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAOklEQVQYV2NkYGD4z8DAwMDIyMgABYyMjP8ZGBgYGP7//8+AqoiBgYGBEV0RBoCbANMEE4KbANQ0DAAAqZgQ4kZ8L5cAAAAASUVORK5CYII=" style="image-rendering: pixelated; border:1pt solid #000">
+<img width="96" height="64" src="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='64'%3E%3Ccircle cx='32' cy='32' r='28' fill='%2306c'/%3E%3Crect x='50' y='10' width='40' height='44' fill='%23fc0' stroke='%23000'/%3E%3C/svg%3E">
+</div>
+
+<h2>Deux colonnes</h2>
+<div class="col2">
+<p>Le format PDF décrit des pages indépendantes du périphérique. Chaque page est un flux d'opérateurs graphiques qui dessinent des chemins, du texte et des images dans un espace de coordonnées en points. Les polices sont incorporées ou substituées, et les couleurs sont exprimées dans des espaces colorimétriques variés.</p>
+<p>Un lecteur conforme doit tolérer les fichiers abîmés : tables de références croisées fausses, flux de longueur incorrecte, objets manquants. AcrobatKiller reconstruit alors la table en balayant le fichier. Cette colonne sert à vérifier l'ordre de lecture de l'extraction de texte : la première colonne doit précéder la seconde.</p>
+<ul><li>puce un</li><li>puce deux</li><li>puce trois</li></ul>
+<p>Fin du texte de la seconde colonne, avec un mot cou-<br>pé artificiellement.</p>
+</div>
+</body>
+</html>

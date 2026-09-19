@@ -1,0 +1,71 @@
+%PDF-1.7
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [6 0 R 7 0 R 8 0 R] /D << /Order [6 0 R 7 0 R 8 0 R] /OFF [8 0 R] >> >> >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /Properties << /L1 6 0 R /L2 7 0 R /L3 8 0 R >> >> >>
+endobj
+4 0 obj
+<< /Length 429 >>
+stream
+q
+0.2 0.2 0.25 rg
+BT /F1 18 Tf 60 740 Td (Plan de montage \226 trois calques) Tj ET
+Q
+/OC /L1 BDC
+q
+0.15 0.35 0.75 rg
+60 520 200 160 re f
+0.1 0.1 0.1 RG 2 w
+60 520 200 160 re S
+BT /F1 12 Tf 70 690 Td (Calque Plan : le bloc bleu) Tj ET
+Q
+EMC
+/OC /L2 BDC
+q
+0.85 0.35 0.1 RG 1 w
+[4 2] 0 d
+50 510 m 270 510 l S
+BT /F1 10 Tf 130 494 Td (200 mm) Tj ET
+Q
+EMC
+/OC /L3 BDC
+q
+0.6 0.6 0.6 rg
+BT /F1 40 Tf 120 300 Td (BROUILLON) Tj ET
+Q
+EMC
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+6 0 obj
+<< /Type /OCG /Name (Plan) >>
+endobj
+7 0 obj
+<< /Type /OCG /Name (Cotes) >>
+endobj
+8 0 obj
+<< /Type /OCG /Name (Brouillon) >>
+endobj
+xref
+0 9
+0000000000 65535 f 
+0000000015 00000 n 
+0000000159 00000 n 
+0000000216 00000 n 
+0000000390 00000 n 
+0000000869 00000 n 
+0000000966 00000 n 
+0000001011 00000 n 
+0000001057 00000 n 
+trailer
+<< /Size 9 /Root 1 0 R >>
+startxref
+1107
+%%EOF

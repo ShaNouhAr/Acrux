@@ -1,0 +1,22 @@
+[package]
+name = "acrux-setup"
+description = "Installateur d'Acrux : exécutable auto-extractible, sans droits d'administrateur"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+acrux-codecs = { workspace = true }
+
+[build-dependencies]
+acrux-winres = { workspace = true }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "acrux-setup"
+path = "src/main.rs"

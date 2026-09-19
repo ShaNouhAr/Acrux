@@ -1,0 +1,24 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Deux colonnes AcrobatKiller</title>
+<style>
+@page { size: A4; margin: 2cm; @top-left { content: "Rapport de mise en page"; font: 8pt Georgia, serif; color: #555; } @top-right { content: "AcrobatKiller"; font: 8pt Georgia, serif; color: #555; } @bottom-center { content: "Page " counter(page); font: 8pt Georgia, serif; } }
+body { font-family: Georgia, serif; font-size: 11pt; margin: 0; line-height: 1.25; }
+h1 { font-size: 20pt; margin: 0 0 14pt; }
+h2 { font-size: 14pt; margin: 0 0 8pt; break-after: avoid; }
+.cols { column-count: 2; column-gap: 1cm; text-align: justify; hyphens: manual; }
+p { margin: 0 0 10pt; text-indent: 1.2em; }
+ol { margin: 0 0 10pt; }
+.right { text-align: right; text-indent: 0; }
+.center { text-align: center; text-indent: 0; font-style: italic; }
+</style></head><body>
+<h1>Extraction en deux colonnes</h1>
+<div class="cols">
+<p>Cette page sert à vérifier la reconstruction des colonnes, des paragraphes et des césures. La colonne de gauche doit être lue entièrement avant la colonne de droite, et chaque paragraphe doit être restitué sur une seule ligne, avec un retrait de première ligne détecté.</p>
+<p>Un mot coupé en fin de ligne par un tiret est recollé quand la suite commence par une minuscule, comme dans la docu-<br>mentation technique. Les mots composés tels que <b>Jean-Pierre</b> ou <i>arc-en-ciel</i> ne sont pas concernés puisque la suite reste sur la même ligne.</p>
+<h2>Sous-titre de section</h2>
+<p>Le texte justifié occupe toute la largeur de la colonne, sauf la dernière ligne de chaque paragraphe qui reste alignée à gauche. Les lignes de base sont régulières et l'interligne vaut un quart de la taille en plus.</p>
+<ol><li>Premier point numéroté.</li><li>Deuxième point numéroté.</li><li>Troisième point numéroté.</li></ol>
+<p>Le dernier paragraphe de la colonne de droite est suivi d'une ligne alignée à droite puis d'une ligne centrée, pour vérifier la détection de l'alignement des paragraphes isolés.</p>
+<p class="right">Signé : le comité</p>
+<p class="center">Fin du document</p>
+</div>
+</body></html>

@@ -1,0 +1,21 @@
+[package]
+name = "acrux-codecs"
+description = "Décodeurs Flate, LZW, RunLength, ASCII85/Hex, CCITT, DCT, JPX, JBIG2"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+acrux-core = { workspace = true }
+
+# Tests uniquement : les générateurs d'échantillons de corpus
+# (`generate_corpus_samples`) écrivent leurs images source en PNG.
+# acrux-graphics ne dépend pas d'acrux-codecs : aucun cycle.
+[dev-dependencies]
+acrux-graphics = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,74 @@
+name: Release
+
+# Une étiquette « vX.Y.Z » poussée sur le dépôt suffit à publier une version :
+# construction, installateur, archive portable, sommes de contrôle et page de
+# version. Rien à faire à la main, donc rien à oublier.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Étiquette à publier (vX.Y.Z)"
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publier:
+    name: Construire et publier
+    runs-on: windows-latest
+    permissions:
+      # Le jeton fourni par GitHub suffit à créer la version : aucune action
+      # tierce, aucun secret à confier à qui que ce soit.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust stable
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Numéro de version
+        id: version
+        shell: pwsh
+        run: |
+          $tag = if ($env:GITHUB_REF -like 'refs/tags/*') {
+            $env:GITHUB_REF -replace '^refs/tags/', ''
+          } else {
+            '${{ github.event.inputs.tag }}'
+          }
+          $version = $tag -replace '^v', ''
+          "tag=$tag"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          # Le numéro du paquet doit correspondre à l'étiquette : une version
+          # publiée qui se croit être une autre est impossible à dépanner.
+          $cargo = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ($cargo -ne $version) {
+            throw "L'étiquette $tag ne correspond pas à la version $cargo de Cargo.toml"
+          }
+
+      - name: Construire
+        shell: pwsh
+        env:
+          # Les mises à jour interrogeront ce dépôt-ci, y compris sur un fork.
+          ACRUX_REPO: ${{ github.repository }}
+        run: cargo build --release --workspace
+
+      - name: Tests
+        run: cargo test --workspace
+
+      - name: Assembler la version
+        shell: pwsh
+        run: ./tools/release.ps1 -Version '${{ steps.version.outputs.version }}'
+
+      - name: Publier
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = "dist/notes.md"
+          gh release create '${{ steps.version.outputs.tag }}' `
+            --title 'Acrux ${{ steps.version.outputs.version }}' `
+            --notes-file $notes `
+            (Get-ChildItem dist/*.exe, dist/*.zip, dist/SHA256SUMS.txt | ForEach-Object { $_.FullName })

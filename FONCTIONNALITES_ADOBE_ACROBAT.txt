@@ -1,0 +1,432 @@
+================================================================================
+  INVENTAIRE COMPLET DES FONCTIONNALITÉS D'ADOBE ACROBAT (état au 18/09/2026)
+  Projet : Acrux — objectif : égaler puis dépasser Adobe Acrobat
+================================================================================
+
+Légende des éditions Adobe :
+  [R]  = Acrobat Reader (gratuit)
+  [S]  = Acrobat Standard
+  [P]  = Acrobat Pro
+  [AI] = AI Assistant / Acrobat Studio / Acrobat Express (abonnement IA)
+  [E]  = Acrobat Enterprise / Acrobat Services (API)
+  [NEW 2026] = nouveauté apparue en 2026
+
+--------------------------------------------------------------------------------
+ 1. AFFICHAGE ET NAVIGATION
+--------------------------------------------------------------------------------
+[R] Ouverture de PDF (toutes versions PDF 1.0 → 2.0, PDF/A, PDF/X, PDF/UA, PDF/E)
+[R] Modes d'affichage : page simple, défilement continu, double page, double page continue
+[R] Zoom : ajuster à la page, à la largeur, à la hauteur, zoom dynamique, loupe, zoom au rectangle
+[R] Rotation temporaire de l'affichage (90°)
+[R] Mode plein écran / mode présentation (avec transitions)
+[R] Mode lecture (masque les panneaux)
+[R] Mode nuit / thème sombre / couleurs personnalisées (remplacement des couleurs du document)
+[R] Panneau de vignettes de pages
+[R] Panneau de signets (bookmarks) avec navigation hiérarchique
+[R] Panneau de pièces jointes
+[R] Panneau de calques (OCG) : afficher / masquer
+[R] Panneau de commentaires
+[R] Panneau de signatures
+[R] Panneau de balises (tags) d'accessibilité
+[R] Panneau d'ordre de lecture
+[R] Panneau de contenu (arborescence des objets)
+[R] Panneau de destinations nommées
+[R] Navigation : page précédente/suivante, aller à la page, historique (retour/avant)
+[R] Vue « Liquid Mode » (mobile) : reflow intelligent du contenu pour petits écrans
+[R] Lecture à voix haute (Read Out Loud) / synthèse vocale
+[R] Défilement automatique
+[R] Règles, grilles, repères, magnétisme
+[R] Outils de mesure : distance, périmètre, surface (avec échelle)
+[R] Affichage de la taille réelle, aperçu de surimpression
+[R] Aperçu de la sortie (Output Preview) : séparations, avertissements couleur   [P]
+[R] Curseur de sélection texte / main / sélection d'objet
+[R] Visionneuse de fichiers 3D (U3D, PRC) : rotation, coupes, mesures, arborescence   [P]
+[R] Lecture de vidéos, audio, Flash (hérité), contenus multimédias intégrés
+[R] Support des portfolios PDF (conteneurs de fichiers multiples)
+[R] Onglets multiples de documents, fenêtres multiples, fenêtre scindée (split)
+[R] Ouverture de fichiers depuis le cloud (Adobe Cloud, OneDrive, Google Drive, Dropbox, Box, SharePoint)
+[R] Fichiers récents, favoris (étoile), recherche de fichiers
+[R] Support des écrans haute résolution (HiDPI), écrans tactiles, stylet
+
+--------------------------------------------------------------------------------
+ 2. RECHERCHE
+--------------------------------------------------------------------------------
+[R] Recherche simple (Ctrl+F) avec mot entier / casse
+[R] Recherche avancée : dans le document, dans un dossier, dans plusieurs PDF, dans les signets, commentaires, pièces jointes, métadonnées
+[R] Recherche avec expressions booléennes, proximité, racines (stemming)
+[R] Index de recherche plein texte (catalogue .pdx) pour collections de PDF   [P]
+[R] Résultats de recherche avec surlignage et navigation
+[AI] Recherche sémantique / questions en langage naturel sur le document (AI Assistant)
+
+--------------------------------------------------------------------------------
+ 3. CRÉATION DE PDF
+--------------------------------------------------------------------------------
+[S] Créer un PDF depuis n'importe quel fichier (Word, Excel, PowerPoint, images, texte, HTML, RTF, etc.)
+[S] Imprimante virtuelle « Adobe PDF » (PDFMaker) pour toute application Windows
+[S] Plug-in PDFMaker pour Microsoft Office (Word, Excel, PowerPoint, Outlook, Visio, Project, Publisher, Access)
+[S] Créer un PDF depuis un scanner (TWAIN / WIA), avec détection de documents, correction d'orientation, désinclinaison
+[S] Créer un PDF depuis une page web (capture de site, niveaux de liens, conversion HTML)
+[S] Créer un PDF depuis le presse-papiers
+[S] Créer un PDF vierge
+[S] Combiner plusieurs fichiers en un seul PDF (fusion, réordonnancement par glisser-déposer)
+[S] Créer un Portfolio PDF (conteneur multi-fichiers avec navigation)   [P]
+[S] Convertir des dossiers entiers par lots
+[S] Créer un PDF depuis des captures d'écran
+[S] Conversion depuis Outlook : archivage d'e-mails et dossiers en PDF avec index
+[S] Application mobile : scan de documents avec appareil photo (Adobe Scan), détection de bords, nettoyage
+[S] Fusion de fichiers via le web (acrobat.adobe.com) et Acrobat en ligne
+
+--------------------------------------------------------------------------------
+ 4. MODIFICATION (ÉDITION) DE PDF
+--------------------------------------------------------------------------------
+[S] Modifier le texte directement dans le PDF (police, taille, couleur, gras, italique, souligné, alignement)
+[S] Reconnaissance et correspondance automatique de polices (y compris polices non installées, via Adobe Fonts)
+[S] Ajouter du texte, listes à puces / numérotées, retrait
+[S] Reflow des paragraphes lors de l'édition
+[S] Modifier / ajouter / remplacer / recadrer / faire pivoter / retourner des images
+[S] Modifier des images dans Photoshop, des objets dans Illustrator (aller-retour)
+[S] Ajouter, déplacer, redimensionner, aligner, distribuer des objets
+[S] Ajouter des liens (vers page, URL, fichier, action)
+[S] Génération automatique de liens depuis les URL
+[S] Ajouter des en-têtes et pieds de page (texte, date, numérotation Bates)
+[S] Ajouter des filigranes (texte ou image, opacité, position, plages de pages)
+[S] Ajouter des arrière-plans
+[S] Numérotation Bates (juridique)   [P]
+[S] Ajouter / modifier des signets automatiquement (depuis structure) ou manuellement
+[S] Recadrer les pages (crop box, bleed box, trim box, art box)
+[S] Modifier la boîte de page (MediaBox, etc.) et les échelles
+[S] Ajouter des articles (fil de lecture)
+[S] Éditer les métadonnées (titre, auteur, sujet, mots-clés, XMP personnalisé)
+[S] Définir les propriétés d'ouverture (vue initiale, page, zoom, interface)
+[AI][NEW 2026] Édition conversationnelle du PDF via AI Assistant : réécrire, remplacer, restructurer, reformater, surligner, biffer du texte par simple demande en langage naturel
+[AI][NEW 2026] Appliquer des modèles de design Adobe Express au PDF (reflow automatique du contenu dans le modèle en temps réel)
+[AI][NEW 2026] Transformer un document en présentation, CV, facture, rapport « professionnel » (Acrobat Studio)
+
+--------------------------------------------------------------------------------
+ 5. ORGANISATION DES PAGES
+--------------------------------------------------------------------------------
+[S] Insérer des pages (depuis fichier, scanner, presse-papiers, page vierge, page web)
+[S] Supprimer des pages
+[S] Extraire des pages (en un fichier ou un fichier par page)
+[S] Réordonner par glisser-déposer (vignettes)
+[S] Faire pivoter des pages (définitif)
+[S] Fractionner un document (par nombre de pages, taille de fichier, signets de niveau N)
+[S] Remplacer des pages
+[S] Recadrer des pages
+[S] Étiquettes de pages (numérotation romaine, préfixes, sections)
+[S] Combiner / fusionner avec aperçu
+[S] Dupliquer des pages
+[S] Redimensionner / mettre à l'échelle des pages, ajuster au format (A4, Letter)
+[S] Ajuster les marges (via Print Production)
+[S] Mode d'organisation visuelle de plusieurs documents à la fois
+
+--------------------------------------------------------------------------------
+ 6. CONVERSION ET EXPORT
+--------------------------------------------------------------------------------
+[S] Exporter PDF vers Word (.docx, .doc) avec conservation de la mise en page
+[S] Exporter vers Excel (.xlsx) avec reconnaissance de tableaux
+[S] Exporter vers PowerPoint (.pptx)
+[S] Exporter vers images (JPEG, PNG, TIFF, JPEG2000) — document entier ou images extraites
+[S] Exporter vers HTML, RTF, texte brut, texte accessible, XML, EPS, PostScript, PDF/A, PDF/X, PDF/E
+[S] Exporter les tableaux vers CSV / feuille de calcul
+[S] Extraire toutes les images d'un PDF
+[S] Export par lots (Action Wizard)
+[S] Conversion en ligne (acrobat.adobe.com) : PDF ↔ Word/Excel/PPT/JPG
+[S] Copie du contenu avec mise en forme (texte, tableaux → Excel)
+[S] Enregistrer sous : PDF optimisé, PDF réduit, PDF certifié, PDF Reader-extended, PDF/A, PDF/X
+
+--------------------------------------------------------------------------------
+ 7. OCR (RECONNAISSANCE OPTIQUE DE CARACTÈRES)
+--------------------------------------------------------------------------------
+[S] OCR de PDF scannés (texte sélectionnable et recherchable)
+[S] Modes de sortie : image recherchable (texte invisible), texte et images modifiables, image recherchable exacte
+[S] Support de 40+ langues, détection automatique
+[S] Correction des suspects OCR (interface de validation mot par mot)
+[S] Amélioration de l'image scannée : désinclinaison, suppression du bruit, ajustement du contraste, redressement
+[S] Reconnaissance de mise en page (colonnes, tableaux)
+[S] OCR par lots sur plusieurs fichiers
+[S] Compression ClearScan / conversion en polices vectorielles (texte modifiable depuis scan)
+[S] Conversion des fonds en couleur ou N&B, réduction de résolution
+[AI][NEW 2026] Numérisation de notes manuscrites converties en contenu structuré (Student Spaces)
+
+--------------------------------------------------------------------------------
+ 8. COMMENTAIRES, ANNOTATIONS ET RÉVISION
+--------------------------------------------------------------------------------
+[R] Notes (sticky notes) avec réponses en fil de discussion
+[R] Surligner, souligner, barrer du texte
+[R] Insérer du texte, remplacer du texte (annotations de correction)
+[R] Zones de texte, légendes (callouts), machine à écrire
+[R] Dessins : rectangle, ellipse, ligne, flèche, polygone, polyligne, nuage, crayon libre, gomme
+[R] Tampons prédéfinis (Approuvé, Brouillon, Confidentiel...), tampons dynamiques (date/utilisateur), tampons personnalisés
+[R] Pièces jointes en commentaire (fichier, enregistrement audio)
+[R] Commentaires avec @mentions
+[R] Liste de commentaires : tri, filtre (auteur, type, statut, page), recherche, résumé exportable
+[R] Statut des commentaires (accepté, rejeté, annulé, terminé), marquage « coché »
+[R] Import / export de commentaires (FDF, XFDF), fusion de commentaires de plusieurs relecteurs
+[R] Résumé des commentaires en PDF imprimable (avec connecteurs)
+[R] Propriétés des annotations : couleur, opacité, épaisseur, auteur, sujet
+[R] Réactions emoji et « J'aime » sur commentaires (web/cloud)
+[P] Révision partagée (Shared Review) via Adobe Document Cloud, lien partagé, e-mail
+[P] Révision par e-mail (Tracker)
+[P] Suivi des révisions (Tracker) : qui a commenté, rappels, échéances
+[P] Comparer deux versions d'un PDF (rapport de différences visuelles, textes, images, annotations)
+[P] Coédition et commentaires en temps réel dans le cloud
+[R] Signaler les commentaires non lus, notifications
+[AI] Résumé automatique des commentaires d'un fil de révision
+
+--------------------------------------------------------------------------------
+ 9. FORMULAIRES
+--------------------------------------------------------------------------------
+[R] Remplir des formulaires PDF (AcroForms et XFA)
+[R] Remplir et signer (Fill & Sign) sur formulaires plats : texte, croix, coches, points, cercles, lignes, initiales, signature
+[R] Autofill / mémorisation de profil (nom, adresse, e-mail...)
+[S] Préparer un formulaire : détection automatique des champs sur document existant
+[S] Champs : texte, case à cocher, bouton radio, liste déroulante, zone de liste, bouton, champ de signature numérique, champ de date, code-barres, image
+[S] Propriétés des champs : format (nombre, date, %, téléphone, code postal), validation, calcul, actions, apparence, obligatoire, lecture seule, multi-lignes, défilement, limite de caractères, police
+[S] Calculs automatiques (somme, produit, moyenne, script JavaScript personnalisé)
+[S] Ordre de tabulation, alignement et distribution des champs
+[S] Boutons avec actions (soumettre, réinitialiser, aller à, ouvrir URL, exécuter JS, afficher/masquer champ)
+[S] Soumission de formulaire (e-mail, HTTP/HTTPS, FDF, XFDF, PDF complet)
+[S] Collecte et suivi des réponses (Tracker), exportation vers CSV / Excel
+[S] Distribuer des formulaires (e-mail, serveur interne, Adobe Cloud)
+[S] Étendre les fonctionnalités Reader (enregistrement des données de formulaire dans Reader)
+[P] Support XFA (Adobe LiveCycle Designer — hérité)
+[P] Codes-barres 2D pour capture de données
+[S] Convertir un formulaire en formulaire web (Acrobat Sign Web Forms)
+[S] Aplatir les champs de formulaire
+[R] Import / export des données de formulaire (FDF, XFDF, XML, TXT)
+[AI][NEW 2026] Remplissage assisté par IA (suggestions de contenu, explication des champs)
+
+--------------------------------------------------------------------------------
+ 10. SIGNATURES ÉLECTRONIQUES ET NUMÉRIQUES
+--------------------------------------------------------------------------------
+[R] Signature simple (dessinée, tapée, image) via Fill & Sign
+[R] Signature électronique Adobe Acrobat Sign : demander des signatures, ordre des signataires, rappels, échéances
+[R] Suivi des accords envoyés (envoyé, consulté, signé), audit trail, piste d'audit certifiée
+[S] Modèles de documents de signature réutilisables
+[S] Signature en masse (Mega Sign / Send in Bulk)
+[S] Formulaires web Acrobat Sign (lien public de signature)
+[S] Signature en personne (in-person signing)
+[S] Authentification des signataires : e-mail, mot de passe, téléphone/SMS, KBA, pièce d'identité (Government ID), Acrobat Sign ID
+[S] Champs de signature préremplis, rôles (signataire, approbateur, accepteur, remplisseur, destinataire certifié)
+[P] Signature numérique avec certificat (ID numérique : PKCS#12, carte à puce, Windows Certificate Store, HSM, cloud)
+[P] Créer un ID numérique auto-signé
+[P] Certifier un document (signature de certification avec restrictions : aucune modification / formulaires / annotations)
+[P] Signatures visibles et invisibles, apparence de signature personnalisée
+[P] Validation des signatures : chaîne de confiance, révocation (CRL / OCSP), horodatage (TSA), LTV (Long Term Validation)
+[P] Conformité PAdES (B, T, LT, LTA), listes AATL (Adobe Approved Trust List) et EUTL (liste de confiance européenne, eIDAS)
+[P] Signatures cloud (Cloud Signatures Consortium : signatures qualifiées via fournisseurs QTSP)
+[P] Vérification de l'intégrité et affichage des versions signées
+[P] Sceaux électroniques (e-seals) pour entreprises   [E]
+[E] Intégration Acrobat Sign avec Salesforce, Microsoft 365, Workday, SAP, ServiceNow, Dynamics
+[NEW 2026] Signatures en direct via l'application mobile, notifications de signature
+
+--------------------------------------------------------------------------------
+ 11. SÉCURITÉ ET PROTECTION
+--------------------------------------------------------------------------------
+[S] Protection par mot de passe d'ouverture (AES-128, AES-256, RC4 hérité)
+[S] Mot de passe de permissions : impression (aucune/basse résolution/haute), modification, copie, extraction, commentaires, remplissage de formulaires, accessibilité, assemblage
+[S] Chiffrement par certificat (destinataires spécifiques avec certificats publics)
+[S] Stratégies de sécurité réutilisables (organisation)
+[P] Intégration Adobe Experience Manager Forms / LiveCycle Rights Management (DRM d'entreprise)
+[P] Microsoft Purview / Information Protection (MIP) : étiquettes de sensibilité, protection AIP   [E]
+[P] Biffure (Redaction) : marquer et appliquer la biffure définitive de texte et d'images
+[P] Recherche et biffure (mots, motifs : numéros de téléphone, cartes bancaires, SSN, e-mails, dates, motifs personnalisés regex)
+[P] Biffure par plage de pages, codes d'exemption, superposition de texte de biffure
+[P] Supprimer les informations masquées (Sanitize) : métadonnées, pièces jointes, signets, commentaires, calques, scripts, texte masqué, images superposées
+[S] Supprimer les éléments cachés sélectivement
+[S] Vue protégée (Protected View) et mode protégé (sandbox) dans Reader
+[S] Sécurité renforcée : emplacements privilégiés, JavaScript désactivé par défaut, blocage des URL
+[S] Gestion des certificats de confiance, identités approuvées
+[S] Vérification de la fiabilité des pièces jointes (types de fichiers bloqués)
+[S] Enregistrer en PDF avec restrictions de copier / imprimer
+[S] Suivi des documents partagés : révoquer l'accès, expirer les liens (cloud)
+[E] Administration : déploiement via Admin Console, stratégies GPO, Customization Wizard, gestion des licences
+
+--------------------------------------------------------------------------------
+ 12. ACCESSIBILITÉ
+--------------------------------------------------------------------------------
+[P] Vérification complète d'accessibilité (Full Check) selon PDF/UA et WCAG 2.x, rapport détaillé
+[P] Assistant « Rendre accessible » (Make Accessible) : action guidée
+[P] Balisage automatique (Autotag) du document, y compris amélioré par IA (Sensei)
+[P] Éditeur de balises (arborescence : H1-H6, P, L, LI, Table, TH, TD, Figure, Link, Form...)
+[P] Outil d'ordre de lecture (Reading Order / TouchUp) : définir zones, tableaux, figures, artefacts
+[P] Texte de remplacement (alt text) pour images, y compris suggestion IA
+[P] Éditeur de tableaux : en-têtes, portées (scope), ID
+[P] Définir la langue du document et par élément
+[P] Titre du document, signets, ordre de tabulation
+[R] Assistant de configuration de l'accessibilité (Accessibility Setup Assistant)
+[R] Compatibilité lecteurs d'écran (JAWS, NVDA, Narrator, VoiceOver), navigation au clavier complète
+[R] Reflow, agrandissement des polices, couleurs à contraste élevé
+[R] Lecture à voix haute
+[R] Mode Liquid Mode mobile (reflow IA)
+[P] Export vers texte accessible
+
+--------------------------------------------------------------------------------
+ 13. IMPRESSION ET PRÉPRESSE (PRINT PRODUCTION)
+--------------------------------------------------------------------------------
+[R] Impression standard : plages de pages, plusieurs pages par feuille, livret, affiche (mosaïque), échelle, recto-verso, impression des commentaires
+[R] Impression en niveaux de gris, impression sous forme d'image
+[P] Contrôle en amont (Preflight) : profils PDF/X, PDF/A, PDF/E, PDF/UA, impression numérique, résolution, encres, polices
+[P] Correctifs Preflight (fixups) : convertir couleurs, incorporer polices, aplatir transparences, etc.
+[P] Rapports Preflight, listes de contrôle, droplets
+[P] Conversion des couleurs (RVB → CMJN, profils ICC, encres spot → quadri)
+[P] Gestionnaire d'encres (Ink Manager), alias d'encres
+[P] Aperçu de la sortie : séparations, simulation de surimpression, couverture d'encre totale, avertissements
+[P] Aplatissement des transparences (Flattener Preview) avec paramètres prédéfinis
+[P] Ajouter des repères d'impression (traits de coupe, repères de montage, gammes de couleurs)
+[P] Définir les boîtes de page (fond perdu, coupe)
+[P] Optimiseur de PDF (PDF Optimizer) : sous-échantillonnage images, compression, polices, transparence, objets inutilisés, nettoyage
+[P] Enregistrer en PDF/X-1a, PDF/X-3, PDF/X-4, PDF/A-1/2/3/4, PDF/E, PDF/VT
+[P] Corrections de trappage (Trap Presets)
+[P] Recadrage de pages, ajustement des boîtes
+[P] Réparation des « hairlines » (traits fins)
+[P] JDF (Job Definition Format)   [hérité]
+
+--------------------------------------------------------------------------------
+ 14. AUTOMATISATION ET SCRIPTS
+--------------------------------------------------------------------------------
+[P] Assistant d'actions (Action Wizard) : enchaîner des étapes sur plusieurs fichiers (OCR, sécurité, filigrane, export...)
+[P] Actions prédéfinies et personnalisées, partage d'actions (.sequ)
+[P] Traitement par lots de dossiers entiers
+[P] Outils personnalisés (Custom Tools) : créer sa propre barre d'outils
+[P] JavaScript Acrobat (API complète : documents, champs, annotations, calques, impression, e-mail, dialogues, sécurité)
+[P] JavaScript au niveau document, page, champ, dossier (folder-level scripts)
+[P] Console JavaScript / débogueur
+[P] Plug-in SDK (C/C++) pour extensions natives
+[P] Interopérabilité IAC / OLE / COM (automatisation depuis VBA, .NET)
+[P] Ligne de commande limitée (impression, ouverture)
+[E] Acrobat Services API (PDF Services REST) : créer, convertir, OCR, compresser, protéger, extraire (PDF Extract API), génération de documents (Document Generation API), signatures (Sign API), PDF Embed API
+[E] Intégration Power Automate, Zapier, Workfront
+[AI][NEW 2026] Actions automatisées déclenchées par l'assistant IA en langage naturel (convertir, signer, partager, extraire des pages)
+
+--------------------------------------------------------------------------------
+ 15. PARTAGE, CLOUD ET COLLABORATION
+--------------------------------------------------------------------------------
+[R] Adobe Document Cloud : stockage (2 Go gratuits, 100 Go abonnement), synchronisation multi-appareils
+[R] Partager un lien (lecture, commentaire), partager par e-mail, gérer les accès, définir une échéance
+[R] Suivi des fichiers partagés : consulté, commenté, téléchargé, notifications
+[R] Envoyer pour signature depuis le partage
+[R] Commentaires en temps réel sur fichiers partagés (web, mobile, desktop synchronisés)
+[R] Intégrations : Microsoft Teams, Outlook, OneDrive, SharePoint, Google Drive, Google Chrome (extension), Dropbox, Box, Zoom
+[R][NEW 2026] Adobe pour Slack : ouvrir, résumer, commenter des PDF depuis Slack (Business+, Enterprise+)
+[R] Extension navigateur (Chrome, Edge) : ouvrir, annoter, convertir, signer dans le navigateur
+[R] Acrobat en ligne (acrobat.adobe.com) : 25+ outils gratuits/limités (fusionner, compresser, convertir, signer, modifier, protéger...)
+[R] Applications mobiles iOS / Android : lecture, annotations, remplissage, signature, scan, Liquid Mode, AI Assistant
+[AI] PDF Spaces : espaces de travail IA regroupant jusqu'à 100 fichiers (PDF, Office, notes, transcriptions, liens web)
+[AI][NEW 2026] PDF Spaces collaboratifs : inviter des collaborateurs, ajouter des fichiers, laisser des notes, recueillir des commentaires
+[AI][NEW 2026] PDF Spaces : noms modifiables, disposition compacte, ajout de dossiers entiers depuis le cloud Adobe, upload pendant le chat IA
+[AI][NEW 2026] Student Spaces (disponible mondialement) : flashcards, quiz, guides d'étude, fiches de synthèse, citations, notes manuscrites numérisées
+[S] Historique des versions dans le cloud, restauration
+
+--------------------------------------------------------------------------------
+ 16. INTELLIGENCE ARTIFICIELLE (AI ASSISTANT / ACROBAT STUDIO / PRODUCTIVITY AGENT)
+--------------------------------------------------------------------------------
+[AI] AI Assistant : conversation en langage naturel avec un ou plusieurs documents (PDF, Word, PPT, TXT, transcriptions de réunions)
+[AI] Résumé génératif (Generative Summary) : synthèse structurée avec sections et points clés
+[AI] Réponses avec citations cliquables (attributions vers le passage source)
+[AI] Suggestions de questions contextuelles
+[AI] Questions sur plusieurs documents simultanément (multi-doc), comparaison entre documents
+[AI] Génération de contenu à partir du document : e-mail, rapport, article, post, brouillon
+[AI] Intelligence contractuelle : détection automatique des contrats, aperçu, termes clés, comparaison de versions, détection d'écarts jusqu'à 10 contrats
+[AI] Analyse de transcriptions de réunions (Teams, Zoom) : actions, décisions
+[AI] AI Assistant dans Reader, Acrobat desktop, web, mobile, extension Chrome, Teams
+[AI] Support multilingue de l'assistant
+[AI][NEW 2026] Édition de PDF par chat : remplacer, réécrire, restructurer, biffer, formater, surligner
+[AI][NEW 2026] Actions par chat : convertir, signer, partager, supprimer / extraire des pages
+[AI][NEW 2026] Présentations génératives : plan automatique, choix de longueur et de ton, génération de deck (via Adobe Express), coédition en direct, mode présentateur
+[AI][NEW 2026] Podcasts personnels : résumé audio conversationnel type podcast d'un ou plusieurs documents / pages web
+[AI][NEW 2026] Résumés audio et lecture à voix haute IA (voix naturelles)
+[AI][NEW 2026] Rapports interactifs et « summary slides » : transformation de documents denses en visuels
+[AI][NEW 2026] Génération d'images depuis la barre de prompt (Firefly) sur la page d'accueil Acrobat Studio
+[AI][NEW 2026] Barre de prompt unifiée (Acrobat Studio Home) : outils, recherche de fichiers, génération d'images, insights
+[AI][NEW 2026] Assistants IA personnalisés (rôles / personas : analyste, professeur, etc.)
+[AI][NEW 2026] Adobe Productivity Agent (mai 2026) : agent qui comprend, crée et partage — orchestrant Acrobat, Express, Firefly
+[AI][NEW 2026] Reconnaissance de contenu correspondant (« trouve tous les passages similaires »)
+[E][NEW 2026] Analyzer : analyse structurée de milliers de fichiers (insights, tableaux, tendances)
+[E][NEW 2026] Knowledge Base : connexion à SharePoint et Google Drive pour interroger des bases documentaires entières
+[AI] Engagement de confidentialité : pas d'entraînement sur les données clients, contrôles d'administration IA
+[AI] Plans : Acrobat AI Assistant, AI Assistant Plus, Acrobat Studio (individuel / équipes / entreprise), Acrobat Express
+
+--------------------------------------------------------------------------------
+ 17. OUTILS DIVERS
+--------------------------------------------------------------------------------
+[S] Compresser / réduire la taille d'un PDF (niveaux de compatibilité, par lots)
+[S] Réparer / optimiser un PDF corrompu (enregistrer sous → réécriture)
+[S] Comparer des fichiers (voir Révision)
+[S] Aplatir un PDF (annotations, formulaires, calques)
+[S] Ajouter des pièces jointes (n'importe quel fichier), les ouvrir, les extraire
+[S] Créer des calques (via import), fusionner / aplatir des calques, propriétés de calques   [P]
+[S] Éditer des objets (déplacer, mettre à l'échelle, pivoter, cisailler, ordre z)
+[S] Convertir couleurs, supprimer / ajouter des profils ICC   [P]
+[S] Gestion des polices : incorporer, désincorporer, sous-ensemble   [P]
+[S] Ajouter des transitions de pages (présentation)
+[S] Insérer multimédia : vidéo (MP4, H.264), audio (MP3), 3D, animations, contenus riches
+[S] Ajouter des boutons de navigation, actions de page (ouverture / fermeture)
+[S] Fonction « Envoyer par e-mail » (client par défaut, Gmail, Outlook web)
+[S] Dictionnaires et vérification orthographique (commentaires, formulaires)
+[S] Presse-papiers étendu : copier des images, des tableaux, texte avec mise en forme
+[S] Comparaison visuelle de pages, taux de zoom synchronisé
+[S] Mode « Notes » (mobile) et signature vocale
+[S] Unités personnalisées, préférences avancées (200+ paramètres)
+[S] Historique / annuler-rétablir multi-niveaux
+[S] Thème d'interface clair / sombre, barre d'outils personnalisable, raccourcis clavier
+[S] Support des liens hypertexte relatifs, destinations nommées, actions JavaScript
+[S] Lecture des codes QR / codes-barres dans les formulaires
+
+--------------------------------------------------------------------------------
+ 18. NORMES ET FORMATS SUPPORTÉS
+--------------------------------------------------------------------------------
+- PDF 1.0 à 2.0 (ISO 32000-1 et 32000-2)
+- PDF/A-1a, 1b, 2a, 2b, 2u, 3a, 3b, 3u, 4, 4e, 4f (archivage)
+- PDF/X-1a, X-3, X-4, X-4p, X-5 (impression)
+- PDF/E (ingénierie), PDF/UA (accessibilité), PDF/VT (impression variable)
+- XFA (formulaires dynamiques — support en fin de vie)
+- FDF / XFDF (données de formulaires et commentaires)
+- U3D / PRC (3D), Rich Media, JavaScript, XMP (métadonnées)
+- Chiffrement AES-256 (R6), certificats X.509, PAdES, CAdES, RFC 3161 (horodatage)
+- Entrée : DOC/DOCX, XLS/XLSX, PPT/PPTX, RTF, TXT, HTML, JPG, PNG, TIFF, BMP, GIF, JP2, PS, EPS, AI, INDD (via export), PSD, Visio, Project, Publisher, MSG/EML (Outlook), ZIP (portfolio)
+- Sortie : DOCX, XLSX, PPTX, RTF, TXT, HTML, XML, JPG, PNG, TIFF, JP2, PS, EPS, PDF/A/X/E, EPUB (via Digital Editions)
+
+--------------------------------------------------------------------------------
+ 19. PLATEFORMES
+--------------------------------------------------------------------------------
+- Windows (10/11, x64 et ARM64), macOS (Intel et Apple Silicon)
+- Web (acrobat.adobe.com, Chrome, Edge, Firefox, Safari)
+- iOS / iPadOS, Android (Acrobat Reader mobile + Adobe Scan + Fill & Sign + Acrobat Sign)
+- Extensions : Chrome, Edge, Microsoft 365 (Word, Outlook, Teams, SharePoint), Google Workspace (Drive, Gmail), Slack, Zoom, Box, Dropbox
+- Acrobat Sign (web + mobile), Adobe Scan, Adobe Express (intégré à Studio)
+- Acrobat Services API / SDK (Node.js, Java, .NET, Python), PDF Embed API (JS)
+
+--------------------------------------------------------------------------------
+ 20. FAIBLESSES CONNUES D'ACROBAT (opportunités pour Acrux)
+--------------------------------------------------------------------------------
+- Lourdeur : temps de démarrage long, consommation mémoire élevée, installateur volumineux (>1 Go)
+- Interface encombrée et changée fréquemment, multiples couches (ancienne / nouvelle expérience)
+- Prix : abonnement mensuel élevé, IA facturée en supplément, fonctionnalités clés réservées à Pro
+- Télémétrie et services cloud imposés, connexion Adobe requise pour de nombreuses fonctions
+- Fonctions IA nécessitant un envoi des documents dans le cloud (pas d'IA locale / hors-ligne)
+- Pas de Linux
+- Édition de texte imparfaite sur mises en page complexes (reflow limité, polices approximatives)
+- OCR de qualité moyenne sur documents manuscrits / dégradés, plus lent que les moteurs modernes
+- Formulaires XFA en fin de vie sans remplacement moderne
+- Comparaison de documents limitée (pas de diff sémantique fin)
+- Pas de collaboration hors-ligne, pas de fusion de conflits
+- Scripting JavaScript vieillissant (ES3/ES5), pas de Python / API moderne côté desktop
+- Absence de gestion de versions intégrée type Git, de workflow de validation avancé natif
+- Accessibilité : balisage automatique encore imparfait, correction manuelle laborieuse
+- Modèle de plug-ins fermé (SDK C++ sous licence)
+
+--------------------------------------------------------------------------------
+ SOURCES CONSULTÉES (18/09/2026)
+--------------------------------------------------------------------------------
+- https://helpx.adobe.com/acrobat/desktop/whats-new/whats-new-acrobat-desktop.html
+- https://helpx.adobe.com/acrobat/desktop/whats-new/release-notes.html
+- https://www.adobe.com/devnet-docs/acrobatetk/tools/ReleaseNotesDC/index.html
+- https://news.adobe.com/news/2026/01/adobe-acrobat-studio-transforms
+- https://news.adobe.com/news/2026/05/adobes-new-productivity-agent
+- https://news.adobe.com/news/2026/09/adobe-productivity-agent-in-acrobat-now-transforms-complex-documents
+- https://news.adobe.com/news/2025/02/acrobat-ai-assistant-contracts
+- https://www.adobe.com/acrobat/generative-ai-pdf/pdf-spaces.html
+- https://blog.adobe.com/en/publish/2026/01/21/work-smarter-acrobat-turn-docs-presentations-podcasts-edit-pdfs-ai
+- https://techcrunch.com/2026/01/21/adobe-acrobat-now-lets-you-edit-files-using-prompts-generate-podcast-summaries/

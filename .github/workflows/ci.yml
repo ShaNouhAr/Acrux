@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  # Windows fait tourner l'ensemble : c'est la seule plateforme où
+  # l'application, l'installateur et les ressources Windows se construisent.
+  windows:
+    name: Tout (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust stable
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Formatage
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets
+      - name: Tests
+        run: cargo test --workspace
+      - name: Build release
+        run: cargo build --release --workspace
+
+  # Ailleurs, on vérifie le moteur PDF, qui est portable, et la ligne de
+  # commande. L'application a encore un seul backend de fenêtrage (Win32) :
+  # la construire sur Linux ou macOS n'aurait rien à prouver.
+  portable:
+    name: Moteur (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust stable
+        run: rustup toolchain install stable --profile minimal --component clippy
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ matrix.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Clippy
+        run: >
+          cargo clippy --all-targets
+          -p acrux-core -p acrux-document -p acrux-codecs -p acrux-fonts
+          -p acrux-graphics -p acrux-render -p acrux-features -p acrux-cli
+      - name: Tests
+        run: >
+          cargo test
+          -p acrux-core -p acrux-document -p acrux-codecs -p acrux-fonts
+          -p acrux-graphics -p acrux-render -p acrux-features -p acrux-cli
