@@ -144,17 +144,27 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   `shading` (types 1 à 7), `interpreter` (tous les opérateurs, XObjects, motifs, ExtGState,
   masques souples, groupes de transparence, contenu optionnel, budgets anti-hostilité),
   `page` (matrice de base, rotation, annotations).
-- **Fidélité quand la police manque.** Trois règles, dans cet ordre. La police *demandée* est
-  cherchée d'abord — réclamer Calibri sur une machine où Calibri est installée ne devrait jamais
-  donner Arial. À défaut, si `/BaseFont` désigne une des quatorze polices standard, ses largeurs
+- **Fidélité quand la police manque.** `font/system` tient un **index des polices installées,
+  par leur nom** : on ouvre chaque fichier une fois, on lit sa seule table `name` — quelques
+  kilo-octets, pas le fichier entier — et on retient sous quel nom la police se présente. Deviner
+  le nom du fichier (`calibrib.ttf`) marche sur Windows et nulle part ailleurs : macOS empile ses
+  polices dans des recueils `.ttc` aux noms arbitraires, les distributions Linux les éparpillent
+  par famille, et rien ne garantit qu'un fichier nommé `arial.ttf` contienne Arial. Sur cette
+  machine : 364 polices indexées en 16 ms, recherche en 78 ns, et l'index ne se construit qu'à la
+  première police absente rencontrée. Les recours vont du plus fidèle au moins : nom PostScript
+  exact, nom complet, famille avec le style demandé, famille quel que soit son style, famille
+  d'allure équivalente, **n'importe quelle** police de la machine ayant le bon caractère, et en
+  tout dernier seulement notre propre dessin. Une vraie police mal choisie vaut mieux qu'une
+  lettre dessinée par nous. Ensuite seulement. À défaut, si `/BaseFont` désigne une des quatorze polices standard, ses largeurs
   viennent de `acrux_fonts::standard`, qui ne dépend d'aucune installation. Et le contour de
   remplacement est **étiré horizontalement jusqu'à l'avance déclarée** : une police de substitution
   n'a pas les chasses de l'absente, et dessinée telle quelle chaque lettre flotte dans sa place ou
   en déborde. Acrobat fait cela avec des polices à axes variables ; nous étirons le contour, ce qui
   condense un peu la lettre mais la fait tomber au bon endroit — et c'est cela qui décide si une
-  page ressemble à son original. Enfin, s'il n'y a **aucune** police sur la machine, le dernier
-  recours est `acrux_fonts::fallback`, la police que nous dessinons nous-mêmes : un fichier valide
-  doit s'afficher partout, c'est tout le sens d'un moteur sans dépendances. Un masque souple ou un groupe de
+  page ressemble à son original. Et s'il n'y a **aucune** police sur la machine — un conteneur, une
+  image de compilation minimale — le dernier recours est `acrux_fonts::fallback`, la police que
+  nous dessinons nous-mêmes : un fichier valide doit s'afficher partout, c'est tout le sens d'un
+  moteur sans dépendances. Un masque souple ou un groupe de
   transparence n'est rendu hors écran **que dans sa `/BBox`** ramenée en pixels, jamais en
   pleine page, et une découpe de `/BBox` qui couvre déjà toute la cible n'est pas posée :
   sur une page à huit masques imbriqués, cela fait passer le rendu de 259 à 170 ms (150 dpi,

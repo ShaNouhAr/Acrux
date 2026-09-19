@@ -63,11 +63,35 @@ Ce qui manque : les largeurs de ZapfDingbats. Les inventer serait pire que
 l'absence — `width_by_name` rend `None`, et l'appelant sait qu'il doit se
 rabattre ailleurs.
 
+## Les noms d'une police (`names`)
+
+La table `name` d'une police OpenType dit sous quels noms elle se présente :
+famille, sous-famille, nom complet, nom PostScript. C'est par là qu'un lecteur
+retrouve une police installée, et c'est le seul lien fiable entre ce qu'un PDF
+demande (`/BaseFont /Calibri-Bold`) et ce qu'il y a sur le disque.
+
+Deviner le nom du fichier ne marche que sur Windows : macOS empile ses polices
+dans des recueils `.ttc` aux noms arbitraires, Linux les éparpille par famille,
+et rien ne garantit qu'un fichier nommé `arial.ttf` contienne Arial.
+
+Les identifiants 16 et 17 priment sur 1 et 2 quand ils existent : ils décrivent
+la famille telle que le dessinateur la conçoit, là où 1 et 2 sont contraints par
+le vieux modèle « régulier, gras, italique, gras italique » de Windows. C'est ce
+qui fait que « Segoe UI Semibold » se range sous « Segoe UI » et non dans une
+famille à part.
+
+Une table abîmée ne rend pas d'erreur : elle donne moins de noms. Un index se
+construit sur des centaines de fichiers, dont certains sont cassés ; en refuser
+un ne doit pas coûter les autres.
+
 ## La police de secours (`fallback`)
 
-Sur une machine sans une seule police installée — un conteneur, une image de
-compilation minimale — il n'y a rien à substituer, et la page reste blanche
-alors que le fichier est parfaitement valide. Acrobat embarque pour ce cas
+**Dernier recours seulement.** Tant que la machine a de vraies polices, c'est
+l'une d'elles qui sert, jusqu'à prendre n'importe laquelle ayant le bon
+caractère : une vraie police mal choisie vaut mieux qu'une lettre dessinée par
+nous. Mais sur une machine sans une seule police installée — un conteneur, une
+image de compilation minimale — il n'y a rien à substituer, et la page reste
+blanche alors que le fichier est parfaitement valide. Acrobat embarque pour ce cas
 Adobe Sans MM. Voici la nôtre.
 
 Chaque lettre est décrite comme on la tracerait à la plume, puis épaissie :

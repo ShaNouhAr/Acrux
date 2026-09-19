@@ -114,10 +114,15 @@ Livrable : version 0.2, parité avec Acrobat Standard hors édition de texte.
   en déborde, et la ligne se disloque. Le contour est donc étiré horizontalement jusqu'à l'avance
   déclarée — ce que fait Acrobat avec ses polices à axes variables, en mieux dessiné. Les bornes
   0,2 à 5 évitent d'étirer un glyphe qui n'a manifestement rien à voir.
-- [x] **La police demandée est cherchée avant d'être remplacée** : un document qui réclame Calibri
-  sur une machine où Calibri est installée recevait Arial. Les noms de fichiers de Windows se
-  devinent par radical et suffixe (`calibrib.ttf`, `georgiai.ttf`) sans ouvrir les quatre cents
-  polices installées.
+- [x] **Index des polices installées, par leur nom** (`acrux-render/font/system.rs`,
+  `acrux-fonts/names.rs`) : un document qui réclame Calibri, Georgia ou Consolas sur une machine
+  où elles sont installées recevait Arial. On lit maintenant la table `name` de chaque police —
+  quelques kilo-octets par fichier, jamais le fichier entier — et on cherche par nom PostScript,
+  nom complet, puis famille et style. 364 polices indexées en 16 ms sur une machine d'essai,
+  recherche en 78 ns, index construit seulement à la première police absente rencontrée. C'est la
+  seule méthode portable : deviner `calibrib.ttf` ne marche que sur Windows. Les recours
+  descendent ensuite du plus fidèle au moins, et **notre propre dessin ne sert que si la machine
+  n'a aucune police** — un test le vérifie.
 - [x] **Police de secours dessinée par nous** (`acrux-fonts/fallback.rs`) : sur une machine sans
   aucune police utilisable — conteneur, image de compilation minimale — la page restait blanche
   alors que le fichier était valide. Acrobat embarque pour ce cas Adobe Sans MM ; voici la nôtre.

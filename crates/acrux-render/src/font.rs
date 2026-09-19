@@ -12,8 +12,6 @@
 #![allow(clippy::large_enum_variant, clippy::too_many_lines)]
 
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::rc::Rc;
 
 use acrux_core::{Matrix, Path, Result};
 use acrux_document::{Dict, Document, Name, Object};
@@ -22,6 +20,8 @@ use acrux_fonts::encodings::{self, glyph_name_to_unicode};
 use acrux_fonts::fallback;
 use acrux_fonts::standard::Standard;
 use acrux_fonts::{CffFont, TrueTypeFont, Type1Font};
+
+pub mod system;
 
 /// Famille de police PDF.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -961,81 +961,11 @@ fn program_from_bytes(bytes: &[u8], key: &str, subtype: Option<&str>) -> Option<
     }
 }
 
-/// Répertoires de polices système, dans l'ordre de recherche.
-fn system_font_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    // `ACRUX_FONT_DIR` remplace les répertoires du système au lieu de s'y
-    // ajouter : c'est ce qui permet de vérifier ce que donne un fichier sur
-    // une machine dépourvue de polices, qui est le cas que l'on redoute.
-    if let Ok(custom) = std::env::var("ACRUX_FONT_DIR") {
-        return vec![PathBuf::from(custom)];
-    }
-    if let Ok(windir) = std::env::var("WINDIR") {
-        dirs.push(PathBuf::from(windir).join("Fonts"));
-    }
-    dirs.push(PathBuf::from("C:/Windows/Fonts"));
-    dirs.push(PathBuf::from("/usr/share/fonts/truetype/liberation"));
-    dirs.push(PathBuf::from("/usr/share/fonts/truetype/dejavu"));
-    dirs.push(PathBuf::from("/usr/share/fonts"));
-    dirs.push(PathBuf::from("/System/Library/Fonts"));
-    dirs.push(PathBuf::from("/Library/Fonts"));
-    dirs
-}
-
-thread_local! {
-    static SUBSTITUTE_CACHE: std::cell::RefCell<HashMap<String, Option<Rc<Vec<u8>>>>> = std::cell::RefCell::new(HashMap::new());
-}
-
-/// Noms de fichiers à tenter pour la police **exactement demandée**.
+/// Choisit une police du système pour remplacer une police absente.
 ///
-/// Un document qui réclame Calibri sur une machine où Calibri est installée ne
-/// doit pas recevoir Arial : ce serait substituer là où il n'y a rien à
-/// substituer. Windows nomme ses fichiers par radical et suffixe de style
-/// (`calibri.ttf`, `calibrib.ttf`, `calibrii.ttf`, `calibriz.ttf`), ce qui se
-/// devine sans ouvrir les quatre cents polices installées.
-fn family_files(base_font: &str, bold: bool, italic: bool) -> Vec<String> {
-    let name = base_font.rsplit('+').next().unwrap_or(base_font);
-    let mut key = String::with_capacity(name.len());
-    for c in name.chars() {
-        if c.is_ascii_alphanumeric() {
-            key.push(c.to_ascii_lowercase());
-        }
-    }
-    for mot in [
-        "psmt",
-        "psmc",
-        "bolditalic",
-        "boldoblique",
-        "bold",
-        "italic",
-        "oblique",
-        "regular",
-        "mt",
-        "ps",
-    ] {
-        key = key.replace(mot, "");
-    }
-    // Un radical trop court attraperait n'importe quoi.
-    if key.len() < 4 {
-        return Vec::new();
-    }
-    let suffixes: &[&str] = match (bold, italic) {
-        (true, true) => &["bi", "z", "bd", "b"],
-        (true, false) => &["b", "bd"],
-        (false, true) => &["i", "it"],
-        (false, false) => &[""],
-    };
-    let mut files = Vec::new();
-    for suffix in suffixes.iter().chain(std::iter::once(&"")) {
-        for ext in ["ttf", "otf", "ttc"] {
-            files.push(format!("{key}{suffix}.{ext}"));
-        }
-    }
-    files
-}
-
-/// Choisit et charge une police système pour remplacer une police absente
-/// (§9.6.2.2 : les 14 polices standard ; sinon d'après le nom et les drapeaux).
+/// Trois recours, dans cet ordre : la police **exactement demandée**, si elle
+/// est installée ; à défaut une police de même allure ; à défaut la nôtre.
+/// Voir [`system`] pour le détail de la recherche par nom.
 fn substitute(base_font: &str, flags: u32) -> Program {
     let lower = base_font.to_ascii_lowercase();
     let bold = lower.contains("bold")
@@ -1044,114 +974,54 @@ fn substitute(base_font: &str, flags: u32) -> Program {
         || lower.contains("semibold")
         || flags & FLAG_FORCE_BOLD != 0;
     let italic = lower.contains("italic") || lower.contains("oblique") || flags & FLAG_ITALIC != 0;
-    let fixed = lower.contains("courier") || lower.contains("mono") || flags & FLAG_FIXED != 0;
-    let serif = lower.contains("times")
-        || lower.contains("georgia")
-        || lower.contains("book")
-        || lower.contains("garamond")
-        || lower.contains("roman")
-        || lower.contains("serif") && !lower.contains("sans");
-    let candidates: Vec<&str> = if lower.contains("symbol") {
-        vec!["symbol.ttf"]
-    } else if lower.contains("dingbat") || lower.contains("wingding") {
-        vec!["wingding.ttf", "symbol.ttf"]
-    } else if fixed {
-        match (bold, italic) {
-            (true, true) => vec![
-                "courbi.ttf",
-                "LiberationMono-BoldItalic.ttf",
-                "DejaVuSansMono-BoldOblique.ttf",
-            ],
-            (true, false) => vec![
-                "courbd.ttf",
-                "LiberationMono-Bold.ttf",
-                "DejaVuSansMono-Bold.ttf",
-            ],
-            (false, true) => vec![
-                "couri.ttf",
-                "LiberationMono-Italic.ttf",
-                "DejaVuSansMono-Oblique.ttf",
-            ],
-            (false, false) => vec![
-                "cour.ttf",
-                "LiberationMono-Regular.ttf",
-                "DejaVuSansMono.ttf",
-            ],
-        }
-    } else if serif
-        || (flags & FLAG_SERIF != 0 && !lower.contains("arial") && !lower.contains("helvetica"))
-    {
-        match (bold, italic) {
-            (true, true) => vec![
-                "timesbi.ttf",
-                "LiberationSerif-BoldItalic.ttf",
-                "DejaVuSerif-BoldItalic.ttf",
-            ],
-            (true, false) => vec![
-                "timesbd.ttf",
-                "LiberationSerif-Bold.ttf",
-                "DejaVuSerif-Bold.ttf",
-            ],
-            (false, true) => vec![
-                "timesi.ttf",
-                "LiberationSerif-Italic.ttf",
-                "DejaVuSerif-Italic.ttf",
-            ],
-            (false, false) => vec![
-                "times.ttf",
-                "LiberationSerif-Regular.ttf",
-                "DejaVuSerif.ttf",
-            ],
-        }
-    } else {
-        match (bold, italic) {
-            (true, true) => vec![
-                "arialbi.ttf",
-                "LiberationSans-BoldItalic.ttf",
-                "DejaVuSans-BoldOblique.ttf",
-            ],
-            (true, false) => vec![
-                "arialbd.ttf",
-                "LiberationSans-Bold.ttf",
-                "DejaVuSans-Bold.ttf",
-            ],
-            (false, true) => vec![
-                "ariali.ttf",
-                "LiberationSans-Italic.ttf",
-                "DejaVuSans-Oblique.ttf",
-            ],
-            (false, false) => vec!["arial.ttf", "LiberationSans-Regular.ttf", "DejaVuSans.ttf"],
-        }
-    };
-    let demandees = family_files(base_font, bold, italic);
-    let candidates = demandees.iter().map(String::as_str).chain(candidates);
-    for file in candidates {
-        let key = file.to_string();
-        let cached = SUBSTITUTE_CACHE.with(|c| c.borrow().get(&key).cloned());
-        let bytes = if let Some(b) = cached {
-            b
-        } else {
-            let found = system_font_dirs()
-                .into_iter()
-                .map(|d| d.join(file))
-                .find(|p| p.is_file())
-                .and_then(|p| std::fs::read(p).ok())
-                .map(Rc::new);
-            SUBSTITUTE_CACHE.with(|c| c.borrow_mut().insert(key, found.clone()));
-            found
-        };
-        if let Some(bytes) = bytes {
-            // Un `.ttc` est un recueil : sa première police est celle du nom.
-            if let Ok(tt) = TrueTypeFont::parse(&bytes)
-                .or_else(|_| TrueTypeFont::parse_collection_index(&bytes, 0))
-            {
-                return Program::TrueType(tt);
-            }
+    let index = system::index();
+
+    // 1. La police du document, retrouvée par son nom. Ce n'est alors pas une
+    //    substitution du tout : c'est la bonne police.
+    if let Some(face) = index.lookup(base_font, bold, italic) {
+        if let Some(program) = from_face(face) {
+            return program;
         }
     }
-    // Aucune police du système : la nôtre. Un fichier valide doit s'afficher,
-    // même sur une machine qui n'a pas une seule police installée.
+
+    // 2. Une police de même allure. Les drapeaux du descripteur (§9.8.2) sont
+    //    plus fiables que le nom, mais beaucoup de fichiers ne les remplissent
+    //    pas : on lit les deux.
+    let kind = if lower.contains("dingbat") || lower.contains("wingding") {
+        system::Kind::Dingbat
+    } else if lower.contains("symbol") {
+        system::Kind::Symbol
+    } else if lower.contains("courier") || lower.contains("mono") || flags & FLAG_FIXED != 0 {
+        system::Kind::Mono
+    } else if lower.contains("times")
+        || lower.contains("georgia")
+        || lower.contains("garamond")
+        || lower.contains("roman")
+        || lower.contains("book")
+        || (lower.contains("serif") && !lower.contains("sans"))
+        || (flags & FLAG_SERIF != 0 && !lower.contains("arial") && !lower.contains("helvetica"))
+    {
+        system::Kind::Serif
+    } else {
+        system::Kind::Sans
+    };
+    if let Some(face) = index.lookup_generic(kind, bold, italic) {
+        if let Some(program) = from_face(face) {
+            return program;
+        }
+    }
+
+    // 3. Aucune police sur la machine : la nôtre. Un fichier valide doit
+    //    s'afficher, même là où il n'y a rien d'installé.
     Program::Fallback
+}
+
+/// Charge une police de l'index.
+fn from_face(face: &system::Face) -> Option<Program> {
+    let bytes = system::load(face)?;
+    TrueTypeFont::parse_collection_index(&bytes, face.index)
+        .ok()
+        .map(Program::TrueType)
 }
 
 /// Table complète (256 codes) d'un encodage prédéfini.
@@ -1186,6 +1056,51 @@ mod tests {
     /// Largeur en x de l'encre d'un contour.
     fn ink_width(path: &Path) -> f64 {
         path.bounds().map_or(0.0, |b| b.x1 - b.x0)
+    }
+
+    #[test]
+    fn la_police_exacte_prime_sur_toute_substitution() {
+        let index = system::index();
+        if index.is_empty() {
+            return; // Machine sans polices : rien à trouver.
+        }
+        // Georgia n'est pas une des quatorze : la trouver, c'est l'avoir
+        // cherchée par son nom dans les polices installées.
+        let Some(face) = index.lookup("Georgia", false, false) else {
+            return; // Georgia n'est pas installée ici.
+        };
+        assert_eq!(face.family, "georgia");
+        let gras = index.lookup("Georgia-Bold", true, false);
+        assert!(gras.is_some_and(|f| f.family == "georgia" && f.bold));
+        // Un nom PostScript avec préfixe de sous-ensemble et suffixe de
+        // fonderie doit retomber sur la même famille.
+        let abrege = index.lookup("ABCDEF+Georgia-BoldItalic", true, true);
+        assert!(abrege.is_some_and(|f| f.family == "georgia"));
+    }
+
+    #[test]
+    fn une_machine_pourvue_nemploie_jamais_notre_police() {
+        if system::index().is_empty() {
+            return; // Machine sans polices : c'est justement là qu'elle sert.
+        }
+        // Une police installée, une absente, une qui n'existe nulle part, et
+        // deux symboliques : aucune ne doit finir sur un dessin de notre main
+        // tant que la machine a de vraies polices.
+        for base in [
+            "Calibri",
+            "Palatino-Roman",
+            "CettePoliceNexistePas",
+            "Wingdings",
+            "Symbol",
+        ] {
+            let f = font(&format!(
+                "<< /Type /Font /Subtype /TrueType /BaseFont /{base} >>"
+            ));
+            assert!(
+                !matches!(f.program, Program::Fallback),
+                "{base} est tombée sur la police de secours"
+            );
+        }
     }
 
     #[test]
@@ -1254,20 +1169,6 @@ mod tests {
             "rapport {} attendu 2",
             wb / wa
         );
-    }
-
-    #[test]
-    fn la_police_demandee_est_cherchee_avant_toute_substitution() {
-        let files = family_files("ABCDEF+Calibri-Bold", true, false);
-        assert!(files.contains(&"calibrib.ttf".to_string()), "{files:?}");
-        assert!(files.contains(&"calibri.ttf".to_string()), "{files:?}");
-        let italiques = family_files("Georgia,Italic", false, true);
-        assert!(
-            italiques.contains(&"georgiai.ttf".to_string()),
-            "{italiques:?}"
-        );
-        // Un radical trop court ne doit rien attraper.
-        assert!(family_files("F1", false, false).is_empty());
     }
 
     #[test]
