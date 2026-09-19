@@ -27,6 +27,7 @@ use acrux_features::fillsign::marks::{outline_of, Mark};
 use acrux_graphics::Rasterizer;
 
 use crate::platform::Frame;
+use crate::ui::paint::{round_rect, round_rect_outline};
 use crate::ui::sign::{fill_outline, ink_rgb, Item, Saved, INKS};
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
@@ -436,7 +437,7 @@ impl SignPanel {
             (false, true) => theme.separator,
             (false, false) => theme.hover,
         };
-        frame.fill_rect(x, y, width, h, r, g, b);
+        round_rect(frame, x, y, width, h, 9.0 * dpi, (r, g, b));
         let w = text.measure(size, label);
         text.draw(
             frame,
@@ -469,7 +470,7 @@ impl SignPanel {
         let hovered = self.hover == Some(Action::Pick(item));
         if chosen || hovered {
             let (r, g, b) = if chosen { theme.accent } else { theme.hover };
-            frame.fill_rect(pad, y, fw - 2 * pad, h, r, g, b);
+            round_rect(frame, pad, y, fw - 2 * pad, h, 9.0 * dpi, (r, g, b));
         }
         let color = if chosen { (255, 255, 255) } else { theme.text };
         let dim = if chosen {
@@ -526,18 +527,24 @@ impl SignPanel {
         let hovered = self.hover == Some(use_action.clone());
         // Le fond de la carte est clair : une signature s'écrit à l'encre
         // sombre, et se verrait mal sur le fond du panneau.
-        frame.fill_rect(pad, y, width, h, 0xF4, 0xF5, 0xF8);
+        let radius = 10.0 * dpi;
+        round_rect(frame, pad, y, width, h, radius, (0xF4, 0xF5, 0xF8));
         if chosen || hovered {
             let (r, g, b) = if chosen {
                 theme.accent
             } else {
                 theme.separator
             };
-            let t = (2.0 * dpi).max(1.0) as i32;
-            frame.fill_rect(pad, y, width, t, r, g, b);
-            frame.fill_rect(pad, y + h - t, width, t, r, g, b);
-            frame.fill_rect(pad, y, t, h, r, g, b);
-            frame.fill_rect(pad + width - t, y, t, h, r, g, b);
+            round_rect_outline(
+                frame,
+                pad,
+                y,
+                width,
+                h,
+                radius,
+                (2.0 * dpi).max(1.0),
+                (r, g, b),
+            );
         }
         let inner = (10.0 * dpi) as i32;
         let (ax, ay) = (pad + inner, y + inner);
@@ -609,7 +616,7 @@ impl SignPanel {
             } else {
                 (0xE2, 0xE5, 0xEB)
             };
-            frame.fill_rect(bx, by, bw, bh, r, g, b);
+            round_rect(frame, bx, by, bw, bh, 6.0 * dpi, (r, g, b));
             let color = if hovered {
                 (255, 255, 255)
             } else {

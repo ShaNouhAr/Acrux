@@ -19,6 +19,7 @@
 
 use crate::platform::{Frame, Key};
 use crate::ui::input::{InputAction, TextInput};
+use crate::ui::paint::round_rect;
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
 
@@ -725,7 +726,7 @@ impl Palette {
                 continue;
             };
             if index == self.selected {
-                frame.fill_rect(x + 4, ry, width - 8, row, t.hover.0, t.hover.1, t.hover.2);
+                round_rect(frame, x + 6, ry, width - 12, row, 8.0, t.hover);
             }
             let baseline = ry as f32 + f32::midpoint(row as f32, text.ascent(size)) - 1.0;
             let color = if index == self.selected {

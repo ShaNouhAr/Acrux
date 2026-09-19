@@ -195,6 +195,11 @@ Livrable : version 0.2, parité avec Acrobat Standard hors édition de texte.
 - [x] **Écran d'accueil** : les documents récents sont des cartes avec la vignette de leur première
   page (rendu complet, calculé une vignette par réveil pour ne pas figer la fenêtre), leur taille et
   leur date, plus un bouton « Ouvrir un document… ».
+- [x] **Aspect et animations** (`acrux-app/src/ui/paint.rs`, `acrux-app/src/ui/anim.rs`) : surfaces
+  aux coins arrondis et ombres douces ; défilement qui glisse (molette, flèches, pages), panneaux
+  qui viennent du bord, fenêtres de question en fondu, vignettes d'accueil en fondu. Un fil bat à
+  60 Hz et ne réveille la fenêtre que pendant un mouvement.
+  À faire : fondu du survol d'un élément à l'autre, transition entre deux pages en mode paginé.
 - [ ] Menus classiques, info-bulles détaillées, personnalisation de la colonne d'outils.
 
 ## Phase 5 — Édition de niveau Acrobat (le cœur du « mieux qu'Acrobat »)

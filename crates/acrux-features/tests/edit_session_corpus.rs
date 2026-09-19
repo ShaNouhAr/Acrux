@@ -12,14 +12,14 @@
 //!   même résultat que toute la session : c'est ce sur quoi repose
 //!   l'annulation.
 
-#![allow(clippy::unwrap_used, clippy::panic)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::path::PathBuf;
 
 use acrux_document::{collect_pages, Document};
 use acrux_features::edit_text::{
-    new_text_frame, normalized, open_paragraph, set_paragraph_text, text_frame_at, NewTextStyle,
-    OpenedParagraph,
+    line_at, line_unit, new_text_frame, normalized, open_paragraph, open_unit, set_paragraph_text,
+    text_frame_at, NewTextStyle, OpenedParagraph,
 };
 use acrux_features::text::{extract_page_text, PageText};
 
@@ -486,5 +486,38 @@ fn un_paragraphe_de_deux_lignes_reste_justifie() {
         acrux_features::text::Alignment::Justify,
         "un paragraphe justifié de deux lignes doit être reconnu comme tel, \
          sans quoi la première frappe le mettrait en drapeau"
+    );
+}
+
+#[test]
+fn une_ligne_seule_souvre_et_se_modifie() {
+    // Le repli quand un bloc entier refuse : la ligne cliquée, elle, se
+    // recompose seule.
+    let doc = formulaire();
+    let pages = collect_pages(&doc).unwrap();
+    let text = extract_page_text(&doc, &pages[0]).unwrap();
+    let label = text
+        .lines
+        .iter()
+        .position(|l| l.text().contains("Intitulé du compte"))
+        .unwrap_or_else(|| panic!("le libellé est absent du fichier d'essai"));
+    // On le retrouve aussi par le point : c'est ce que fait le clic.
+    let bbox = text.lines[label].bbox;
+    let point = (
+        f64::midpoint(bbox.x0, bbox.x1),
+        f64::midpoint(bbox.y0, bbox.y1),
+    );
+    assert_eq!(line_at(&text, point.0, point.1), Some(label));
+    let unit = line_unit(&text, label).expect("la ligne fait un bloc");
+    let opened = open_unit(&doc, &pages[0], &text, &unit).expect("ouverture de la ligne");
+    assert!(opened.text.contains("Intitulé du compte"));
+    let nouveau = format!("{} Jean Dupont", opened.text);
+    set_paragraph_text(&doc, &pages[0], &opened.frame, &opened.drawn, &nouveau)
+        .expect("frappe sur une ligne seule");
+    let pages = collect_pages(&doc).unwrap();
+    let after = extract_page_text(&doc, &pages[0]).unwrap();
+    assert!(
+        after.lines.iter().any(|l| l.text().contains("Jean Dupont")),
+        "la ligne modifiée est absente de la page"
     );
 }

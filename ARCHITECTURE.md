@@ -344,6 +344,13 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   sombre (`DWMWA_USE_IMMERSIVE_DARK_MODE`) puis, quand le système sait les prendre, la couleur
   exacte de la barre de titre, de son texte et de la bordure. Les attributs inconnus d'un système
   plus ancien sont refusés sans dommage : on demande, on ne teste pas la version.
+- `ui/paint` : coins arrondis, contours et **ombres douces**, par une fonction de distance — le
+  lissage est donc exact aux angles comme sur les côtés, sans cas particulier. Toutes les surfaces
+  de l'interface passent par là.
+- `ui/anim` : valeurs animées (`Anim`, approche exponentielle : indépendante de la cadence, sans
+  saut si la cible change en route) et horloge bornée. Le viewer fait battre un fil à 60 Hz qui ne
+  réveille la fenêtre **que pendant un mouvement** — sans lui, une animation s'arrêterait faute
+  d'événement, puisque rien ne se peint sans réveil.
 - `ui/cursors` : **pointeurs dessinés** (ajouter du texte, surligneur, note, biffure, déplacement),
   décrits sur une grille de 32 × 32 et rasterisés à la taille des pointeurs du système ; `platform`
   les confie au système (`CreateIconIndirect` sous Windows).

@@ -25,8 +25,8 @@ use super::{
 };
 use crate::ui::editpdf::{step_size, BarAction, Buffer, EditBar, EditTool};
 use acrux_features::edit_text::{
-    normalized, open_paragraph, set_paragraph_text, text_frame_at, text_units, CaretMap,
-    NewTextStyle, ParagraphFrame, TextUnit,
+    line_at, line_unit, normalized, open_paragraph, open_unit, set_paragraph_text, text_frame_at,
+    text_units, CaretMap, NewTextStyle, ParagraphFrame, TextUnit,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -292,7 +292,7 @@ impl Viewer {
 
     /// Bloc de texte sous un point de la page : son indice (dans l'ordre où
     /// l'éditeur les numérote) et sa boîte.
-    fn paragraph_at(&mut self, page: usize, pt: Point) -> Option<(usize, Rect)> {
+    fn paragraph_at(&mut self, page: usize, pt: Point) -> Option<(Option<usize>, Rect)> {
         let margin = 2.0;
         self.units(page)
             .iter()
@@ -308,7 +308,15 @@ impl Viewer {
             .min_by(|(_, a), (_, b)| {
                 (a.bbox.width() * a.bbox.height()).total_cmp(&(b.bbox.width() * b.bbox.height()))
             })
-            .map(|(i, p)| (i, p.bbox))
+            .map(|(i, p)| (Some(i), p.bbox))
+            .or_else(|| {
+                // Aucun bloc ici : peut-être une ligne que l'extraction n'a
+                // rattachée à aucun paragraphe. Elle se modifie quand même.
+                let l = self.loaded.as_mut()?;
+                let text = l.text(page).0.clone();
+                let index = line_at(&text, pt.x, pt.y)?;
+                Some((None, text.lines.get(index)?.bbox))
+            })
     }
 
     /// Blocs éditables d'une page, gardés tant que la page ne change pas :
@@ -501,14 +509,33 @@ impl Viewer {
     }
 
     /// Ouvre un paragraphe existant, curseur au point cliqué.
-    fn open_existing(&mut self, page: usize, index: usize, pt: Point) {
+    fn open_existing(&mut self, page: usize, index: Option<usize>, pt: Point) {
         let opened = {
             let Some(l) = self.loaded.as_mut() else {
                 return;
             };
             let text = l.text(page).0.clone();
             let Some(p) = l.pages.get(page) else { return };
-            open_paragraph(&l.doc, p, &text, index)
+            // Le bloc entier d'abord ; s'il refuse — ses lignes sont mêlées à
+            // d'autres dans le flux, ce qui arrive souvent aux documents d'un
+            // traitement de texte — on retombe sur **la ligne cliquée**, qui
+            // se recompose seule. Mieux vaut modifier une ligne que rien.
+            let whole = index.map(|i| open_paragraph(&l.doc, p, &text, i));
+            match whole {
+                Some(Ok(o)) => Ok(o),
+                other => {
+                    let line = line_at(&text, pt.x, pt.y)
+                        .and_then(|i| line_unit(&text, i))
+                        .map(|unit| open_unit(&l.doc, p, &text, &unit));
+                    match (line, other) {
+                        (Some(Ok(o)), _) => Ok(o),
+                        (Some(Err(e)), _) | (None, Some(Err(e))) => Err(e),
+                        (None, _) => Err(acrux_core::Error::Unsupported(
+                            "aucun texte modifiable ici".into(),
+                        )),
+                    }
+                }
+            }
         };
         match opened {
             Ok(o) => {

@@ -7,6 +7,39 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
+## 0.8.0 — 20 septembre 2026
+
+Une interface finie, et du texte qui se laisse modifier partout.
+
+### On modifie aussi les lignes que les blocs refusaient
+
+- Quand un bloc entier ne peut pas être recomposé — ses lignes sont mêlées à
+  d'autres dans le flux du document, ce qui arrive souvent aux PDF produits
+  par un traitement de texte —, **la ligne cliquée s'ouvre seule**. Mieux vaut
+  modifier une ligne que rien du tout.
+- Le survol signale aussi les lignes qu'aucun bloc ne couvre : elles se
+  modifient comme le reste.
+
+### L'aspect
+
+- **Coins arrondis, ombres douces, aplats lissés** partout où l'interface
+  pose une surface : fenêtres de question, panneau des signatures, cartes de
+  l'accueil, pastilles de la colonne d'outils, survols de la barre du haut,
+  ligne choisie de la palette. Le dessin passe par une fonction de distance,
+  donc le lissage est exact jusque dans les angles.
+
+### Les animations
+
+- **Le défilement glisse** au lieu de sauter : molette, flèches, Page
+  précédente et suivante. Deux coups de molette de suite s'additionnent sans
+  à-coup, et le document s'arrête net en haut et en bas.
+- **Les panneaux viennent du bord** : la colonne d'outils (F3), le panneau
+  des vignettes et celui des signatures s'ouvrent et se ferment en glissant.
+- **Les fenêtres de question apparaissent en fondu**, en montant de quelques
+  pixels.
+- **Les vignettes de l'accueil naissent du blanc de la page** à mesure
+  qu'elles sont calculées.
+
 ## 0.7.1 — 20 septembre 2026
 
 ### Corrections

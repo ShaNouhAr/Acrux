@@ -33,6 +33,7 @@ use acrux_graphics::Rasterizer;
 
 use crate::platform::Frame;
 use crate::ui::icons::{self, Icon};
+use crate::ui::paint::round_rect;
 use crate::ui::palette::Command;
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
@@ -273,25 +274,29 @@ impl ToolsPanel {
                     let hovered = self.hover == Some(index) && enabled;
                     let row_h = (ROW * dpi) as i32;
                     let y = top as i32;
+                    // Pastille arrondie plutôt qu'un bandeau plein largeur :
+                    // c'est ce qui distingue une liste d'une barre.
+                    let pill = (6.0 * dpi) as i32;
+                    let radius = 8.0 * dpi as f32;
                     if active {
-                        frame.fill_rect(
-                            t,
-                            y,
-                            w - t,
-                            row_h,
-                            theme.accent.0,
-                            theme.accent.1,
-                            theme.accent.2,
+                        round_rect(
+                            frame,
+                            t + pill,
+                            y + (2.0 * dpi) as i32,
+                            w - t - 2 * pill,
+                            row_h - (4.0 * dpi) as i32,
+                            radius,
+                            theme.accent,
                         );
                     } else if hovered {
-                        frame.fill_rect(
-                            t,
-                            y,
-                            w - t,
-                            row_h,
-                            theme.hover.0,
-                            theme.hover.1,
-                            theme.hover.2,
+                        round_rect(
+                            frame,
+                            t + pill,
+                            y + (2.0 * dpi) as i32,
+                            w - t - 2 * pill,
+                            row_h - (4.0 * dpi) as i32,
+                            radius,
+                            theme.hover,
                         );
                     }
                     let colour = if active {

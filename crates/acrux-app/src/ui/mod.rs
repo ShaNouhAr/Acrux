@@ -4,6 +4,7 @@
 //!
 //! | Module    | Rôle                                                  |
 //! |-----------|-------------------------------------------------------|
+//! | `anim`    | valeurs animées et horloge : panneaux, fondus, défilement |
 //! | `cursors` | pointeurs dessinés : texte ajouté, surligneur, note… |
 //! | `dialog`  | fenêtres de dialogue dessinées : question, boutons    |
 //! | `editpdf` | mode « Modifier le PDF » : saisie et barre du mode    |
@@ -16,6 +17,7 @@
 //! | `panel`   | panneau latéral (vignettes, signets)                  |
 //! | `prefs`   | réglages persistants et modes d'affichage             |
 //! | `tabs`    | barre d'onglets (un par document ouvert)              |
+//! | `paint`   | coins arrondis, ombres douces, aplats translucides    |
 //! | `palette` | palette de commandes filtrable (Ctrl+Maj+P)           |
 //! | `signpanel` | panneau « remplir et signer » : signatures, encre  |
 //! | `sign`    | outil « remplir et signer » : barre et capture        |
@@ -25,6 +27,7 @@
 //!
 //! À venir : menus, info-bulles détaillées.
 
+pub mod anim;
 pub mod cursors;
 pub mod dialog;
 pub mod editpdf;
@@ -32,6 +35,7 @@ pub mod icons;
 pub mod input;
 pub mod modebar;
 pub mod objects;
+pub mod paint;
 pub mod palette;
 pub mod panel;
 pub mod prefs;

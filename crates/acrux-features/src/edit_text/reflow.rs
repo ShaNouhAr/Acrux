@@ -341,6 +341,25 @@ pub fn open_paragraph(
             units.len()
         ))
     })?;
+    open_unit(doc, page, text, unit)
+}
+
+/// Ouvre un bloc donné explicitement, plutôt que par son rang.
+///
+/// C'est par là que passe le repli sur **une seule ligne** : quand un bloc
+/// entier refuse de s'ouvrir — une opération de dessin mêle ses lignes à
+/// d'autres, cas courant des documents produits par un traitement de texte —
+/// la ligne cliquée, elle, s'ouvre souvent très bien. Mieux vaut modifier une
+/// ligne que rien du tout.
+///
+/// # Errors
+/// Bloc non horizontal, dessiné dans un XObject, ou mêlé à un autre texte.
+pub fn open_unit(
+    doc: &Document,
+    page: &Page,
+    text: &PageText,
+    unit: &TextUnit,
+) -> Result<OpenedParagraph> {
     let target = Target::find(doc, page, text, unit)?;
     let size = target.size_text * target.scale;
     let crop = page.crop_box(doc);
@@ -352,6 +371,52 @@ pub fn open_paragraph(
         text: string,
         caret,
     })
+}
+
+/// Bloc réduit à une seule ligne de la page.
+///
+/// La ligne est le plus petit morceau qu'on sache recomposer seul : elle a sa
+/// boîte, sa ligne de base et ses mots.
+#[must_use]
+pub fn line_unit(text: &PageText, line_index: usize) -> Option<TextUnit> {
+    let line = text.lines.get(line_index)?;
+    if line.words.is_empty() {
+        return None;
+    }
+    let size = line
+        .words
+        .iter()
+        .flat_map(|w| w.glyphs.iter())
+        .map(|g| g.size)
+        .fold(0.0_f64, f64::max);
+    Some(TextUnit {
+        bbox: line.bbox,
+        pieces: vec![Piece {
+            line: line_index,
+            words: (0, line.words.len()),
+        }],
+        alignment: Alignment::Left,
+        first_line_indent: 0.0,
+        line_spacing: size * 1.2,
+        size,
+    })
+}
+
+/// Ligne de la page sous un point, la plus proche verticalement.
+#[must_use]
+pub fn line_at(text: &PageText, x: f64, y: f64) -> Option<usize> {
+    text.lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| {
+            let m = 2.0;
+            x >= l.bbox.x0 - m && x <= l.bbox.x1 + m && y >= l.bbox.y0 - m && y <= l.bbox.y1 + m
+        })
+        .min_by(|(_, a), (_, b)| {
+            let d = |r: &Rect| (f64::midpoint(r.y0, r.y1) - y).abs();
+            d(&a.bbox).total_cmp(&d(&b.bbox))
+        })
+        .map(|(i, _)| i)
 }
 
 /// Donne un nouveau texte au paragraphe logé dans `frame`, et rend la

@@ -21,6 +21,8 @@
 )]
 
 use crate::platform::{Frame, Key};
+use crate::ui::anim::ease_out;
+use crate::ui::paint::{round_rect, round_rect_alpha, round_rect_outline, shadow};
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
 
@@ -63,6 +65,8 @@ pub struct Dialog {
     hover: Option<usize>,
     /// Zones des boutons, remplies au dessin.
     hits: Vec<(i32, i32, i32, i32)>,
+    /// Ouverture de la fenêtre : la carte arrive en fondu, en montant un peu.
+    opened: std::time::Instant,
 }
 
 impl Dialog {
@@ -78,6 +82,7 @@ impl Dialog {
             focus,
             hover: None,
             hits: Vec::new(),
+            opened: std::time::Instant::now(),
         }
     }
 
@@ -164,7 +169,12 @@ impl Dialog {
         theme: &Theme,
         dpi: f32,
     ) {
-        veil(frame);
+        // Apparition : le voile s'assombrit et la carte monte de quelques
+        // pixels. 120 ms — assez pour voir d'où elle vient, pas assez pour
+        // attendre.
+        #[allow(clippy::cast_possible_truncation)]
+        let progress = ease_out(self.opened.elapsed().as_secs_f64() / 0.12) as f32;
+        veil(frame, progress);
         let (fw, fh) = (frame.width as i32, frame.height as i32);
         let s = |v: f32| (v * dpi) as i32;
         let width = s(460.0).min(fw - s(40.0)).max(s(260.0));
@@ -181,20 +191,31 @@ impl Dialog {
         let body = s(8.0) + (title_size * 1.3) as i32 + s(8.0) + line_h * lines.len() as i32;
         let height = pad + body.max(icon) + s(24.0) + button_h + pad;
         let x = (fw - width) / 2;
-        let y = ((fh - height) / 2).max(s(20.0));
-        // Ombre, puis carte.
-        frame.fill_rect(x + s(3.0), y + s(5.0), width, height, 0, 0, 0);
-        let border = theme.separator;
-        frame.fill_rect(
-            x - 1,
-            y - 1,
-            width + 2,
-            height + 2,
-            border.0,
-            border.1,
-            border.2,
+        let rise = ((1.0 - progress) * 14.0 * dpi) as i32;
+        let y = ((fh - height) / 2).max(s(20.0)) + rise;
+        // Ombre portée, puis la carte aux coins arrondis.
+        let radius = 14.0 * dpi;
+        shadow(
+            frame,
+            x,
+            y + s(6.0),
+            width,
+            height,
+            radius,
+            26.0 * dpi,
+            0.45 * progress,
         );
-        frame.fill_rect(x, y, width, height, theme.bar.0, theme.bar.1, theme.bar.2);
+        round_rect_alpha(frame, x, y, width, height, radius, theme.bar, progress);
+        round_rect_outline(
+            frame,
+            x,
+            y,
+            width,
+            height,
+            radius,
+            dpi.max(1.0),
+            theme.separator,
+        );
         // Icône : un disque et son signe.
         let (disc, sign) = match self.tone {
             Tone::Question => (theme.accent, "?"),
@@ -264,29 +285,21 @@ impl Dialog {
             } else {
                 (theme.hover, theme.text)
             };
+            let radius = 8.0 * dpi;
             if self.focus == i {
-                let ring = s(2.0).max(1);
-                let a = theme.accent;
-                frame.fill_rect(
-                    bx - ring - 1,
-                    by - ring - 1,
-                    w + 2 * ring + 2,
-                    button_h + 2 * ring + 2,
-                    a.0,
-                    a.1,
-                    a.2,
-                );
-                frame.fill_rect(
-                    bx - 1,
-                    by - 1,
-                    w + 2,
-                    button_h + 2,
-                    theme.bar.0,
-                    theme.bar.1,
-                    theme.bar.2,
+                let ring = (s(2.0).max(1)) as f32;
+                round_rect_outline(
+                    frame,
+                    bx - ring as i32,
+                    by - ring as i32,
+                    w + 2 * ring as i32,
+                    button_h + 2 * ring as i32,
+                    radius + ring,
+                    ring,
+                    theme.accent,
                 );
             }
-            frame.fill_rect(bx, by, *w, button_h, bg.0, bg.1, bg.2);
+            round_rect(frame, bx, by, *w, button_h, radius, bg);
             let lw = text.measure(size, &button.label);
             text.draw(
                 frame,
@@ -326,11 +339,14 @@ fn wrap(text: &mut TextRenderer, size: f32, message: &str, width: f32) -> Vec<St
 }
 
 /// Assombrit tout le cadre : la fenêtre se détache, le reste attend.
-fn veil(frame: &mut Frame<'_>) {
+///
+/// `progress` va de 0 (rien) à 1 (voile complet) : c'est l'apparition.
+fn veil(frame: &mut Frame<'_>, progress: f32) {
+    let keep = 100 - (55.0 * progress.clamp(0.0, 1.0)) as u32;
     for pixel in frame.pixels.chunks_exact_mut(4) {
-        pixel[0] = (u32::from(pixel[0]) * 45 / 100) as u8;
-        pixel[1] = (u32::from(pixel[1]) * 45 / 100) as u8;
-        pixel[2] = (u32::from(pixel[2]) * 45 / 100) as u8;
+        pixel[0] = (u32::from(pixel[0]) * keep / 100) as u8;
+        pixel[1] = (u32::from(pixel[1]) * keep / 100) as u8;
+        pixel[2] = (u32::from(pixel[2]) * keep / 100) as u8;
     }
 }
 

@@ -19,6 +19,7 @@ use acrux_graphics::Rasterizer;
 use crate::platform::{Frame, Key};
 use crate::ui::icons::{self, Icon};
 use crate::ui::input::{InputAction, TextInput};
+use crate::ui::paint::round_rect;
 use crate::ui::palette::{describe, Command};
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
@@ -351,7 +352,7 @@ impl Toolbar {
                 } => {
                     let enabled = info.has_document || !needs_document;
                     if enabled && self.hover == Some(i) {
-                        frame.fill_rect(x, y, w, bh, t.hover.0, t.hover.1, t.hover.2);
+                        round_rect(frame, x, y, w, bh, 7.0 * dpi, t.hover);
                     }
                     if self.focus == Some(i) {
                         focus_ring(frame, t, x, y, w, bh);
@@ -379,7 +380,7 @@ impl Toolbar {
                     } else {
                         let label = Self::page_box_label(info);
                         if info.has_document && self.hover == Some(i) {
-                            frame.fill_rect(x, y, w, bh, t.hover.0, t.hover.1, t.hover.2);
+                            round_rect(frame, x, y, w, bh, 7.0 * dpi, t.hover);
                         }
                         let room = (w - pad) as f32;
                         let tw = text.measure(size, &label).min(room);

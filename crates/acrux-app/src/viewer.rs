@@ -22,6 +22,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use acrux_core::{Matrix, Point, Rect};
@@ -45,8 +47,10 @@ use crate::platform::{
 use crate::render_worker::ExportFormat;
 use crate::render_worker::{EditOp, RenderWorker};
 use crate::selection::{SelectableText, Selection, TextPos};
+use crate::ui::anim::{ease_out, Anim, Clock};
 use crate::ui::input::{InputAction, TextInput};
 use crate::ui::objects::{self as objects_ui, Handle, ViewRect};
+use crate::ui::paint::{round_rect, round_rect_alpha, round_rect_outline, shadow};
 use crate::ui::palette::{Command, Palette};
 use crate::ui::panel::{
     AttachmentRow, CommentRow, OutlineRow, Panel, PanelAction, PanelContent, PanelTab,
@@ -640,11 +644,27 @@ pub struct Viewer {
     sign_panel: Option<SignPanel>,
     /// Vignettes de la première page des documents récents, calculées une à
     /// une pendant que l'écran d'accueil est affiché. `None` = illisible.
-    welcome_thumbs: HashMap<PathBuf, Option<Bitmap>>,
+    welcome_thumbs: HashMap<PathBuf, (Option<Bitmap>, Instant)>,
     /// Zone du bouton « Ouvrir un document ».
     welcome_open: Option<(i32, i32, i32, i32)>,
     /// La décoration de la fenêtre a déjà été accordée au thème.
     frame_themed: bool,
+    /// Horloge des animations.
+    clock: Clock,
+    /// Fil qui réveille la fenêtre pendant qu'une animation tourne.
+    ticker: Option<Arc<AtomicBool>>,
+    /// Vrai tant qu'il y a du mouvement : le fil ne réveille que dans ce cas.
+    anim_flag: Arc<AtomicBool>,
+    /// Position visée par le défilement en cours, s'il glisse.
+    scroll_goal_y: Option<f64>,
+    /// Position connue du défilement : ce qui s'en écarte sans passer par le
+    /// glissement est un saut demandé ailleurs (aller à une page, zoomer), et
+    /// met fin au glissement en cours.
+    scroll_seen: f64,
+    /// Largeur affichée du panneau de gauche.
+    left_anim: Anim,
+    /// Largeur affichée de la colonne d'outils, à droite.
+    tools_anim: Anim,
     /// Place de la signature qu'on est en train de refaire, s'il y en a une.
     replacing: Option<usize>,
     /// Tracé au stylo en cours, en coordonnées de page.
@@ -779,6 +799,13 @@ impl Viewer {
             welcome_thumbs: HashMap::new(),
             welcome_open: None,
             frame_themed: false,
+            clock: Clock::default(),
+            ticker: None,
+            anim_flag: Arc::new(AtomicBool::new(false)),
+            scroll_goal_y: None,
+            scroll_seen: 0.0,
+            left_anim: Anim::new(0.0, 0.16),
+            tools_anim: Anim::new(0.0, 0.16),
             replacing: None,
             inking: None,
             capture: None,
@@ -1220,7 +1247,7 @@ impl Viewer {
         } else {
             t.accent
         };
-        frame.fill_rect(x, y, bw, bh, bg.0, bg.1, bg.2);
+        round_rect(frame, x, y, bw, bh, 10.0 * dpi, bg);
         text.draw(
             frame,
             (x + (20.0 * dpi) as i32) as f32,
@@ -1273,29 +1300,31 @@ impl Viewer {
                 mx >= cx && mx < cx + card_w && my >= cy && my < cy + card_h
             });
             if over {
-                frame.fill_rect(
-                    cx - (6.0 * dpi) as i32,
-                    cy - (6.0 * dpi) as i32,
-                    card_w + (12.0 * dpi) as i32,
-                    card_h + (12.0 * dpi) as i32,
-                    t.hover.0,
-                    t.hover.1,
-                    t.hover.2,
+                round_rect(
+                    frame,
+                    cx - (8.0 * dpi) as i32,
+                    cy - (8.0 * dpi) as i32,
+                    card_w + (16.0 * dpi) as i32,
+                    card_h + (16.0 * dpi) as i32,
+                    12.0 * dpi,
+                    t.hover,
                 );
             }
             // La page, sur son fond blanc et son ombre, comme dans la vue.
-            frame.fill_rect(
-                cx + (3.0 * dpi) as i32,
-                cy + (4.0 * dpi) as i32,
+            let radius = 8.0 * dpi;
+            shadow(
+                frame,
+                cx,
+                cy + (3.0 * dpi) as i32,
                 card_w,
                 thumb_h,
-                t.page_shadow.0,
-                t.page_shadow.1,
-                t.page_shadow.2,
+                radius,
+                10.0 * dpi,
+                if over { 0.5 } else { 0.3 },
             );
-            frame.fill_rect(cx, cy, card_w, thumb_h, 0xFF, 0xFF, 0xFF);
+            round_rect(frame, cx, cy, card_w, thumb_h, radius, (0xFF, 0xFF, 0xFF));
             match thumbs.get(path) {
-                Some(Some(bitmap)) => {
+                Some((Some(bitmap), since)) => {
                     let bw = bitmap.width() as i32;
                     let bh = bitmap.height() as i32;
                     frame.blit_rgba_premultiplied(
@@ -1305,8 +1334,24 @@ impl Viewer {
                         bitmap.height(),
                         bitmap.data(),
                     );
+                    // Fondu à l'arrivée : la vignette naît du blanc de la
+                    // page plutôt que d'apparaître d'un coup.
+                    #[allow(clippy::cast_possible_truncation)]
+                    let fade = ease_out(since.elapsed().as_secs_f64() / 0.35) as f32;
+                    if fade < 1.0 {
+                        round_rect_alpha(
+                            frame,
+                            cx,
+                            cy,
+                            card_w,
+                            thumb_h,
+                            radius,
+                            (0xFF, 0xFF, 0xFF),
+                            1.0 - fade,
+                        );
+                    }
                 }
-                Some(None) => {
+                Some((None, _)) => {
                     let label = "illisible";
                     let w = text.measure(size, label);
                     text.draw(
@@ -1336,6 +1381,16 @@ impl Viewer {
                     }
                 }
             }
+            round_rect_outline(
+                frame,
+                cx,
+                cy,
+                card_w,
+                thumb_h,
+                radius,
+                dpi.max(1.0),
+                t.separator,
+            );
             let baseline = (cy + thumb_h) as f32 + text.ascent(size) + 12.0 * dpi;
             text.draw_clipped(
                 frame,
@@ -1364,13 +1419,21 @@ impl Viewer {
 
     /// Vrai s'il reste des vignettes d'accueil à calculer.
     fn welcome_pending(&self) -> bool {
-        self.loaded.is_none()
-            && self
-                .prefs
-                .recent
-                .iter()
-                .take(MAX_WELCOME)
-                .any(|p| !self.welcome_thumbs.contains_key(p))
+        if self.loaded.is_some() {
+            return false;
+        }
+        let missing = self
+            .prefs
+            .recent
+            .iter()
+            .take(MAX_WELCOME)
+            .any(|p| !self.welcome_thumbs.contains_key(p));
+        // Un fondu en cours compte aussi : il faut repeindre tant qu'il dure.
+        missing
+            || self
+                .welcome_thumbs
+                .values()
+                .any(|(_, since)| since.elapsed().as_secs_f64() < 0.4)
     }
 
     /// Calcule une vignette manquante, s'il en reste une. Rend vrai s'il
@@ -1391,7 +1454,7 @@ impl Viewer {
         };
         let scale = f64::from(self.dpi_scale as f32);
         let thumb = render_thumbnail(&path, 186.0 * scale, 148.0 * scale);
-        self.welcome_thumbs.insert(path, thumb);
+        self.welcome_thumbs.insert(path, (thumb, Instant::now()));
         true
     }
 
@@ -2484,6 +2547,7 @@ impl Viewer {
     /// Bascule le plein écran (F11 ; Échap pour sortir).
     fn toggle_fullscreen(&mut self, window: &mut dyn WindowHandle) {
         self.fullscreen = !self.fullscreen;
+        self.wake_anim();
         if self.fullscreen {
             self.panel_open = false;
         }
@@ -2607,18 +2671,25 @@ impl Viewer {
 
     /// Bord gauche de la zone de document (à droite du panneau latéral).
     fn view_left(&self) -> u32 {
+        // La largeur affichée suit la largeur voulue en glissant : le panneau
+        // vient du bord au lieu d'apparaître d'un coup.
+        self.left_anim.value.round().max(0.0) as u32
+    }
+
+    /// Largeur que le panneau de gauche devrait avoir.
+    fn wanted_left(&self) -> f64 {
         if self.reading {
-            return 0;
+            return 0.0;
         }
         // L'outil « remplir et signer » a son propre panneau, à la place des
         // vignettes : deux colonnes à gauche ne laisseraient plus voir la page.
         if self.sign_panel.is_some() {
-            return (f64::from(crate::ui::signpanel::WIDTH) * self.dpi_scale).round() as u32;
+            return f64::from(crate::ui::signpanel::WIDTH) * self.dpi_scale;
         }
         if self.panel_open {
-            (f64::from(PANEL_WIDTH) * self.dpi_scale).round() as u32
+            f64::from(PANEL_WIDTH) * self.dpi_scale
         } else {
-            0
+            0.0
         }
     }
 
@@ -2634,20 +2705,104 @@ impl Viewer {
     /// service à personne, et l'utilisateur n'a pas à aller la fermer pour
     /// pouvoir travailler.
     fn tools_width(&self) -> u32 {
+        self.tools_anim.value.round().max(0.0) as u32
+    }
+
+    /// Largeur que la colonne d'outils devrait avoir.
+    fn wanted_tools_width(&self) -> f64 {
         if !self.tools_open || self.reading || self.fullscreen {
-            return 0;
+            return 0.0;
         }
-        let width = (f64::from(crate::ui::tools::WIDTH) * self.dpi_scale).round() as u32;
-        let reste = self
-            .width
-            .saturating_sub(self.view_left())
-            .saturating_sub(width);
+        let width = f64::from(crate::ui::tools::WIDTH) * self.dpi_scale;
+        let reste = f64::from(self.width) - self.wanted_left() - width;
         // Il faut au moins de quoi afficher une page lisible à côté.
-        if reste < (f64::from(MIN_PAGE_WIDTH) * self.dpi_scale) as u32 {
-            0
+        if reste < f64::from(MIN_PAGE_WIDTH) * self.dpi_scale {
+            0.0
         } else {
             width
         }
+    }
+
+    /// Fait avancer les animations de `dt` secondes ; rend vrai s'il reste du
+    /// mouvement (et donc s'il faut repeindre).
+    fn step_anim(&mut self, dt: f64) -> bool {
+        let (left, tools) = (self.wanted_left(), self.wanted_tools_width());
+        self.left_anim.go_to(left);
+        self.tools_anim.go_to(tools);
+        let mut moving = self.left_anim.step(dt) | self.tools_anim.step(dt);
+        if let Some(goal) = self.scroll_goal_y {
+            // Glissement exponentiel : deux coups de molette de suite
+            // s'additionnent sans à-coup.
+            let k = (-3.0 * dt / 0.15).exp();
+            let next = goal - (goal - self.scroll_y) * k;
+            let done = (goal - next).abs() < 0.5;
+            self.scroll_y = if done { goal } else { next };
+            // Ce mouvement-ci est le nôtre : `clamp_scroll` ne doit pas le
+            // prendre pour un saut demandé ailleurs. S'il rectifie la valeur
+            // (haut ou bas du document), il annulera le glissement, et c'est
+            // bien ce qu'on veut.
+            self.scroll_seen = self.scroll_y;
+            self.clamp_scroll();
+            // Arrivé, ou retenu par le haut ou le bas du document : dans les
+            // deux cas le glissement n'a plus lieu d'être.
+            let stopped = (self.scroll_y - next).abs() > 0.01;
+            if done || stopped {
+                self.scroll_goal_y = None;
+            } else {
+                moving = true;
+            }
+        }
+        moving
+    }
+
+    /// Fait défiler de `dy` pixels, en douceur.
+    fn glide_by(&mut self, dy: f64) {
+        let base = self.scroll_goal_y.unwrap_or(self.scroll_y);
+        let max = (self.total_height() - f64::from(self.view_height())).max(0.0);
+        self.scroll_goal_y = Some((base + dy).clamp(0.0, max));
+        self.scroll_seen = self.scroll_y;
+        self.wake_anim();
+    }
+
+    /// Vrai si quelque chose bouge encore.
+    fn animating(&self) -> bool {
+        self.scroll_goal_y.is_some() || self.left_anim.running() || self.tools_anim.running()
+    }
+
+    /// Met en route (ou arrête) le fil qui réveille la fenêtre pendant les
+    /// animations. Un fil plutôt qu'un réveil immédiat : sans attente, la
+    /// boucle tournerait à plein régime pour rien.
+    fn tick_anim(&mut self, window: &mut dyn WindowHandle) {
+        // Le fil bat en permanence mais ne réveille la fenêtre que pendant
+        // un mouvement : c'est le seul moyen d'animer sans qu'un événement
+        // de l'utilisateur soit là pour relancer la machine.
+        if self.ticker.is_none() {
+            let alive = Arc::new(AtomicBool::new(true));
+            let waker = window.waker();
+            let running = Arc::clone(&alive);
+            let moving = Arc::clone(&self.anim_flag);
+            let _ = std::thread::Builder::new()
+                .name("animations".into())
+                .spawn(move || {
+                    while running.load(Ordering::Relaxed) {
+                        std::thread::sleep(std::time::Duration::from_millis(16));
+                        if moving.load(Ordering::Relaxed) {
+                            waker.wake();
+                        }
+                    }
+                });
+            self.ticker = Some(alive);
+        }
+        let dt = self.clock.tick();
+        if self.step_anim(dt) {
+            window.request_redraw();
+        }
+        self.anim_flag.store(self.animating(), Ordering::Relaxed);
+    }
+
+    /// Signale qu'il y a de nouveau du mouvement à animer.
+    fn wake_anim(&self) {
+        self.anim_flag.store(true, Ordering::Relaxed);
     }
 
     /// Largeur de la zone de document.
@@ -2732,6 +2887,7 @@ impl Viewer {
 
     fn toggle_panel(&mut self) {
         self.panel_open = !self.panel_open;
+        self.wake_anim();
         self.save_prefs();
         self.clamp_scroll();
         if self.panel_open {
@@ -2926,6 +3082,7 @@ impl Viewer {
     /// Mode lecture : plus de barres ni de panneau, seulement les pages.
     fn toggle_reading(&mut self, window: &mut dyn WindowHandle) {
         self.reading = !self.reading;
+        self.wake_anim();
         if self.reading {
             self.region = Region::Document;
             self.leave_region(Region::Document);
@@ -3026,6 +3183,7 @@ impl Viewer {
             Command::TogglePanel => self.toggle_panel(),
             Command::ToggleTools => {
                 self.tools_open = !self.tools_open;
+                self.wake_anim();
                 self.clamp_scroll();
                 self.save_prefs();
             }
@@ -3533,6 +3691,15 @@ impl Viewer {
     fn clamp_scroll(&mut self) {
         let max_y = (self.total_height() - f64::from(self.view_height())).max(0.0);
         self.scroll_y = self.scroll_y.clamp(0.0, max_y);
+        // Un saut demandé ailleurs (aller à une page, zoomer) met fin au
+        // glissement en cours : deux mouvements à la fois se battraient.
+        if (self.scroll_y - self.scroll_seen).abs() > 0.01 {
+            self.scroll_goal_y = None;
+        }
+        if let Some(goal) = &mut self.scroll_goal_y {
+            *goal = goal.clamp(0.0, max_y);
+        }
+        self.scroll_seen = self.scroll_y;
         let max_w = self
             .layout()
             .iter()
@@ -4351,9 +4518,11 @@ impl Viewer {
         if self.sign_panel.is_some() {
             self.sign_panel = None;
             self.capture = None;
+            self.wake_anim();
             self.set_notice("remplir et signer : terminé".into());
         } else {
             self.sign_panel = Some(self.new_sign_panel());
+            self.wake_anim();
             if self.signatures.is_empty() {
                 self.capture = Some(self.new_capture(false));
             } else {
@@ -4834,6 +5003,7 @@ impl Viewer {
             }
             SignAction::Close => {
                 self.sign_panel = None;
+                self.wake_anim();
                 self.capture = None;
                 if self.edit_overlay() {
                     self.leave_edit();
@@ -5159,6 +5329,7 @@ impl App for Viewer {
                 self.check_updates(false, window);
             }
         }
+        self.tick_anim(window);
         if !self.frame_themed {
             self.frame_themed = true;
             self.apply_frame_theme(window);
@@ -5194,6 +5365,7 @@ impl App for Viewer {
                     && !self.media_playing()
                     && !self.edit_on()
                     && !self.welcome_pending()
+                    && !self.animating()
                 {
                     return;
                 }
@@ -5229,7 +5401,7 @@ impl App for Viewer {
                 } else if modifiers.shift {
                     self.scroll_x -= f64::from(delta) * 80.0;
                 } else {
-                    self.scroll_y -= f64::from(delta) * 80.0;
+                    self.glide_by(f64::from(-delta) * 90.0);
                 }
                 self.clamp_scroll();
             }
@@ -5866,6 +6038,7 @@ impl Viewer {
         match key {
             Key::F(3) => {
                 self.tools_open = !self.tools_open;
+                self.wake_anim();
                 self.clamp_scroll();
                 self.save_prefs();
             }
@@ -5877,8 +6050,8 @@ impl Viewer {
             Key::Tab => self.focus_next_field(!m.shift),
             Key::Enter => self.activate_focused_field(),
             Key::Delete if m.ctrl => self.delete_current(),
-            Key::Down => self.scroll_y += 60.0,
-            Key::Up => self.scroll_y -= 60.0,
+            Key::Down => self.glide_by(70.0),
+            Key::Up => self.glide_by(-70.0),
             Key::Right => self.scroll_x += 60.0,
             Key::Left => self.scroll_x -= 60.0,
             Key::PageDown => {
@@ -5887,14 +6060,14 @@ impl Viewer {
                 if m.ctrl || (self.view_mode.is_paged() && self.at_bottom()) {
                     self.step_row(true);
                 } else {
-                    self.scroll_y += page_h * 0.9;
+                    self.glide_by(page_h * 0.9);
                 }
             }
             Key::PageUp => {
                 if m.ctrl || (self.view_mode.is_paged() && self.scroll_y <= 0.5) {
                     self.step_row(false);
                 } else {
-                    self.scroll_y -= page_h * 0.9;
+                    self.glide_by(-page_h * 0.9);
                 }
             }
             Key::Home => {
