@@ -7,7 +7,9 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
-## Non publié
+## 0.7.0 — 19 septembre 2026
+
+Voir ce qu'on signe, et voir ce qu'on ouvre.
 
 ### Un panneau pour les signatures
 
