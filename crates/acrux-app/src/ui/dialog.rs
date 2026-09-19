@@ -22,7 +22,7 @@
 
 use crate::platform::{Frame, Key};
 use crate::ui::anim::ease_out;
-use crate::ui::paint::{round_rect, round_rect_alpha, round_rect_outline, shadow};
+use crate::ui::paint::{round_rect, round_rect_alpha, round_rect_outline, shadow, veil};
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
 
@@ -336,18 +336,6 @@ fn wrap(text: &mut TextRenderer, size: f32, message: &str, width: f32) -> Vec<St
         out.push(line);
     }
     out
-}
-
-/// Assombrit tout le cadre : la fenêtre se détache, le reste attend.
-///
-/// `progress` va de 0 (rien) à 1 (voile complet) : c'est l'apparition.
-fn veil(frame: &mut Frame<'_>, progress: f32) {
-    let keep = 100 - (55.0 * progress.clamp(0.0, 1.0)) as u32;
-    for pixel in frame.pixels.chunks_exact_mut(4) {
-        pixel[0] = (u32::from(pixel[0]) * keep / 100) as u8;
-        pixel[1] = (u32::from(pixel[1]) * keep / 100) as u8;
-        pixel[2] = (u32::from(pixel[2]) * keep / 100) as u8;
-    }
 }
 
 /// Disque plein, lissé sur ses bords.

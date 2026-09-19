@@ -7,6 +7,32 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
+## 0.10.0 — 20 septembre 2026
+
+### L'accueil se tient
+
+- **Les vignettes s'affichaient vides** quand un document était ouvert
+  derrière : elles ne se calculaient que sans document. Corrigé.
+- **Les cartes et le bouton « Ouvrir » ne répondaient pas** dans le même
+  cas : le clic filait au document caché. Corrigé.
+- **La molette fait défiler l'accueil**, plus le document caché ; les cartes
+  qui dépassent se rejoignent en glissant.
+- **Cliquer un document déjà ouvert y retourne** au lieu d'en faire un
+  second onglet.
+- **Échap** revient au document.
+- Sur l'accueil, la barre du haut et la colonne d'outils **se taisent** (rien
+  à commander sans document affiché), et la barre d'état annonce l'accueil et
+  le nombre de documents récents au lieu de la page du document caché.
+
+### Harmonisation
+
+- Le **voile** des fenêtres modales était écrit deux fois ; il n'existe plus
+  qu'une fois, dans le module de dessin.
+- **Coins arrondis** aussi pour la fenêtre de signature (carte, onglets,
+  zone de tracé, boutons), les barres de mode, l'invite de saisie, les
+  info-bulles, les onglets de documents et les lignes du panneau latéral :
+  toute l'interface parle désormais la même langue.
+
 ## 0.9.0 — 20 septembre 2026
 
 ### Correction

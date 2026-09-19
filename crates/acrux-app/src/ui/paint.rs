@@ -143,6 +143,20 @@ pub fn shadow(
     }
 }
 
+/// Assombrit tout le cadre : ce qui est dessiné par-dessus se détache, et le
+/// reste attend.
+///
+/// `progress` va de 0 (rien) à 1 (voile complet), ce qui sert aux fenêtres
+/// qui apparaissent en fondu.
+pub fn veil(frame: &mut Frame<'_>, progress: f32) {
+    let keep = 100 - (55.0 * progress.clamp(0.0, 1.0)) as u32;
+    for pixel in frame.pixels.chunks_exact_mut(4) {
+        pixel[0] = (u32::from(pixel[0]) * keep / 100) as u8;
+        pixel[1] = (u32::from(pixel[1]) * keep / 100) as u8;
+        pixel[2] = (u32::from(pixel[2]) * keep / 100) as u8;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

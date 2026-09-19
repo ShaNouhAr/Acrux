@@ -650,6 +650,10 @@ pub struct Viewer {
     /// L'accueil est affiché par-dessus le document ouvert, qui reste dans
     /// son onglet : c'est un retour à la base, pas une fermeture.
     home: bool,
+    /// Défilement de l'accueil, quand les cartes dépassent.
+    welcome_scroll: f64,
+    /// Hauteur occupée par l'accueil au dernier dessin.
+    welcome_height: f64,
     /// La décoration de la fenêtre a déjà été accordée au thème.
     frame_themed: bool,
     /// Horloge des animations.
@@ -802,6 +806,8 @@ impl Viewer {
             welcome_thumbs: HashMap::new(),
             welcome_open: None,
             home: false,
+            welcome_scroll: 0.0,
+            welcome_height: 0.0,
             frame_themed: false,
             clock: Clock::default(),
             ticker: None,
@@ -1216,7 +1222,7 @@ impl Viewer {
         let size = t.font_size * dpi;
         let pad = (56.0 * dpi) as i32;
         let x = pad;
-        let mut y = (54.0 * dpi) as i32;
+        let mut y = (54.0 * dpi) as i32 - self.welcome_scroll as i32;
         let title = size * 2.4;
         text.draw(
             frame,
@@ -1416,6 +1422,7 @@ impl Viewer {
             );
             hits.push((cx, cy, card_w, card_h));
         }
+        self.welcome_height = f64::from(y + card_h + 2 * pad) + self.welcome_scroll;
         self.recent_hits = hits;
         self.welcome_open = open_hit;
         self.welcome_thumbs = thumbs;
@@ -1423,7 +1430,7 @@ impl Viewer {
 
     /// Vrai s'il reste des vignettes d'accueil à calculer.
     fn welcome_pending(&self) -> bool {
-        if self.loaded.is_some() {
+        if !self.showing_home() {
             return false;
         }
         let missing = self
@@ -1443,7 +1450,7 @@ impl Viewer {
     /// Calcule une vignette manquante, s'il en reste une. Rend vrai s'il
     /// faudra repasser : une par réveil, pour que la fenêtre reste vive.
     fn step_welcome_thumbs(&mut self) -> bool {
-        if self.loaded.is_some() {
+        if !self.showing_home() {
             return false;
         }
         let Some(path) = self
@@ -1460,6 +1467,15 @@ impl Viewer {
         let thumb = render_thumbnail(&path, 186.0 * scale, 148.0 * scale);
         self.welcome_thumbs.insert(path, (thumb, Instant::now()));
         true
+    }
+
+    /// Onglet qui porte déjà ce fichier, s'il y en a un.
+    fn tab_of(&self, path: &Path) -> Option<usize> {
+        if self.loaded.as_ref().is_some_and(|l| l.path == path) {
+            return Some(self.active_tab);
+        }
+        let at = self.others.iter().position(|l| l.path == path)?;
+        Some(if at >= self.active_tab { at + 1 } else { at })
     }
 
     /// Montre l'accueil, sans rien fermer.
@@ -1513,6 +1529,13 @@ impl Viewer {
         let Some(path) = self.prefs.recent.get(index).cloned() else {
             return false;
         };
+        // Déjà ouvert : on y retourne plutôt que d'en faire un second onglet.
+        if let Some(tab) = self.tab_of(&path) {
+            self.leave_home();
+            self.select_tab(tab);
+            window.request_redraw();
+            return true;
+        }
         if !path.exists() {
             self.prefs.recent.retain(|p| p != &path);
             self.prefs.save();
@@ -1565,16 +1588,28 @@ impl Viewer {
         let panel_h = (150.0 * dpi) as i32;
         let x = (self.width as i32 - panel_w) / 2;
         let y = self.view_top() as i32 + (self.view_height() as i32 - panel_h) / 2;
-        frame.fill_rect(
-            x - 1,
-            y - 1,
-            panel_w + 2,
-            panel_h + 2,
-            t.separator.0,
-            t.separator.1,
-            t.separator.2,
+        let radius = 14.0 * dpi;
+        shadow(
+            frame,
+            x,
+            y + (6.0 * dpi) as i32,
+            panel_w,
+            panel_h,
+            radius,
+            26.0 * dpi,
+            0.45,
         );
-        frame.fill_rect(x, y, panel_w, panel_h, t.bar.0, t.bar.1, t.bar.2);
+        round_rect(frame, x, y, panel_w, panel_h, radius, t.bar);
+        round_rect_outline(
+            frame,
+            x,
+            y,
+            panel_w,
+            panel_h,
+            radius,
+            dpi.max(1.0),
+            t.separator,
+        );
         let Some(text) = &mut self.text else { return };
         let size = t.font_size * dpi;
         let pad = (16.0 * dpi) as i32;
@@ -2151,27 +2186,8 @@ impl Viewer {
         // Sous le bouton, recalée dans la fenêtre si elle dépasse à droite.
         let x = (rect.0 + rect.2 / 2 - w / 2).clamp(4, (frame.width as i32 - w - 4).max(4));
         let y = (rect.1 + rect.3 + (4.0 * dpi) as i32).min(frame.height as i32 - h - 2);
-        frame.fill_rect(x, y, w, h, t.tip_bg.0, t.tip_bg.1, t.tip_bg.2);
-        frame.fill_rect(x, y, w, 1, t.separator.0, t.separator.1, t.separator.2);
-        frame.fill_rect(
-            x,
-            y + h - 1,
-            w,
-            1,
-            t.separator.0,
-            t.separator.1,
-            t.separator.2,
-        );
-        frame.fill_rect(x, y, 1, h, t.separator.0, t.separator.1, t.separator.2);
-        frame.fill_rect(
-            x + w - 1,
-            y,
-            1,
-            h,
-            t.separator.0,
-            t.separator.1,
-            t.separator.2,
-        );
+        round_rect(frame, x, y, w, h, 7.0 * dpi, t.tip_bg);
+        round_rect_outline(frame, x, y, w, h, 7.0 * dpi, dpi.max(1.0), t.separator);
         let baseline = y as f32 + f32::midpoint(h as f32, renderer.ascent(size)) - 1.0;
         renderer.draw_clipped(
             frame,
@@ -2745,7 +2761,7 @@ impl Viewer {
 
     /// Largeur que la colonne d'outils devrait avoir.
     fn wanted_tools_width(&self) -> f64 {
-        if !self.tools_open || self.reading || self.fullscreen {
+        if !self.tools_open || self.reading || self.fullscreen || self.showing_home() {
             return 0.0;
         }
         let width = f64::from(crate::ui::tools::WIDTH) * self.dpi_scale;
@@ -2850,7 +2866,7 @@ impl Viewer {
     /// Ce que la barre des outils doit savoir.
     fn tools_info(&self) -> ToolsInfo {
         ToolsInfo {
-            has_document: self.loaded.is_some(),
+            has_document: self.loaded.is_some() && !self.showing_home(),
             // Les deux outils qui restent ouverts se signalent comme tels :
             // sans cela, rien ne dirait lequel est en cours.
             active: if let Some(tool) = self.annot_tool {
@@ -2889,7 +2905,7 @@ impl Viewer {
                 .and_then(|l| l.labels.get(page))
                 .cloned(),
             zoom_percent: (self.effective_zoom() * 100.0).round() as u32,
-            has_document: self.loaded.is_some(),
+            has_document: self.loaded.is_some() && !self.showing_home(),
         }
     }
 
@@ -5306,37 +5322,45 @@ impl Viewer {
         let notice = self.notice.as_ref().and_then(|(m, at)| {
             (at.elapsed() < std::time::Duration::from_secs(8)).then(|| m.clone())
         });
-        let (left, right) = match &self.loaded {
-            Some(l) => {
-                let name = l
-                    .path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                // Document étiqueté : l'étiquette d'abord, le rang physique
-                // entre parenthèses — « page iii (3 / 240) », comme Acrobat.
-                let position = match l.labels.get(page - 1) {
-                    Some(label) if *label != page.to_string() => {
-                        format!("page {label} ({page} / {})", l.pages.len())
-                    }
-                    _ => format!("page {page} / {}", l.pages.len()),
-                };
-                let right = format!(
-                    "{position}   {:.0} %{}   {}   {:.0} ms",
-                    zoom * 100.0,
-                    match self.fit.label() {
-                        "" => String::new(),
-                        mode => format!(" ({mode})"),
-                    },
-                    self.view_mode.label(),
-                    self.last_render_ms
-                );
-                (notice.unwrap_or(name), right)
-            }
-            None => (
-                "Aucun document — Ctrl+O pour ouvrir, ou déposez un PDF ici".to_string(),
-                String::new(),
-            ),
+        let (left, right) = if let Some(l) = self.loaded.as_ref().filter(|_| !self.showing_home()) {
+            let name = l
+                .path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            // Document étiqueté : l'étiquette d'abord, le rang physique
+            // entre parenthèses — « page iii (3 / 240) », comme Acrobat.
+            let position = match l.labels.get(page - 1) {
+                Some(label) if *label != page.to_string() => {
+                    format!("page {label} ({page} / {})", l.pages.len())
+                }
+                _ => format!("page {page} / {}", l.pages.len()),
+            };
+            let right = format!(
+                "{position}   {:.0} %{}   {}   {:.0} ms",
+                zoom * 100.0,
+                match self.fit.label() {
+                    "" => String::new(),
+                    mode => format!(" ({mode})"),
+                },
+                self.view_mode.label(),
+                self.last_render_ms
+            );
+            (notice.unwrap_or(name), right)
+        } else if self.home {
+            // Un document est ouvert derrière : on dit comment y revenir,
+            // c'est la question qu'on se pose ici.
+            let count = self.prefs.recent.len().min(MAX_WELCOME);
+            let right = match count {
+                0 => String::new(),
+                1 => "1 document récent".into(),
+                n => format!("{n} documents récents"),
+            };
+            let left = "Accueil — Échap ou la maison pour revenir au document".to_string();
+            (notice.unwrap_or(left), right)
+        } else {
+            let left = "Aucun document — Ctrl+O pour ouvrir, ou déposez un PDF ici".to_string();
+            (notice.unwrap_or(left), String::new())
         };
         let Some(text) = &mut self.text else { return };
         let size = t.font_size * self.dpi_scale as f32;
@@ -5417,7 +5441,12 @@ impl App for Viewer {
                 x,
                 y,
             } => {
-                if self.sign_panel_open()
+                if self.showing_home() {
+                    let max = (self.welcome_height - f64::from(self.view_height())).max(0.0);
+                    self.welcome_scroll =
+                        (self.welcome_scroll - f64::from(delta) * 90.0).clamp(0.0, max);
+                    window.request_redraw();
+                } else if self.sign_panel_open()
                     && x < self.view_left() as i32
                     && y >= self.view_top() as i32
                 {
@@ -5758,7 +5787,7 @@ impl App for Viewer {
                 } else {
                     self.toolbar.blur();
                     let (x, y) = (x - self.view_left() as i32, y - top);
-                    if self.prompt.is_none() && self.loaded.is_none() {
+                    if self.prompt.is_none() && self.showing_home() {
                         self.click_recent(x, y, window);
                     } else if self.prompt.is_none() && x >= 0 && y < self.view_height() as i32 {
                         if self.edit_on() {
@@ -6076,6 +6105,11 @@ impl App for Viewer {
 
 impl Viewer {
     fn key(&mut self, key: Key, m: Modifiers, window: &mut dyn WindowHandle) {
+        if key == Key::Escape && self.home && self.loaded.is_some() {
+            self.leave_home();
+            window.request_redraw();
+            return;
+        }
         let page_h = f64::from(self.view_height());
         match key {
             Key::F(3) => {

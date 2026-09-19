@@ -40,6 +40,7 @@ use acrux_graphics::{FillRule, Rasterizer};
 
 use crate::platform::{Frame, Key};
 use crate::ui::input::{InputAction, TextInput};
+use crate::ui::paint::{round_rect, round_rect_outline, shadow, veil};
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
 
@@ -450,17 +451,29 @@ impl Capture {
 
         // Voile sombre : la fenêtre sort du fond sans qu'on ait d'ombre à
         // dessiner.
-        veil(frame);
-        frame.fill_rect(
-            x - 1,
-            y - 1,
-            width + 2,
-            height + 2,
-            theme.separator.0,
-            theme.separator.1,
-            theme.separator.2,
+        veil(frame, 1.0);
+        let radius = 14.0 * dpi;
+        shadow(
+            frame,
+            x,
+            y + (6.0 * dpi) as i32,
+            width,
+            height,
+            radius,
+            26.0 * dpi,
+            0.45,
         );
-        frame.fill_rect(x, y, width, height, theme.bar.0, theme.bar.1, theme.bar.2);
+        round_rect(frame, x, y, width, height, radius, theme.bar);
+        round_rect_outline(
+            frame,
+            x,
+            y,
+            width,
+            height,
+            radius,
+            dpi.max(1.0),
+            theme.separator,
+        );
 
         let mut cursor = y + pad;
         text.draw(
@@ -483,15 +496,7 @@ impl Capture {
         ] {
             let w = (text.measure(size, label) + 24.0 * dpi) as i32;
             if tab == self.tab {
-                frame.fill_rect(
-                    tx,
-                    cursor,
-                    w,
-                    tab_h,
-                    theme.hover.0,
-                    theme.hover.1,
-                    theme.hover.2,
-                );
+                round_rect(frame, tx, cursor, w, tab_h, 8.0 * dpi, theme.hover);
                 frame.fill_rect(
                     tx,
                     cursor + tab_h - (2.0 * dpi).max(1.0) as i32,
@@ -555,7 +560,7 @@ impl Capture {
             bx -= w;
             let strong = button == Button::Apply;
             let (r, g, b) = if strong { theme.accent } else { theme.hover };
-            frame.fill_rect(bx, bottom, w, bh, r, g, b);
+            round_rect(frame, bx, bottom, w, bh, 9.0 * dpi, (r, g, b));
             text.draw(
                 frame,
                 (bx + (14.0 * dpi) as i32) as f32,
@@ -570,15 +575,7 @@ impl Capture {
         let mut lx = x + pad;
         let mut left_button = |label: &str, button: Button, this: &mut Self| {
             let w = (text.measure(size, label) + 28.0 * dpi) as i32;
-            frame.fill_rect(
-                lx,
-                bottom,
-                w,
-                bh,
-                theme.hover.0,
-                theme.hover.1,
-                theme.hover.2,
-            );
+            round_rect(frame, lx, bottom, w, bh, 9.0 * dpi, theme.hover);
             text.draw(
                 frame,
                 (lx + (14.0 * dpi) as i32) as f32,
@@ -711,7 +708,7 @@ impl Capture {
         match self.tab {
             Tab::Draw => {
                 self.canvas = (ax, ay, aw, ah);
-                frame.fill_rect(ax, ay, aw, ah, 0xFF, 0xFF, 0xFF);
+                round_rect(frame, ax, ay, aw, ah, 10.0 * dpi, (0xFF, 0xFF, 0xFF));
                 // Ligne de base, comme sur un bordereau : on sait où signer.
                 let line = ay + (ah as f32 * 0.78) as i32;
                 frame.fill_rect(
@@ -768,7 +765,7 @@ impl Capture {
                 let bh = (30.0 * dpi) as i32;
                 let label = "Choisir une image…";
                 let w = (text.measure(size, label) + 28.0 * dpi) as i32;
-                frame.fill_rect(ax, ay, w, bh, theme.hover.0, theme.hover.1, theme.hover.2);
+                round_rect(frame, ax, ay, w, bh, 9.0 * dpi, theme.hover);
                 text.draw(
                     frame,
                     (ax + (14.0 * dpi) as i32) as f32,
@@ -801,15 +798,6 @@ impl Capture {
                 );
             }
         }
-    }
-}
-
-/// Assombrit tout le cadre, pour détacher une fenêtre modale.
-fn veil(frame: &mut Frame<'_>) {
-    for pixel in frame.pixels.chunks_exact_mut(4) {
-        pixel[0] = (u32::from(pixel[0]) * 45 / 100) as u8;
-        pixel[1] = (u32::from(pixel[1]) * 45 / 100) as u8;
-        pixel[2] = (u32::from(pixel[2]) * 45 / 100) as u8;
     }
 }
 

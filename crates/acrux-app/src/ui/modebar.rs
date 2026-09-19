@@ -15,6 +15,7 @@
 )]
 
 use crate::platform::Frame;
+use crate::ui::paint::round_rect;
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
 
@@ -71,15 +72,7 @@ impl ModeBar {
         let tw = text.measure(size, title) as i32 + (22.0 * dpi) as i32;
         let top = y + (4.0 * dpi) as i32;
         let inner = h - (8.0 * dpi) as i32;
-        frame.fill_rect(
-            pad,
-            top,
-            tw,
-            inner,
-            theme.accent.0,
-            theme.accent.1,
-            theme.accent.2,
-        );
+        round_rect(frame, pad, top, tw, inner, 8.0 * dpi, theme.accent);
         text.draw(
             frame,
             (pad + (11.0 * dpi) as i32) as f32,
@@ -99,15 +92,7 @@ impl ModeBar {
         let label = "Terminer";
         let w = text.measure(size, label) as i32 + (26.0 * dpi) as i32;
         let bx = fw - pad - w;
-        frame.fill_rect(
-            bx,
-            top,
-            w,
-            inner,
-            theme.hover.0,
-            theme.hover.1,
-            theme.hover.2,
-        );
+        round_rect(frame, bx, top, w, inner, 8.0 * dpi, theme.hover);
         text.draw(
             frame,
             (bx + (13.0 * dpi) as i32) as f32,

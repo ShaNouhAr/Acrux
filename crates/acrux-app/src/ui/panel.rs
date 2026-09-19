@@ -19,6 +19,7 @@ use std::fmt::Write as _;
 use acrux_graphics::Bitmap;
 
 use crate::platform::Frame;
+use crate::ui::paint::round_rect;
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
 
@@ -304,7 +305,7 @@ impl Panel {
             let x = i as i32 * tab_w;
             let active = *tab == self.tab;
             if self.hover == Some(Hit::Tab(*tab)) && !active {
-                frame.fill_rect(x, 0, tab_w, hh, t.hover.0, t.hover.1, t.hover.2);
+                round_rect(frame, x + 2, 3, tab_w - 4, hh - 6, 7.0 * dpi, t.hover);
             }
             let color = if active { t.text } else { t.text_dim };
             let tw = text.measure(size, label).min(room);
@@ -447,7 +448,7 @@ impl Panel {
                     if y + row_h >= 0 && y <= view_h {
                         let hovered = matches!(self.hover, Some(Hit::Row(id, _)) if id == r.id);
                         if hovered {
-                            body.fill_rect(0, y, w - 1, row_h, t.hover.0, t.hover.1, t.hover.2);
+                            round_rect(&mut body, 4, y + 1, w - 9, row_h - 2, 7.0 * dpi, t.hover);
                         }
                         if matches!(self.focus, Some(Hit::Row(id, _)) if id == r.id) {
                             ring(&mut body, t, 0, y, w - 1, row_h);

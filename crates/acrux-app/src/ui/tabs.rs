@@ -13,6 +13,7 @@
 )]
 
 use crate::platform::Frame;
+use crate::ui::paint::round_rect;
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
 
@@ -96,10 +97,11 @@ impl Tabs {
             let tw = each.min(w - x);
             let selected = i == active;
             if selected {
-                frame.fill_rect(x, 0, tw, h - 1, t.canvas.0, t.canvas.1, t.canvas.2);
-                frame.fill_rect(x, 0, tw, 2, t.accent.0, t.accent.1, t.accent.2);
+                // L'onglet actif se prolonge vers le bas : il tient à la page.
+                round_rect(frame, x + 2, 3, tw - 4, h + 8, 8.0 * dpi, t.canvas);
+                frame.fill_rect(x + 2, 3, tw - 4, 2, t.accent.0, t.accent.1, t.accent.2);
             } else if self.hover == Some(i) {
-                frame.fill_rect(x, 0, tw, h - 1, t.hover.0, t.hover.1, t.hover.2);
+                round_rect(frame, x + 2, 3, tw - 4, h - 7, 8.0 * dpi, t.hover);
             }
             frame.fill_rect(
                 x + tw - 1,
