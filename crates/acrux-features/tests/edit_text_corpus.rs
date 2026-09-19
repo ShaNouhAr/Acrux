@@ -170,6 +170,19 @@ fn replace_and_check(
         }],
     )
     .unwrap();
+    // Ce test ajoute un caractère absent du sous-ensemble incorporé : il
+    // vérifie que `edit_text` va le chercher dans la police système de la
+    // même famille. Sur une machine qui n'a pas cette famille — une machine
+    // d'intégration continue, par exemple — il n'y a rien à vérifier, et
+    // `edit_text` le dit au lieu de faire semblant.
+    if report
+        .warnings
+        .iter()
+        .any(|w| w.contains("aucune police système"))
+    {
+        eprintln!("{file} : aucune police système pour compléter le sous-ensemble, test ignoré");
+        return;
+    }
     assert!(
         report.warnings.is_empty(),
         "avertissements inattendus : {:?}",

@@ -78,6 +78,15 @@ Livrable : version 0.2, parité avec Acrobat Standard hors édition de texte.
   étiquette `vX.Y.Z` déclenche la construction, l'installateur, l'archive portable, les sommes
   SHA-256 et la page de version. Le workflow refuse de publier si l'étiquette ne correspond pas à la
   version de `Cargo.toml`. Aucune action tierce : le jeton fourni par GitHub et `gh` suffisent.
+- [ ] **Métriques des quatorze polices standard, sans police système** — défaut connu, trouvé en
+  faisant tourner la suite sur macOS. Un PDF qui utilise Helvetica, Times ou Courier sans
+  `/Widths` ni programme incorporé (§9.6.2.2) fait aujourd'hui chercher une police système de
+  substitution ; là où il n'y en a aucune d'utilisable, les largeurs valent zéro, les boîtes de
+  glyphes s'effondrent et l'extraction de texte devient fausse. Les tables AFM existent déjà dans
+  `acrux-features/stamp/metrics.rs` : il faut les descendre dans `acrux-render` (ou
+  `acrux-fonts`), les utiliser en repli, et faire remonter `acrux-features` dessus. Un fichier PDF
+  valide doit se lire correctement sur une machine sans une seule police installée — c'est tout le
+  sens d'un moteur sans dépendances.
 - [ ] Signature Authenticode des exécutables (certificat commercial), paquet `winget`
 - [ ] Portages macOS et Linux, et leurs formats de paquet
 
