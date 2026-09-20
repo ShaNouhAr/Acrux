@@ -223,8 +223,10 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   d'origine garde ses octets, encadré par `q`/`Q` quand le tampon passe devant — et le dessin est un
   XObject de formulaire unique partagé par toutes les pages, placé par une matrice calculée dans
   l'espace d'affichage `/Rotate` compris ; `stamp/metrics` porte les largeurs AFM des polices
-  standard, `stamp/image` incorpore un PNG décodé ou un JPEG tel quel, `stamp/numbering` les formats
-  de numéro et les jetons ; `remove_stamps` défait la pose),
+  standard, `stamp/image` incorpore un JPEG tel quel et décode
+  lui-même PNG, BMP, GIF et TIFF — `stamp/image/{bmp,gif,tiff}`, le TIFF multipage rendant une
+  image par feuille et empruntant à `acrux-codecs` les compressions des flux PDF —,
+  `stamp/numbering` les formats de numéro et les jetons ; `remove_stamps` défait la pose),
   `edit_text` (édition de texte in place : `rewrite_content` réécrit le flux d'une page en
   recopiant octet pour octet tout ce qui n'est pas remplacé, `edit_text/scan` suit l'état texte
   pour retrouver l'opération et les octets qui ont dessiné une plage de glyphes de `PageText`,
