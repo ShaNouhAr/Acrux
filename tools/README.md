@@ -14,6 +14,7 @@ Key 0x73          # F4 : panneau latéral
 Key 0x75          # F6 : zone suivante
 Click 300 85      # clic en coordonnées client
 Typing "bonjour"  # saisie de texte
+Chord "h"         # raccourci Ctrl+H (Chord "p" -Shift : Ctrl+Maj+P)
 Shot "avant"      # copie du tampon dans scratchpad/avant.ppm
 Journal "focus"   # lignes du journal qui contiennent « focus »
 Stop-App

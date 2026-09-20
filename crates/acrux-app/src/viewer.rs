@@ -670,6 +670,9 @@ pub struct Viewer {
     media: Option<MediaView>,
     /// Modèle 3D activé, s'il y en a un.
     three_d: Option<three_d::Active3d>,
+    /// Boutons de l'invite modale, relevés au dernier dessin : rectangle et
+    /// « c'est le bouton qui valide ».
+    prompt_buttons: Vec<(i32, i32, i32, i32, bool)>,
     /// Résultat de la recherche de mise à jour en cours, s'il y en a une.
     update_rx: Option<std::sync::mpsc::Receiver<Result<crate::update::Release, String>>>,
     /// Version plus récente trouvée, en attente que l'utilisateur en décide.
@@ -828,68 +831,128 @@ enum ReplaceButton {
     All,
 }
 
-/// Dessine le bandeau de remplacement sous le champ de recherche. Rend
-/// l'ordonnée atteinte et les rectangles cliquables.
+/// Dessine le bandeau de recherche : une carte flottante en haut à droite,
+/// avec le champ, le champ de remplacement s'il est ouvert, le compteur et
+/// les boutons. Rend les rectangles cliquables.
 ///
 /// Les boutons ne sont rendus que s'il y a quelque chose à remplacer :
 /// grisés, ils ne répondent pas au clic.
-fn paint_replace_bar(
+#[allow(clippy::too_many_lines)] // une mise en page, lue de haut en bas
+fn paint_search_card(
     frame: &mut Frame<'_>,
     text: &mut TextRenderer,
     search: &Search,
     theme: &Theme,
     dpi: f32,
-    (x, y, box_w, box_h): (i32, i32, i32, i32),
-) -> (i32, Vec<SearchTarget>) {
+    page_count: usize,
+) -> Vec<SearchTarget> {
     let t = theme;
-    let mut buttons = Vec::new();
-    let Some(r) = &search.replace else {
-        return (y, buttons);
-    };
-    let step = box_h + (4.0 * dpi) as i32;
-    let y = y + step;
-    frame.fill_rect(
-        x - 2,
-        y - 2,
-        box_w + 4,
-        box_h + 4,
-        t.bar.0,
-        t.bar.1,
-        t.bar.2,
-    );
-    r.draw(frame, text, t, dpi, x, y, box_w, box_h);
-    buttons.push((x, y, box_w, box_h, ReplaceButton::With));
-    let y = y + step;
-    let gap = (4.0 * dpi) as i32;
-    let bw = (box_w - gap) / 2;
-    let usable = !search.hits.is_empty();
+    let s = |v: f32| (v * dpi).round() as i32;
     let size = t.font_size * dpi;
-    for (i, (label, what)) in [
-        (lang::tr("Remplacer"), ReplaceButton::One),
-        (lang::tr("Tout remplacer"), ReplaceButton::All),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let bx = x + i as i32 * (bw + gap);
-        let face = if usable { t.hover } else { t.bar };
-        round_rect(frame, bx, y, bw, box_h, 4.0 * dpi, face);
-        let lw = text.measure(size, label);
-        let ink = if usable { t.text } else { t.text_dim };
-        text.draw_clipped(
-            frame,
-            bx as f32 + (bw as f32 - lw) / 2.0,
-            y as f32 + (box_h as f32 + text.ascent(size)) / 2.0 - 1.0,
-            size,
-            label,
-            ink,
-            bw as f32 - 4.0 * dpi,
-        );
-        if usable {
-            buttons.push((bx, y, bw, box_h, what));
+    let (card_w, pad, field_h, gap, footer_h) = (s(340.0), s(10.0), s(32.0), s(8.0), s(30.0));
+    let rows = if search.replace.is_some() { 2 } else { 1 };
+    let card_h = pad * 2 + field_h * rows + gap * rows + footer_h;
+    let x = frame.width as i32 - card_w - s(12.0);
+    let y = s(12.0);
+    let radius = 12.0 * dpi;
+    shadow(
+        frame,
+        x,
+        y + s(4.0),
+        card_w,
+        card_h,
+        radius,
+        22.0 * dpi,
+        0.35,
+    );
+    round_rect(frame, x, y, card_w, card_h, radius, t.bar);
+    round_rect_outline(
+        frame,
+        x,
+        y,
+        card_w,
+        card_h,
+        radius,
+        dpi.max(1.0),
+        t.separator,
+    );
+
+    let mut targets = Vec::new();
+    let (fx, fw) = (x + pad, card_w - 2 * pad);
+    let mut fy = y + pad;
+    search.input.draw(frame, text, t, dpi, fx, fy, fw, field_h);
+    targets.push((fx, fy, fw, field_h, ReplaceButton::Find));
+    fy += field_h + gap;
+    if let Some(r) = &search.replace {
+        r.draw(frame, text, t, dpi, fx, fy, fw, field_h);
+        targets.push((fx, fy, fw, field_h, ReplaceButton::With));
+        fy += field_h + gap;
+    }
+
+    // Le pied : le compteur à gauche, les boutons à droite.
+    let scanning = search.scanned < page_count;
+    let counter = if search.input.value.is_empty() {
+        lang::tr("Entrée : suivante · Maj+Entrée : précédente").to_string()
+    } else if scanning {
+        lang::trf(
+            "{} trouvée(s), recherche…",
+            &[&search.hits.len().to_string()],
+        )
+    } else if search.hits.is_empty() {
+        lang::tr("aucun résultat").to_string()
+    } else {
+        format!("{} / {}", search.current + 1, search.hits.len())
+    };
+    let baseline = fy as f32 + f32::midpoint(footer_h as f32, text.ascent(size)) - 1.0;
+    let mut right = fx + fw;
+    if search.replace.is_some() {
+        let usable = !search.hits.is_empty();
+        for (label, what, primary) in [
+            (lang::tr("Remplacer"), ReplaceButton::One, true),
+            (lang::tr("Tout remplacer"), ReplaceButton::All, false),
+        ] {
+            let bw = (text.measure(size, label) + 24.0 * dpi) as i32;
+            let bx = right - bw;
+            let ink = crate::ui::paint::button(
+                frame,
+                bx,
+                fy,
+                bw,
+                footer_h,
+                dpi,
+                t,
+                crate::ui::paint::ButtonLook {
+                    primary,
+                    hovered: false,
+                    focused: false,
+                    disabled: !usable,
+                },
+            );
+            let lw = text.measure(size, label);
+            text.draw(
+                frame,
+                bx as f32 + (bw as f32 - lw) / 2.0,
+                baseline,
+                size,
+                label,
+                ink,
+            );
+            if usable {
+                targets.push((bx, fy, bw, footer_h, what));
+            }
+            right = bx - gap;
         }
     }
-    (y, buttons)
+    text.draw_clipped(
+        frame,
+        (fx + s(4.0)) as f32,
+        baseline,
+        size * 0.92,
+        &counter,
+        t.text_dim,
+        (right - fx - s(8.0)).max(0) as f32,
+    );
+    targets
 }
 
 impl Viewer {
@@ -954,6 +1017,7 @@ impl Viewer {
             objects: None,
             media: None,
             three_d: None,
+            prompt_buttons: Vec::new(),
             update_rx: None,
             update_found: None,
             update_asked: false,
@@ -1481,15 +1545,17 @@ impl Viewer {
             }
             // La page, sur son fond blanc et son ombre, comme dans la vue.
             let radius = 8.0 * dpi;
+            // Une ombre large et légère : la carte flotte, elle n'est pas
+            // cernée.
             shadow(
                 frame,
                 cx,
-                cy + (3.0 * dpi) as i32,
+                cy + (5.0 * dpi) as i32,
                 card_w,
                 thumb_h,
                 radius,
-                10.0 * dpi,
-                if over { 0.5 } else { 0.3 },
+                18.0 * dpi,
+                if over { 0.32 } else { 0.18 },
             );
             round_rect(frame, cx, cy, card_w, thumb_h, radius, (0xFF, 0xFF, 0xFF));
             match thumbs.get(path) {
@@ -1766,7 +1832,7 @@ impl Viewer {
             self.sign_panel = None;
             self.capture = None;
             self.wake_anim();
-            self.set_notice(lang::tr("accueil").into());
+            self.set_notice(lang::tr("Accueil").into());
         }
         self.title_dirty = true;
         window.request_redraw();
@@ -1849,6 +1915,7 @@ impl Viewer {
     }
 
     /// Dessine l'invite modale par-dessus la vue.
+    #[allow(clippy::too_many_lines)] // une mise en page, lue de haut en bas
     fn paint_prompt(&mut self, frame: &mut Frame<'_>) {
         let Some(prompt) = &self.prompt else { return };
         let t = self.theme;
@@ -1863,7 +1930,7 @@ impl Viewer {
             120,
         );
         let panel_w = (420.0 * dpi) as i32;
-        let panel_h = (150.0 * dpi) as i32;
+        let panel_h = (196.0 * dpi) as i32;
         let x = (self.width as i32 - panel_w) / 2;
         let y = self.view_top() as i32 + (self.view_height() as i32 - panel_h) / 2;
         let radius = 14.0 * dpi;
@@ -1920,12 +1987,49 @@ impl Viewer {
             panel_w - 2 * pad,
             box_h,
         );
-        let hint_y = (box_y + box_h) as f32 + (8.0 * dpi) + text.ascent(size);
-        let (hint, color) = match &prompt.error {
-            Some(e) => (e.as_str(), (0xE5, 0x53, 0x53)),
-            None => ("Entrée pour valider, Échap pour annuler", t.text_dim),
-        };
-        text.draw(frame, (x + pad) as f32, hint_y, size, hint, color);
+        // L'erreur, s'il y en a une, sous le champ.
+        if let Some(e) = &prompt.error {
+            let hint_y = (box_y + box_h) as f32 + (8.0 * dpi) + text.ascent(size);
+            text.draw(frame, (x + pad) as f32, hint_y, size, e, (0xE5, 0x53, 0x53));
+        }
+        // Deux boutons, comme dans les autres fenêtres : on peut aussi
+        // cliquer, pas seulement taper Entrée.
+        let button_h = (34.0 * dpi) as i32;
+        let by = y + panel_h - pad - button_h;
+        let mut right = x + panel_w - pad;
+        let mut buttons = Vec::new();
+        for (label, primary) in [(lang::tr("Valider"), true), (lang::tr("Annuler"), false)] {
+            let bw =
+                (text.measure(size, label) as i32 + (32.0 * dpi) as i32).max((88.0 * dpi) as i32);
+            let bx = right - bw;
+            let ink = crate::ui::paint::button(
+                frame,
+                bx,
+                by,
+                bw,
+                button_h,
+                dpi,
+                &t,
+                crate::ui::paint::ButtonLook {
+                    primary,
+                    hovered: false,
+                    focused: false,
+                    disabled: false,
+                },
+            );
+            let lw = text.measure(size, label);
+            text.draw(
+                frame,
+                bx as f32 + (bw as f32 - lw) / 2.0,
+                (by + button_h / 2) as f32 + text.ascent(size) / 2.0,
+                size,
+                label,
+                ink,
+            );
+            buttons.push((bx, by, bw, button_h, primary));
+            right = bx - (8.0 * dpi) as i32;
+        }
+        self.prompt_buttons = buttons;
     }
 
     /// Événement clavier pendant une invite modale.
@@ -2489,6 +2593,16 @@ impl Viewer {
         // Sous le bouton, recalée dans la fenêtre si elle dépasse à droite.
         let x = (rect.0 + rect.2 / 2 - w / 2).clamp(4, (frame.width as i32 - w - 4).max(4));
         let y = (rect.1 + rect.3 + (4.0 * dpi) as i32).min(frame.height as i32 - h - 2);
+        shadow(
+            frame,
+            x,
+            y + (3.0 * dpi) as i32,
+            w,
+            h,
+            7.0 * dpi,
+            12.0 * dpi,
+            0.3,
+        );
         round_rect(frame, x, y, w, h, 7.0 * dpi, t.tip_bg);
         round_rect_outline(frame, x, y, w, h, 7.0 * dpi, dpi.max(1.0), t.separator);
         let baseline = y as f32 + f32::midpoint(h as f32, renderer.ascent(size)) - 1.0;
@@ -2652,59 +2766,10 @@ impl Viewer {
                 fill_rect_blend(frame, sx, sy, sw, sh.min(view_h - sy), color, 110);
             }
         }
-        // Champ en haut à droite, avec le compteur d'occurrences.
+        // La carte en haut à droite : champs, compteur, boutons.
         let Some(text) = &mut self.text else { return };
-        let box_w = (320.0 * dpi) as i32;
-        let box_h = (30.0 * dpi) as i32;
-        let margin = (12.0 * dpi) as i32;
-        let x = frame.width as i32 - box_w - margin;
-        let y = margin;
-        frame.fill_rect(
-            x - 2,
-            y - 2,
-            box_w + 4,
-            box_h + 4,
-            t.bar.0,
-            t.bar.1,
-            t.bar.2,
-        );
-        s.input.draw(frame, text, &t, dpi, x, y, box_w, box_h);
-        let mut buttons: Vec<SearchTarget> = vec![(x, y, box_w, box_h, ReplaceButton::Find)];
-        // Le champ « remplacer par » et ses deux boutons, sous la recherche.
-        let (y, more) = paint_replace_bar(frame, text, s, &t, dpi, (x, y, box_w, box_h));
-        buttons.extend(more);
-        let scanning = s.scanned < self.loaded.as_ref().map_or(0, |l| l.pages.len());
-        let counter = if s.input.value.is_empty() {
-            String::new()
-        } else if scanning {
-            format!("{} trouvée(s), recherche…", s.hits.len())
-        } else if s.hits.is_empty() {
-            "aucun résultat".to_string()
-        } else {
-            format!("{} / {}", s.current + 1, s.hits.len())
-        };
-        if !counter.is_empty() {
-            let size = t.font_size * dpi;
-            let cw = text.measure(size, &counter);
-            let baseline = y as f32 + (box_h as f32 + text.ascent(size)) / 2.0 - 1.0;
-            frame.fill_rect(
-                x - 2,
-                y + box_h + 2,
-                box_w + 4,
-                box_h,
-                t.bar.0,
-                t.bar.1,
-                t.bar.2,
-            );
-            text.draw(
-                frame,
-                x as f32 + box_w as f32 - cw - 8.0 * dpi,
-                baseline + box_h as f32 + 2.0,
-                size,
-                &counter,
-                t.text_dim,
-            );
-        }
+        let pages = self.loaded.as_ref().map_or(0, |l| l.pages.len());
+        let buttons = paint_search_card(frame, text, s, &t, dpi, pages);
         if let Some(s) = &mut self.search {
             s.buttons = buttons;
         }
@@ -6695,6 +6760,23 @@ impl App for Viewer {
                         self.run_command(c, window);
                     } else {
                         self.palette = None;
+                    }
+                    window.request_redraw();
+                    return;
+                }
+                // Une invite modale ne laisse passer que ses deux boutons.
+                if self.prompt.is_some() {
+                    let hit = self
+                        .prompt_buttons
+                        .iter()
+                        .find(|(bx, by, bw, bh, _)| {
+                            x >= *bx && x < bx + bw && y >= *by && y < by + bh
+                        })
+                        .map(|b| b.4);
+                    match hit {
+                        Some(true) => self.prompt_key(Key::Enter, window),
+                        Some(false) => self.prompt = None,
+                        None => {}
                     }
                     window.request_redraw();
                     return;

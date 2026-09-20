@@ -103,15 +103,6 @@ impl Tabs {
             } else if self.hover == Some(i) {
                 round_rect(frame, x + 2, 3, tw - 4, h - 7, 8.0 * dpi, t.hover);
             }
-            frame.fill_rect(
-                x + tw - 1,
-                4,
-                1,
-                h - 9,
-                t.separator.0,
-                t.separator.1,
-                t.separator.2,
-            );
             let label = if tab.modified {
                 format!("• {}", tab.title)
             } else {
@@ -128,30 +119,43 @@ impl Tabs {
                 color,
                 (tw - 2 * pad - close) as f32,
             );
-            // Croix de fermeture, à droite de l'onglet.
+            // Croix de fermeture, à droite de l'onglet : un glyphe lissé sur
+            // une pastille au survol, comme dans un navigateur.
             let cx = x + tw - pad - close / 2;
             let cy = h / 2 - 1;
-            let r = (close / 2 - 3).max(3);
             let cross = if self.hover_close == Some(i) {
-                t.text
-            } else {
-                t.text_dim
-            };
-            if self.hover_close == Some(i) {
-                frame.fill_rect(
+                round_rect(
+                    frame,
                     cx - close / 2,
                     cy - close / 2,
                     close,
                     close,
-                    t.separator.0,
-                    t.separator.1,
-                    t.separator.2,
+                    close as f32 / 2.0,
+                    t.separator,
                 );
-            }
-            for d in -r..=r {
-                frame.fill_rect(cx + d, cy + d, 1, 1, cross.0, cross.1, cross.2);
-                frame.fill_rect(cx + d, cy - d, 1, 1, cross.0, cross.1, cross.2);
-            }
+                t.text
+            } else if selected || self.hover == Some(i) {
+                t.text_dim
+            } else {
+                // Sur un onglet inactif et non survolé, la croix se fait
+                // discrète : une rangée de croix fatigue le regard.
+                (
+                    u8::midpoint(t.text_dim.0, t.bar.0),
+                    u8::midpoint(t.text_dim.1, t.bar.1),
+                    u8::midpoint(t.text_dim.2, t.bar.2),
+                )
+            };
+            let glyph = "×";
+            let gs = size * 1.15;
+            let gw = text.measure(gs, glyph);
+            text.draw(
+                frame,
+                cx as f32 - gw / 2.0,
+                cy as f32 + text.ascent(gs) / 2.0 - 1.0,
+                gs,
+                glyph,
+                cross,
+            );
             self.hits.push((x, 0, tw, h));
             self.closes
                 .push((cx - close / 2, cy - close / 2, close, close));

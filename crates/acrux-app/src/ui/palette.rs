@@ -20,7 +20,7 @@
 use crate::platform::{Frame, Key};
 use crate::ui::input::{InputAction, TextInput};
 use crate::ui::lang::tr;
-use crate::ui::paint::round_rect;
+use crate::ui::paint::{round_rect, round_rect_outline, shadow};
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
 
@@ -743,19 +743,32 @@ impl Palette {
         let field = (32.0 * dpi) as i32;
         let width = (560.0 * dpi).min(f32::from(frame.width as u16) * 0.9) as i32;
         let shown = self.filtered.len().min(12);
-        let height = pad * 2 + field + shown as i32 * row;
+        let height = pad * 2 + field + (12.0 * dpi) as i32 + shown as i32 * row;
         let x = (frame.width as i32 - width) / 2;
         let y = ((frame.height as i32 - height) / 3).max(pad);
-        frame.fill_rect(
-            x - 1,
-            y - 1,
-            width + 2,
-            height + 2,
-            t.separator.0,
-            t.separator.1,
-            t.separator.2,
+        // Une carte posée sur le voile : ombre, coins arrondis, liseré.
+        let radius = 14.0 * dpi;
+        shadow(
+            frame,
+            x,
+            y + (8.0 * dpi) as i32,
+            width,
+            height,
+            radius,
+            30.0 * dpi,
+            0.45,
         );
-        frame.fill_rect(x, y, width, height, t.bar.0, t.bar.1, t.bar.2);
+        round_rect(frame, x, y, width, height, radius, t.bar);
+        round_rect_outline(
+            frame,
+            x,
+            y,
+            width,
+            height,
+            radius,
+            dpi.max(1.0),
+            t.separator,
+        );
         self.input.draw(
             frame,
             text,
@@ -767,7 +780,17 @@ impl Palette {
             field,
         );
         self.rows.clear();
-        let mut ry = y + pad + field + (4.0 * dpi) as i32;
+        // Un trait sépare le champ des commandes.
+        frame.fill_rect(
+            x + pad,
+            y + pad + field + (6.0 * dpi) as i32,
+            width - 2 * pad,
+            1,
+            t.separator.0,
+            t.separator.1,
+            t.separator.2,
+        );
+        let mut ry = y + pad + field + (12.0 * dpi) as i32;
         for (index, &entry) in self.filtered.iter().take(shown).enumerate() {
             let Some(e) = ENTRIES.get(entry) else {
                 continue;

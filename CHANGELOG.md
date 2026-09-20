@@ -9,6 +9,39 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 
 ## 0.18.0 — non publiée
 
+### L'interface, peaufinée
+
+Un passage sur ce qui avait l'air d'une maquette plutôt que d'un logiciel
+fini — vu de l'extérieur, sur des captures, et corrigé pièce par pièce.
+
+- **Les champs de saisie** ont des coins arrondis et disent le focus par un
+  anneau d'accent, plus par un bord dur : recherche, palette, invites et
+  champ de page héritent tous du même rendu.
+- **La recherche** est une carte flottante — ombre, coins arrondis — qui
+  réunit le champ, le champ de remplacement, le compteur et les boutons ;
+  « Remplacer » est le bouton principal, en couleur d'accent, et les boutons
+  se grisent quand il n'y a rien à remplacer. Fini l'empilement de boîtes
+  bordées de noir.
+- **La palette de commandes** est une carte posée sur le voile, avec un trait
+  entre le champ et les commandes.
+- **Les onglets** n'ont plus de cloisons ; la croix de fermeture est un
+  glyphe lissé, discret sur les onglets inactifs, sur une pastille au survol.
+- **Les invites** (mot de passe, note, champ de formulaire) ont deux boutons,
+  « Annuler » et « Valider », comme les autres fenêtres : on peut cliquer,
+  pas seulement taper Entrée.
+- **Un seul bouton partout** (`ui::paint::button`) : fenêtres, recherche et
+  invites partagent le même dessin — principal, survolé, focus, grisé.
+- Les cartes de l'accueil flottent sur une ombre large et légère au lieu
+  d'être cernées ; l'info-bulle porte une ombre.
+
+### Le harnais de test invisible sait faire Ctrl+lettre
+
+- Une fenêtre invisible ne voit pas le vrai clavier : `GetKeyState` y lit
+  toujours « rien d'enfoncé ». Un `WM_KEYDOWN` de Ctrl ou de Maj posté par le
+  harnais est désormais retenu, et `Chord "h"` dans `tools/headless.ps1`
+  envoie un raccourci comme le ferait le clavier. Les tests d'interface se
+  font donc tous sans rien afficher.
+
 ### La 3D
 
 Un PDF peut porter un objet en trois dimensions (§13.6) : c'était le dernier

@@ -143,6 +143,77 @@ pub fn shadow(
     }
 }
 
+/// Ce qu'un bouton a à dire de lui-même pour être dessiné.
+// Quatre états indépendants, qui se combinent : un bouton principal peut
+// être survolé et avoir le focus. Une énumération les multiplierait.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ButtonLook {
+    /// Le bouton principal : plein, de la couleur d'accent, texte blanc.
+    pub primary: bool,
+    /// Le pointeur est dessus.
+    pub hovered: bool,
+    /// Il a le focus clavier : un anneau d'accent l'entoure.
+    pub focused: bool,
+    /// Il ne répond pas pour l'instant : estompé.
+    pub disabled: bool,
+}
+
+/// Un bouton, **le même partout** : fenêtres, bandeau de recherche, barres.
+///
+/// Rend la couleur du texte à y écrire — l'appelant connaît son libellé et
+/// sa police, pas ce module.
+pub fn button(
+    frame: &mut Frame<'_>,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    dpi: f32,
+    theme: &crate::ui::theme::Theme,
+    look: ButtonLook,
+) -> Rgb {
+    let radius = 8.0 * dpi;
+    let (bg, fg) = if look.disabled {
+        (theme.bar, theme.text_dim)
+    } else if look.primary {
+        let a = theme.accent;
+        let bg = if look.hovered {
+            (
+                a.0.saturating_add(18),
+                a.1.saturating_add(18),
+                a.2.saturating_add(10),
+            )
+        } else {
+            a
+        };
+        (bg, (255, 255, 255))
+    } else if look.hovered {
+        (theme.separator, theme.text)
+    } else {
+        (theme.hover, theme.text)
+    };
+    if look.focused {
+        let ring = (2.0 * dpi).max(1.0);
+        let r = ring as i32;
+        round_rect_outline(
+            frame,
+            x - r,
+            y - r,
+            w + 2 * r,
+            h + 2 * r,
+            radius + ring,
+            ring,
+            theme.accent,
+        );
+    }
+    round_rect(frame, x, y, w, h, radius, bg);
+    if look.disabled {
+        round_rect_outline(frame, x, y, w, h, radius, dpi.max(1.0), theme.separator);
+    }
+    fg
+}
+
 /// Assombrit tout le cadre : ce qui est dessiné par-dessus se détache, et le
 /// reste attend.
 ///

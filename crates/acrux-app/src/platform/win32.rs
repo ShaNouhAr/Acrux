@@ -267,6 +267,7 @@ const WM_CLOSE: UINT = 0x0010;
 const WM_ERASEBKGND: UINT = 0x0014;
 const WM_NCDESTROY: UINT = 0x0082;
 const WM_KEYDOWN: UINT = 0x0100;
+const WM_KEYUP: UINT = 0x0101;
 const WM_CHAR: UINT = 0x0102;
 const WM_MOUSEMOVE: UINT = 0x0200;
 const WM_LBUTTONDOWN: UINT = 0x0201;
@@ -1126,12 +1127,35 @@ fn file_dialog(
     Some(PathBuf::from(String::from_utf16_lossy(&buffer[..len])))
 }
 
+/// Modificateurs **simulés** du mode invisible.
+///
+/// `GetKeyState` lit le vrai clavier ; or le harnais de test n'appuie sur
+/// rien, il poste des messages. Un `WM_KEYDOWN` de Ctrl ou de Maj posté à la
+/// fenêtre invisible est donc retenu ici, pour que « Ctrl+F » y soit un
+/// raccourci comme ailleurs.
+static SIMULATED_CTRL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static SIMULATED_SHIFT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Retient l'état d'un modificateur posté au mode invisible.
+fn note_simulated(vk: u32, down: bool) {
+    use std::sync::atomic::Ordering;
+    if !headless() {
+        return;
+    }
+    if vk == VK_CONTROL as u32 {
+        SIMULATED_CTRL.store(down, Ordering::Relaxed);
+    } else if vk == VK_SHIFT as u32 {
+        SIMULATED_SHIFT.store(down, Ordering::Relaxed);
+    }
+}
+
 fn modifiers() -> Modifiers {
+    use std::sync::atomic::Ordering;
     // SAFETY : GetKeyState n'a pas de précondition.
     unsafe {
         Modifiers {
-            ctrl: GetKeyState(VK_CONTROL) < 0,
-            shift: GetKeyState(VK_SHIFT) < 0,
+            ctrl: GetKeyState(VK_CONTROL) < 0 || SIMULATED_CTRL.load(Ordering::Relaxed),
+            shift: GetKeyState(VK_SHIFT) < 0 || SIMULATED_SHIFT.load(Ordering::Relaxed),
             alt: GetKeyState(VK_MENU) < 0,
         }
     }
@@ -1461,7 +1485,12 @@ fn handle_message(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRES
             0
         }
         WM_KEYDOWN => {
+            note_simulated(wparam as u32, true);
             deliver(state, Event::Key(key_from_vk(wparam as u32), modifiers()));
+            0
+        }
+        WM_KEYUP => {
+            note_simulated(wparam as u32, false);
             0
         }
         WM_CHAR => {

@@ -114,3 +114,18 @@ function Shot($name) {
 function Journal($pattern) {
     Select-String -Path "$script:Dir/events.log" -Pattern $pattern | ForEach-Object { $_.Line }
 }
+
+# Raccourci Ctrl+lettre (ou Ctrl+Maj+lettre) : le modificateur est poste en
+# WM_KEYDOWN, ce que la fenetre invisible retient, puis la lettre arrive comme
+# le vrai clavier l'enverrait, en caractere de controle.
+function Chord($letter, [switch]$Shift) {
+    [W.HL]::PostMessage($script:Hwnd, 0x0100, [IntPtr]0x11, [IntPtr]1) | Out-Null
+    if ($Shift) { [W.HL]::PostMessage($script:Hwnd, 0x0100, [IntPtr]0x10, [IntPtr]1) | Out-Null }
+    Start-Sleep -Milliseconds 60
+    $code = [int][char]$letter.ToUpper() - 64
+    [W.HL]::PostMessage($script:Hwnd, 0x0102, [IntPtr]$code, [IntPtr]1) | Out-Null
+    Start-Sleep -Milliseconds 120
+    if ($Shift) { [W.HL]::PostMessage($script:Hwnd, 0x0101, [IntPtr]0x10, [IntPtr]1) | Out-Null }
+    [W.HL]::PostMessage($script:Hwnd, 0x0101, [IntPtr]0x11, [IntPtr]1) | Out-Null
+    Start-Sleep -Milliseconds 400
+}

@@ -22,7 +22,7 @@
 
 use crate::platform::{Frame, Key};
 use crate::ui::anim::ease_out;
-use crate::ui::paint::{round_rect, round_rect_alpha, round_rect_outline, shadow, veil};
+use crate::ui::paint::{round_rect_alpha, round_rect_outline, shadow, veil};
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
 
@@ -267,39 +267,21 @@ impl Dialog {
         let mut bx = x + width - pad - total;
         let by = y + height - pad - button_h;
         for (i, (button, w)) in self.buttons.iter().zip(&widths).enumerate() {
-            let hovered = self.hover == Some(i);
-            let (bg, fg) = if button.primary {
-                let a = theme.accent;
-                let bg = if hovered {
-                    (
-                        a.0.saturating_add(18),
-                        a.1.saturating_add(18),
-                        a.2.saturating_add(10),
-                    )
-                } else {
-                    a
-                };
-                (bg, (255, 255, 255))
-            } else if hovered {
-                (theme.separator, theme.text)
-            } else {
-                (theme.hover, theme.text)
-            };
-            let radius = 8.0 * dpi;
-            if self.focus == i {
-                let ring = (s(2.0).max(1)) as f32;
-                round_rect_outline(
-                    frame,
-                    bx - ring as i32,
-                    by - ring as i32,
-                    w + 2 * ring as i32,
-                    button_h + 2 * ring as i32,
-                    radius + ring,
-                    ring,
-                    theme.accent,
-                );
-            }
-            round_rect(frame, bx, by, *w, button_h, radius, bg);
+            let fg = crate::ui::paint::button(
+                frame,
+                bx,
+                by,
+                *w,
+                button_h,
+                dpi,
+                theme,
+                crate::ui::paint::ButtonLook {
+                    primary: button.primary,
+                    hovered: self.hover == Some(i),
+                    focused: self.focus == i,
+                    disabled: false,
+                },
+            );
             let lw = text.measure(size, &button.label);
             text.draw(
                 frame,

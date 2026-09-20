@@ -158,20 +158,27 @@ impl TextInput {
         h: i32,
     ) {
         let t = theme;
-        // Fond et bordure (accent si focus).
-        let border = if self.focused { t.accent } else { t.separator };
-        frame.fill_rect(x, y, w, h, border.0, border.1, border.2);
-        frame.fill_rect(
-            x + 1,
-            y + 1,
-            w - 2,
-            h - 2,
-            t.canvas.0,
-            t.canvas.1,
-            t.canvas.2,
-        );
+        // Un champ aux coins arrondis, posé sur son fond ; le focus se dit
+        // par un anneau d'accent, pas par un bord plus dur.
+        let radius = 7.0 * dpi;
+        crate::ui::paint::round_rect(frame, x, y, w, h, radius, t.canvas);
+        if self.focused {
+            let ring = (1.5 * dpi).max(1.0);
+            crate::ui::paint::round_rect_outline(frame, x, y, w, h, radius, ring, t.accent);
+        } else {
+            crate::ui::paint::round_rect_outline(
+                frame,
+                x,
+                y,
+                w,
+                h,
+                radius,
+                dpi.max(1.0),
+                t.separator,
+            );
+        }
         let size = t.font_size * dpi;
-        let pad = 6.0 * dpi;
+        let pad = 10.0 * dpi;
         let baseline = y as f32 + (h as f32 + text.ascent(size)) / 2.0 - 1.0;
         if self.value.is_empty() {
             text.draw_clipped(
