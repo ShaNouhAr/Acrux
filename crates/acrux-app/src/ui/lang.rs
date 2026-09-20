@@ -190,6 +190,7 @@ static TABLE: &[(&str, &str)] = &[
     ("Modifier le PDF", "Edit PDF"),
     ("Modifier le texte", "Edit text"),
     ("Modifier les objets", "Edit objects"),
+    ("Modèle 3D ({} triangles) — glisser pour tourner, molette pour zoomer, Échap pour refermer", "3D model ({} triangles) — drag to rotate, wheel to zoom, Esc to close"),
     ("Mot de passe d'ouverture du document", "Password to open the document"),
     ("Moyen", "Medium"),
     ("Ne pas enregistrer", "Don't save"),

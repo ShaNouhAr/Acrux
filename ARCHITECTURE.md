@@ -275,6 +275,14 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   porte pas un fichier mais des **échantillons bruts**, que l'extraction emballe dans un WAV en
   retournant les octets (le PDF est gros-boutien, le WAV petit-boutien) et en ramenant les lois µ
   et A à du PCM. Ne décode rien d'autre ; refuse d'ouvrir un média extérieur au document.
+- `three_d` : les modèles 3D (§13.6) — annotations `/3D`, leur flux et leur vue par défaut
+  (`/C2W`, `/CO`, `/FOV`, `/BG`). Le format **U3D** est lu de bout en bout : `three_d/bits` porte
+  le décodeur arithmétique à contextes de la norme ECMA-363 (§10), sans lequel pas un entier n'est
+  lisible dans un bloc, `three_d/u3d` les blocs — nœuds, maillage de base, nuanceurs, matériaux —
+  et `three_d/draw` le rendu, projection et tampon de profondeur écrits ici. L'écriture du flux de
+  bits existe aussi, réservée aux épreuves : un modèle écrit puis relu doit redonner le même cube.
+  Le PRC est reconnu et annoncé comme non lu ; le raffinement progressif et les textures sont à
+  faire.
 - `edit_objects` : édition des objets d'une page (images, dessins, groupes, dégradés, blocs de
   texte) — inventaire avec boîte, matrice et **plage d'octets** ; déplacer, redimensionner,
   pivoter, recadrer, réordonner, supprimer, remplacer une image, aligner. Tout passe par une

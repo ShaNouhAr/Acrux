@@ -5,6 +5,36 @@ Fonctionnalités métier : édition, pages, annotations, formulaires, biffure, e
 Voir `ARCHITECTURE.md` à la racine pour la place de ce crate dans l'ensemble,
 et `src/lib.rs` pour la liste des modules et de ceux qui restent à écrire.
 
+## Les modèles 3D (`three_d`)
+
+Un PDF peut porter un objet en trois dimensions : une annotation `/3D` réserve
+un rectangle de la page, et son flux contient le modèle, au format **U3D**
+(ECMA-363) ou **PRC** (ISO 14739). Acrux lit l'U3D, le dessine, et le fait
+tourner à la souris ; le PRC est reconnu et annoncé comme non lu, plutôt que
+deviné.
+
+| Module | Ce qu'il fait |
+| --- | --- |
+| `three_d/bits` | le **décodeur arithmétique** d'U3D : sans lui, pas un entier n'est lisible dans un bloc |
+| `three_d/u3d` | les blocs : nœuds, maillage de base, nuanceurs, matériaux |
+| `three_d/draw` | le rendu : projection, tampon de profondeur, lampe frontale |
+| `three_d` | le côté PDF : trouver les annotations, lire la vue par défaut (`/3DV`, `/C2W`, `/FOV`, `/BG`) |
+
+Le décodeur arithmétique est la pièce maîtresse : U3D comprime **toutes** les
+données de ses blocs avec un codeur adaptatif à contextes (§10 de la norme).
+Il est ici écrit dans les deux sens — la lecture pour les fichiers, l'écriture
+pour les épreuves — si bien qu'un modèle écrit puis relu doit redonner
+exactement le même cube, et qu'un fichier venu d'ailleurs se lit aussi.
+
+Ce qui n'est **pas** lu : le raffinement progressif (un maillage U3D peut être
+affiné après son maillage de base), les textures, l'animation, les squelettes,
+et le PRC. Le maillage de base est le modèle entier dans la grande majorité
+des fichiers.
+
+Le rendu tourne autour de 4 ms par image pour un modèle de cinq mille
+triangles en 500 × 900 : manipuler un objet reste fluide sans carte
+graphique.
+
 ## Lire un fichier image (`stamp::image`)
 
 Un PDF se fabrique souvent à partir d'images : un scan, une photo, une

@@ -70,6 +70,7 @@ use acrux_features::fillsign::ink::{InkPoint, Nib, Pen, Stroke, Weight};
 
 mod dialogs;
 mod editmode;
+mod three_d;
 use crate::ui::editpdf::EditTool;
 use crate::ui::modebar::ModeBar;
 use dialogs::{Asking, Then};
@@ -420,6 +421,8 @@ struct Loaded {
     /// Vidéos et sons du document, avec leur rectangle : c'est ce qui rend un
     /// clic capable de savoir qu'il tombe sur un média.
     media: Vec<acrux_features::media::Media>,
+    /// Modèles 3D du document, avec leur rectangle.
+    models: Vec<acrux_features::three_d::Model>,
     /// Étiquette de chaque page (`/PageLabels`). Vide quand le document s'en
     /// tient à la numérotation décimale : c'est ce qui distingue « iii sur
     /// 240 » de « 3 sur 240 » dans la barre d'outils et la barre d'état.
@@ -665,6 +668,8 @@ pub struct Viewer {
     objects: Option<ObjectTool>,
     /// Média en cours de lecture, s'il y en a un.
     media: Option<MediaView>,
+    /// Modèle 3D activé, s'il y en a un.
+    three_d: Option<three_d::Active3d>,
     /// Résultat de la recherche de mise à jour en cours, s'il y en a une.
     update_rx: Option<std::sync::mpsc::Receiver<Result<crate::update::Release, String>>>,
     /// Version plus récente trouvée, en attente que l'utilisateur en décide.
@@ -948,6 +953,7 @@ impl Viewer {
             dialogs: Vec::new(),
             objects: None,
             media: None,
+            three_d: None,
             update_rx: None,
             update_found: None,
             update_asked: false,
@@ -2859,6 +2865,7 @@ impl Viewer {
             .collect();
         let attachments = collect_attachments(&doc);
         let media = acrux_features::media::list(&doc).unwrap_or_default();
+        let models = acrux_features::three_d::list(&doc).unwrap_or_default();
         let labels = collect_labels(&doc);
         let items = outline(&doc, &page_index).unwrap_or_default();
         let flat = flatten_outline(&items);
@@ -2910,6 +2917,7 @@ impl Viewer {
             layers,
             attachments,
             media,
+            models,
             labels,
         });
         self.error = None;
@@ -3818,6 +3826,8 @@ impl Viewer {
         l.modified = true;
         self.selection = None;
         self.search = None;
+        // Le modèle activé décrivait un document qui vient de changer.
+        self.three_d = None;
         self.title_dirty = true;
         self.clamp_scroll();
     }
@@ -6383,7 +6393,10 @@ impl App for Viewer {
                 x,
                 y,
             } => {
-                if self.showing_home() {
+                if self.three_d_wheel(x, y, f64::from(delta), window) {
+                    // Le modèle 3D a pris la molette : on s'approche de lui,
+                    // la page ne défile pas.
+                } else if self.showing_home() {
                     let max = (self.welcome_height - f64::from(self.view_height())).max(0.0);
                     self.welcome_scroll =
                         (self.welcome_scroll - f64::from(delta) * 90.0).clamp(0.0, max);
@@ -6426,6 +6439,11 @@ impl App for Viewer {
                         self.run_command(c, window);
                     }
                 }
+            }
+            Event::Key(Key::Escape, _)
+                if self.prompt.is_none() && self.palette.is_none() && self.close_3d() =>
+            {
+                window.request_redraw();
             }
             Event::Key(Key::Escape, _)
                 if self.annot_tool.is_some() && self.prompt.is_none() && self.palette.is_none() =>
@@ -6793,6 +6811,8 @@ impl App for Viewer {
                         } else if self.annot_tool == Some(AnnotTool::Note) {
                             self.last_mouse = Some((x, y));
                             self.start_note();
+                        } else if self.three_d_mouse_down(x, y, clicks, modifiers.shift, window) {
+                            // Un modèle 3D a pris le clic.
                         } else if self.media_mouse_down(x, y, window) {
                             // Le média a pris le clic.
                         } else if let Some((_, media)) = self.media_at(x, y) {
@@ -6875,6 +6895,7 @@ impl App for Viewer {
                 window.request_redraw();
             }
             Event::MouseUp { .. } => {
+                self.three_d_mouse_up();
                 self.edit_mouse_up();
                 if self.panel.dragging() {
                     let action = self.panel.mouse_up();
@@ -6891,6 +6912,9 @@ impl App for Viewer {
                 if was_selecting {
                     self.apply_annot_tool();
                 }
+            }
+            Event::MouseMove { x, y, dragging } if self.three_d_mouse_move(x, y, window) => {
+                let _ = dragging;
             }
             Event::MouseMove { x, y, dragging } => {
                 if let Some(p) = &mut self.palette {
@@ -7006,6 +7030,10 @@ impl App for Viewer {
                             Some(AnnotTool::Redact) => Cursor::Redact,
                             _ => Cursor::Highlight,
                         }
+                    } else if in_view && self.model_at(x, y).is_some() {
+                        // Un modèle 3D se prend en main : la main dit qu'il y
+                        // a quelque chose à saisir.
+                        Cursor::Move
                     } else if in_view
                         && (self.widget_at(x, y).is_some() || self.link_at(x, y).is_some())
                     {
@@ -7078,6 +7106,7 @@ impl App for Viewer {
             } else {
                 self.paint_document(&mut view);
             }
+            self.paint_3d(&mut view);
             self.paint_selection(&mut view);
             self.paint_edit(&mut view);
             self.paint_objects(&mut view);

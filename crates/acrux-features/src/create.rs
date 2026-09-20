@@ -9,6 +9,7 @@
 //! | [`from_images`] | une image par page, ou une grille d'images |
 //! | [`from_text`] | du texte brut mis en page, paginé, aligné |
 //! | [`from_markdown`] | du Markdown : titres, styles, listes, tableaux, liens |
+//! | [`from_3d`] | un modèle 3D (U3D) posé sur une page, avec sa vue |
 //! | [`combine`] | plusieurs fichiers réunis, avec signets et sommaire |
 //!
 //! # Ce que les documents produits garantissent
@@ -44,6 +45,7 @@ mod images;
 mod markdown;
 mod paper;
 mod text;
+mod three_d;
 mod wrap;
 
 use acrux_core::Result;
@@ -54,6 +56,7 @@ pub use images::{from_images, Fit, ImageInput, ImageLayout};
 pub use markdown::from_markdown;
 pub use paper::{Margins, Orientation, PageSetup, PageSize};
 pub use text::{from_text, TextAlign, TextLayout};
+pub use three_d::from_3d;
 
 /// Crée un document vide : `setup.pages` pages blanches au format demandé.
 ///

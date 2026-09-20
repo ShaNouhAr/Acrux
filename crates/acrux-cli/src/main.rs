@@ -68,6 +68,11 @@ fn usage() {
     eprintln!("                                  pagination, jetons {{page}} et {{pages}} dans l'en-tête et le pied ;");
     eprintln!("                                  une police système est incorporée dès que le texte sort de");
     eprintln!("                                  WinAnsiEncoding (grec, cyrillique, CJK…)");
+    eprintln!(
+        "  create --3d <modele.u3d> [--size A4] [--orientation ...] [--margin N] -o <sortie>"
+    );
+    eprintln!("                                  pose un modèle 3D sur une page, avec sa vue par défaut et");
+    eprintln!("                                  l'affiche rendue par notre moteur 3D");
     eprintln!("  create --markdown <fichier.md> [mêmes options] -o <sortie>");
     eprintln!("                                  titres, gras, italique, code, listes, citations, règles,");
     eprintln!("                                  tableaux et liens cliquables ; les titres deviennent des signets");
@@ -82,6 +87,9 @@ fn usage() {
     eprintln!("                                  compressé, --gc : objets inatteignables retirés, --compact : les trois");
     eprintln!("      <pages> : « 1,3-5,8 » (1 = première page) ; --full : réécriture au lieu d'un ajout incrémental");
     eprintln!();
+    eprintln!("  3d      <fichier> [--extract <dossier>]");
+    eprintln!("                                  les modèles 3D du document : format, rectangle, géométrie lue ;");
+    eprintln!("                                  --extract écrit les fichiers U3D tels quels");
     eprintln!("  render  <fichier> [pages] [--dpi N] [--no-annots] -o <sortie.png>");
     eprintln!("                                  rend les pages en PNG (96 dpi par défaut ; plusieurs pages → sortie-N.png)");
     eprintln!("  export  <fichier> --format png|jpeg|images|html|docx|xlsx|md|txt [--dpi N] [--quality N]");
@@ -368,6 +376,7 @@ fn main() -> ExitCode {
         (Some("separations"), Some(f)) => cmd_separations(f, &args[2..]),
         (Some("compare"), Some(f)) => cmd_compare(f, &args[2..]),
         (Some("media"), Some(f)) => cmd_media(f, &args[2..]),
+        (Some("3d"), Some(f)) => cmd_3d(f, &args[2..]),
         (Some("objects"), Some(f)) => cmd_objects(f, &args[2..]),
         (Some("edit-object"), Some(f)) => cmd_edit_object(f, &args[2..]),
         (Some("fillsign"), Some(f)) => cmd_fillsign(f, &args[2..]),
@@ -2809,6 +2818,60 @@ fn print_report_json(reports: &[acrux_features::signature::VerificationReport]) 
 }
 
 /// `acr media` : inventaire des vidéos et des sons, et extraction.
+/// `acr 3d fichier.pdf [--extract dossier]` : les modèles 3D d'un document.
+fn cmd_3d(path: &str, rest: &[String]) -> acrux_core::Result<()> {
+    use acrux_features::three_d;
+    let (doc, _) = open(path)?;
+    let models = three_d::list(&doc)?;
+    if models.is_empty() {
+        println!("aucun modèle 3D");
+        return Ok(());
+    }
+    // `--extract <dossier>` sort les modèles tels qu'ils sont dans le fichier.
+    if let Some(dir) = option_value(rest, "--extract") {
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| acrux_core::Error::Io(format!("{} : {e}", dir.display())))?;
+        for (i, model) in models.iter().enumerate() {
+            let data = three_d::data(&doc, model)?;
+            let name = format!("modele-{}.{}", i + 1, model.kind.label().to_lowercase());
+            let out = dir.join(name);
+            std::fs::write(&out, &data)
+                .map_err(|e| acrux_core::Error::Io(format!("{} : {e}", out.display())))?;
+            println!("{} ({} Kio)", out.display(), data.len() / 1024);
+        }
+        println!("{} modèle(s) extrait(s)", models.len());
+        return Ok(());
+    }
+    println!("page  format  rectangle                      géométrie");
+    for model in &models {
+        let geometry = match three_d::scene(&doc, model) {
+            Ok(scene) => {
+                let points: usize = scene.items.iter().map(|i| i.mesh.positions.len()).sum();
+                let faces: usize = scene.items.iter().map(|i| i.mesh.faces.len()).sum();
+                format!(
+                    "{} objet(s), {points} sommets, {faces} triangles",
+                    scene.items.len()
+                )
+            }
+            Err(e) => format!("{e}"),
+        };
+        println!(
+            "{:>4}  {:<6}  {:<28}  {geometry}",
+            model.page + 1,
+            model.kind.label(),
+            format!(
+                "{:.0} {:.0} {:.0} {:.0}",
+                model.rect.x0, model.rect.y0, model.rect.x1, model.rect.y1
+            ),
+        );
+        if let Some(view) = &model.view {
+            println!("      vue par défaut : « {view} »");
+        }
+    }
+    Ok(())
+}
+
 fn cmd_media(path: &str, rest: &[String]) -> acrux_core::Result<()> {
     use acrux_features::media::{self, Source};
     let (doc, _) = open(path)?;
@@ -4096,6 +4159,10 @@ fn cmd_create(rest: &[String]) -> acrux_core::Result<()> {
             .map(acrux_features::create::ImageInput::from_path)
             .collect::<acrux_core::Result<Vec<_>>>()?;
         acrux_features::create::from_images(&images, &create_image_layout(rest)?)?
+    } else if let Some(file) = option_value(rest, "--3d") {
+        let model =
+            std::fs::read(file).map_err(|e| acrux_core::Error::Io(format!("{file}: {e}")))?;
+        acrux_features::create::from_3d(&model, &create_setup(rest)?)?
     } else if let Some(file) = option_value(rest, "--text") {
         let text = std::fs::read_to_string(file)
             .map_err(|e| acrux_core::Error::Io(format!("{file}: {e}")))?;
@@ -4106,7 +4173,7 @@ fn cmd_create(rest: &[String]) -> acrux_core::Result<()> {
         acrux_features::create::from_markdown(&source, &create_text_layout(rest)?)?
     } else {
         return Err(acrux_core::Error::Corrupt(
-            "create attend --blank, --images, --text ou --markdown".into(),
+            "create attend --blank, --images, --3d, --text ou --markdown".into(),
         ));
     };
     let bytes = doc.save_full()?;

@@ -19,6 +19,7 @@
 //! | `linkedit` | écriture des liens : pose, retrait, détection automatique des adresses | §1 |
 //! | `media`  | multimédia : vidéos et sons du document, extraction du fichier incorporé | §13 |
 //! | `navigation` | destinations, liens, actions, signets                   | §1            |
+//! | `ocr`    | lecture du texte d'une image : seuillage, découpe en lignes et en lettres, reconnaissance par gabarits | §2 |
 //! | `outline_edit` | écriture des signets : arbre complet, ajout, retrait, déplacement, signets automatiques | §1 |
 //! | `pages`  | pivoter, supprimer, réordonner, extraire, insérer, fusionner | §5            |
 //! | `pagelabels` | étiquettes de page `/PageLabels` (i, ii, 1, 2, Annexe-A…), lecture, écriture, recherche par étiquette | §1 |
@@ -26,11 +27,11 @@
 //! | `signature` | signatures numériques (§12.8) : inventaire, vérification (condensé, RSA, chaîne X.509, couverture, modifications), pose d'une signature CMS détachée | §9 |
 //! | `redact` | biffure définitive (réécriture du flux, images, tracés), recherche par motif, nettoyage des données cachées | §7 |
 //! | `stamp`  | filigranes, arrière-plans, en-têtes et pieds de page, numérotation Bates | §4 |
+//! | `three_d` | modèles 3D (§13.6) : annotations `/3D`, lecture du format U3D (ECMA-363), rendu et manipulation | §13 |
 //! | `text`   | extraction de texte structurée (paragraphes, colonnes, tableaux, styles), recherche, export texte / Markdown / HTML | §2, §6 |
 //! | `zip`    | écrivain et lecteur ZIP minimal (conteneur des `.docx` et `.xlsx`) | —      |
 //!
-//! Modules prévus : `security`, `ocr`,
-//! `optimize`, `scripting`, `ai`.
+//! Modules prévus : `security`, `optimize`, `scripting`, `ai`.
 
 pub mod accessibility;
 pub mod annotations;
@@ -56,4 +57,5 @@ pub mod redact;
 pub mod signature;
 pub mod stamp;
 pub mod text;
+pub mod three_d;
 pub mod zip;

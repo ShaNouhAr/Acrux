@@ -474,6 +474,13 @@ impl Builder {
         self.add_link(page, rect, Object::Dict(action));
     }
 
+    /// Pose une annotation déjà construite sur une page.
+    pub(crate) fn add_annotation(&mut self, page: usize, annot: Dict) {
+        if let Some(draft) = self.pages.get_mut(page) {
+            draft.annotations.push(Object::Dict(annot));
+        }
+    }
+
     /// Annotation `/Link` sans bordure visible, portant l'action donnée.
     fn add_link(&mut self, page: usize, rect: Rect, action: Object) {
         let Some(draft) = self.pages.get_mut(page) else {

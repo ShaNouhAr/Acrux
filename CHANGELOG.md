@@ -7,6 +7,41 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
+## 0.18.0 — non publiée
+
+### La 3D
+
+Un PDF peut porter un objet en trois dimensions (§13.6) : c'était le dernier
+grand type de contenu du format qu'Acrux ne savait pas lire. Il le lit
+maintenant, **de zéro**, et le fait tourner à la souris.
+
+- **Le format U3D est décodé entièrement** (ECMA-363) : le codeur arithmétique
+  adaptatif à contextes de la norme — sans lequel pas un entier n'est lisible
+  dans un bloc —, les chaînes de modificateurs, les nœuds et leurs matrices,
+  le maillage de base, les nuanceurs et les matériaux. Le décodeur est éprouvé
+  sur un **vrai fichier de CAO** venu d'ailleurs : un dé de vingt-deux objets
+  et 4 716 triangles s'en lit avec ses couleurs.
+- **Un moteur de rendu 3D maison** : projection, découpe au plan proche,
+  tampon de profondeur, ombrage interpolé et lampe frontale — comme le reste
+  d'Acrux, sans carte graphique ni bibliothèque. Environ **4 ms par image**
+  pour cinq mille triangles en 500 × 900.
+- **Dans l'application** : un clic active le modèle, glisser le fait tourner,
+  la molette s'en approche, Maj+glisser le déplace, un double-clic revient à
+  la vue du document et Échap referme. La page n'est pas rendue à nouveau
+  pendant qu'on tourne : seul le modèle l'est.
+- **La vue du document est suivie** : `/3DV`, la matrice caméra→monde
+  `/C2W`, la distance d'orbite `/CO`, l'ouverture `/FOV` et la couleur de fond
+  `/BG` placent la caméra comme le document le demande ; à défaut, le modèle
+  est cadré automatiquement.
+- **En ligne de commande** : `acr 3d fichier.pdf` liste les modèles avec leur
+  géométrie lue et `--extract` en sort les fichiers U3D ; `acr create --3d
+  modele.u3d` fait l'inverse — un PDF portant le modèle, sa vue, et **l'affiche
+  rendue par notre propre moteur**, si bien que la page montre l'objet même à
+  l'impression ou dans un lecteur qui ignore la 3D.
+- Le **PRC** (ISO 14739) est reconnu et annoncé comme non lu, plutôt que
+  deviné. Le raffinement progressif d'un maillage U3D, les textures et les
+  animations ne sont pas lus non plus.
+
 ## 0.17.0 — 20 septembre 2026
 
 ### Ouvrir une image, et les scans TIFF

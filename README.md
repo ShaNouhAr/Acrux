@@ -203,6 +203,10 @@ incrémentale, `/ByteRange` calculé après écriture sans décaler un octet ;
 `media` liste les **vidéos et les sons** du document (`/Screen`, `/RichMedia`, `/Movie`, `/Sound`)
 avec leur rectangle, leur type et leur taille, et `--extract <dossier>` en sort les fichiers
 incorporés — un `/Sound`, qui ne contient que des échantillons bruts, ressort en WAV ;
+`3d` liste les **modèles 3D** (annotations `/3D`) avec leur format, leur rectangle, leur vue par
+défaut et la géométrie lue — nombre d'objets, de sommets et de triangles —, et `--extract <dossier>`
+en sort les fichiers U3D tels quels ; `create --3d <modele.u3d>` fait le chemin inverse, un PDF
+portant le modèle, sa vue et l'affiche rendue par notre moteur 3D ;
 `objects` liste les **objets dessinés** par une page (images, tracés, blocs de texte, dégradés)
 avec leur boîte, et `edit-object` les modifie : `--move dx,dy`, `--scale sx[,sy]` (autour du
 centre), `--rotate deg`, `--place x0,y0,x1,y1`, `--crop x0,y0,x1,y1`, `--order
@@ -263,6 +267,9 @@ dans la barre d'outils et « page iii (3 / 240) » dans la barre d'état, et sai
 | `Ctrl+C`, `Ctrl+A` | copier, tout sélectionner |
 | `Ctrl+F` | rechercher (`Entrée` / `Maj+Entrée` : occurrence suivante / précédente) |
 | `Ctrl+H` | rechercher et remplacer (`Tab` : d'un champ à l'autre, `Entrée` : remplacer, ou « Tout remplacer ») |
+
+Un **modèle 3D** (annotation `/3D` au format U3D) s'affiche sur la page ; un clic l'active, on le
+tourne en glissant, la molette s'en approche, `Échap` le referme.
 
 Ouvrir une **image** (PNG, JPEG, BMP, GIF, TIFF) la convertit en PDF : un TIFF de scanner donne
 une page par feuille, et `Ctrl+S` demande où ranger le document obtenu.
