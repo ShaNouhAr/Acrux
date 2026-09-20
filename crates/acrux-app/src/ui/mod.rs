@@ -5,6 +5,7 @@
 //! | Module    | Rôle                                                  |
 //! |-----------|-------------------------------------------------------|
 //! | `anim`    | valeurs animées et horloge : panneaux, fondus, défilement |
+//! | `controls` | contrôles composés : creux, segments, pastilles     |
 //! | `cursors` | pointeurs dessinés : texte ajouté, surligneur, note… |
 //! | `dialog`  | fenêtres de dialogue dessinées : question, boutons    |
 //! | `editpdf` | mode « Modifier le PDF » : saisie et barre du mode    |
@@ -29,6 +30,7 @@
 //! À venir : menus, info-bulles détaillées.
 
 pub mod anim;
+pub mod controls;
 pub mod cursors;
 pub mod dialog;
 pub mod editpdf;

@@ -7010,6 +7010,9 @@ impl App for Viewer {
                 if let Some(mode) = &mut self.edit {
                     hover_changed |= mode.bar.mouse_move(x, y);
                 }
+                if self.annot_tool.is_some() {
+                    hover_changed |= self.mode_bar.mouse_move(x, y);
+                }
                 if hover_changed {
                     self.update_tip(window);
                 }
@@ -7233,10 +7236,24 @@ impl App for Viewer {
                     + self.tabs_height() as i32
                     + self.edit_bar_height() as i32;
                 let (title, hint) = tool.describe();
+                let icon = match tool {
+                    AnnotTool::Highlight => crate::ui::icons::Icon::Highlight,
+                    AnnotTool::Note => crate::ui::icons::Icon::Note,
+                    AnnotTool::Redact => crate::ui::icons::Icon::Redact,
+                };
                 let (theme, dpi) = (self.theme, self.dpi_scale as f32);
                 if let Some(text) = self.text.as_mut() {
-                    self.mode_bar
-                        .paint(frame, text, &theme, dpi, y, title, hint);
+                    self.mode_bar.paint(
+                        frame,
+                        text,
+                        &mut self.raster,
+                        &theme,
+                        dpi,
+                        y,
+                        icon,
+                        title,
+                        hint,
+                    );
                 }
             }
             self.paint_status(frame);

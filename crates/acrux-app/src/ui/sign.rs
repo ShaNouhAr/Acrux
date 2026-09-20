@@ -39,9 +39,10 @@ use acrux_features::fillsign::marks::Mark;
 use acrux_graphics::{FillRule, Rasterizer};
 
 use crate::platform::{Frame, Key};
+use crate::ui::controls::{self, Segment, SegmentItem, SwatchState};
 use crate::ui::input::{InputAction, TextInput};
 use crate::ui::lang::tr;
-use crate::ui::paint::{round_rect, round_rect_outline, shadow, veil};
+use crate::ui::paint::{button, round_rect, round_rect_outline, shadow, veil, ButtonLook};
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
 
@@ -558,42 +559,70 @@ impl Capture {
             );
         }
 
-        // Boutons du bas.
-        let bh = (30.0 * dpi) as i32;
+        // Boutons du bas : les mêmes que partout.
+        let bh = (32.0 * dpi) as i32;
         let mut bx = x + width - pad;
-        for (label, button) in [
+        for (label, action) in [
             (tr("Appliquer"), Button::Apply),
             (tr("Annuler"), Button::Cancel),
         ] {
             let w = (text.measure(size, label) + 28.0 * dpi) as i32;
             bx -= w;
-            let strong = button == Button::Apply;
-            let (r, g, b) = if strong { theme.accent } else { theme.hover };
-            round_rect(frame, bx, bottom, w, bh, 9.0 * dpi, (r, g, b));
+            let ink = button(
+                frame,
+                bx,
+                bottom,
+                w,
+                bh,
+                dpi,
+                theme,
+                ButtonLook {
+                    primary: action == Button::Apply,
+                    hovered: false,
+                    focused: false,
+                    disabled: false,
+                },
+            );
+            let lw = text.measure(size, label);
             text.draw(
                 frame,
-                (bx + (14.0 * dpi) as i32) as f32,
+                bx as f32 + (w as f32 - lw) / 2.0,
                 bottom as f32 + f32::midpoint(bh as f32, text.ascent(size)) - 1.0,
                 size,
                 label,
-                if strong { (255, 255, 255) } else { theme.text },
+                ink,
             );
-            self.buttons.push((bx, bottom, w, bh, button));
+            self.buttons.push((bx, bottom, w, bh, action));
             bx -= (8.0 * dpi) as i32;
         }
         let mut lx = x + pad;
-        let mut left_button = |label: &str, button: Button, this: &mut Self| {
+        let mut left_button = |label: &str, action: Button, this: &mut Self| {
             let w = (text.measure(size, label) + 28.0 * dpi) as i32;
-            round_rect(frame, lx, bottom, w, bh, 9.0 * dpi, theme.hover);
+            let ink = button(
+                frame,
+                lx,
+                bottom,
+                w,
+                bh,
+                dpi,
+                theme,
+                ButtonLook {
+                    primary: false,
+                    hovered: false,
+                    focused: false,
+                    disabled: false,
+                },
+            );
+            let lw = text.measure(size, label);
             text.draw(
                 frame,
-                (lx + (14.0 * dpi) as i32) as f32,
+                lx as f32 + (w as f32 - lw) / 2.0,
                 bottom as f32 + f32::midpoint(bh as f32, text.ascent(size)) - 1.0,
                 size,
                 label,
-                theme.text,
+                ink,
             );
-            this.buttons.push((lx, bottom, w, bh, button));
+            this.buttons.push((lx, bottom, w, bh, action));
             lx += w + (8.0 * dpi) as i32;
         };
         left_button(tr("Effacer"), Button::Clear, self);
@@ -613,92 +642,91 @@ impl Capture {
         y: i32,
         width: i32,
     ) {
-        let size = theme.font_size * dpi;
-        let h = (28.0 * dpi) as i32;
-        let baseline = y as f32 + f32::midpoint(h as f32, text.ascent(size)) - 1.0;
+        let h = (30.0 * dpi) as i32;
         let mut cx = x;
+        let swatch = (18.0 * dpi) as i32;
+        let ring = (3.0 * dpi) as i32;
+        cx += ring;
         for index in 0..INKS.len() {
-            let swatch = (18.0 * dpi) as i32;
-            let by = y + (h - swatch) / 2;
-            if self.ink == index {
-                frame.fill_rect(
-                    cx - (3.0 * dpi) as i32,
-                    by - (3.0 * dpi) as i32,
-                    swatch + (6.0 * dpi) as i32,
-                    swatch + (6.0 * dpi) as i32,
-                    theme.accent.0,
-                    theme.accent.1,
-                    theme.accent.2,
-                );
-            }
-            let (r, g, b) = ink_rgb(index);
-            frame.fill_rect(cx, by, swatch, swatch, r, g, b);
-            frame.fill_rect(cx, by, swatch, 1.max(dpi as i32), 0x8A, 0x8F, 0x99);
-            self.buttons.push((
-                cx - (3.0 * dpi) as i32,
-                y,
-                swatch + (6.0 * dpi) as i32,
-                h,
-                Button::Ink(index),
-            ));
-            cx += swatch + (10.0 * dpi) as i32;
-        }
-        cx += (8.0 * dpi) as i32;
-        for weight in Weight::all() {
-            let w = (28.0 * dpi) as i32;
-            let selected = self.weight == weight;
-            if selected {
-                frame.fill_rect(cx, y, w, h, theme.accent.0, theme.accent.1, theme.accent.2);
-            }
-            let thickness = match weight {
-                Weight::Thin => 1.0,
-                Weight::Medium => 2.5,
-                Weight::Thick => 5.0,
-            };
-            let th = ((thickness * f64::from(dpi)) as i32).max(1);
-            let color = if selected {
-                (255, 255, 255)
+            let state = if self.ink == index {
+                SwatchState::Chosen
             } else {
-                theme.text
+                SwatchState::Plain
             };
-            frame.fill_rect(
-                cx + (7.0 * dpi) as i32,
-                y + (h - th) / 2,
-                w - (14.0 * dpi) as i32,
-                th,
-                color.0,
-                color.1,
-                color.2,
-            );
-            self.buttons.push((cx, y, w, h, Button::Weight(weight)));
-            cx += w + (4.0 * dpi) as i32;
-        }
-        cx += (8.0 * dpi) as i32;
-        for nib in Nib::all() {
-            let label = tr(nib.label());
-            let w = (text.measure(size, label) + 18.0 * dpi) as i32;
-            if cx + w > x + width {
-                break;
-            }
-            let selected = self.nib == nib;
-            if selected {
-                frame.fill_rect(cx, y, w, h, theme.accent.0, theme.accent.1, theme.accent.2);
-            }
-            let color = if selected {
-                (255, 255, 255)
-            } else {
-                theme.text_dim
-            };
-            text.draw(
+            let rect = controls::swatch(
                 frame,
-                (cx + (9.0 * dpi) as i32) as f32,
-                baseline,
-                size,
-                label,
-                color,
+                cx,
+                y + (h - swatch) / 2,
+                swatch,
+                dpi,
+                ink_rgb(index),
+                state,
+                theme,
             );
-            self.buttons.push((cx, y, w, h, Button::Nib(nib)));
-            cx += w + (4.0 * dpi) as i32;
+            self.buttons
+                .push((rect.0, y, rect.2, h, Button::Ink(index)));
+            cx += swatch + (12.0 * dpi) as i32;
+        }
+        cx += (6.0 * dpi) as i32;
+        // Épaisseurs : trois traits, qu'on choisit en les voyant.
+        let draws: Vec<controls::BoxedDraw> = Weight::all()
+            .into_iter()
+            .map(|weight| {
+                let thickness = match weight {
+                    Weight::Thin => 1.0,
+                    Weight::Medium => 2.5,
+                    Weight::Thick => 5.0,
+                };
+                Box::new(
+                    move |frame: &mut Frame<'_>,
+                          (x, y, w, h): (i32, i32, i32, i32),
+                          ink: (u8, u8, u8)| {
+                        let th = ((thickness * f64::from(dpi)) as i32).max(1);
+                        let margin = (9.0 * dpi) as i32;
+                        frame.fill_rect(
+                            x + margin,
+                            y + (h - th) / 2,
+                            w - 2 * margin,
+                            th,
+                            ink.0,
+                            ink.1,
+                            ink.2,
+                        );
+                    },
+                ) as controls::BoxedDraw
+            })
+            .collect();
+        let weights: Vec<SegmentItem<'_>> = Weight::all()
+            .into_iter()
+            .enumerate()
+            .map(|(i, weight)| SegmentItem {
+                content: Segment::Custom {
+                    width: (40.0 * dpi) as i32,
+                    draw: &*draws[i],
+                },
+                on: self.weight == weight,
+                hovered: false,
+            })
+            .collect();
+        let (total, rects) = controls::segmented(frame, text, theme, dpi, cx, y, h, &weights);
+        for (weight, (rx, ry, rw, rh)) in Weight::all().into_iter().zip(rects) {
+            self.buttons.push((rx, ry, rw, rh, Button::Weight(weight)));
+        }
+        cx += total + (10.0 * dpi) as i32;
+        // Pointes.
+        let nibs: Vec<SegmentItem<'_>> = Nib::all()
+            .into_iter()
+            .map(|nib| SegmentItem {
+                content: Segment::Label(tr(nib.label())),
+                on: self.nib == nib,
+                hovered: false,
+            })
+            .collect();
+        if cx + controls::segmented_width(text, theme, dpi, h, &nibs) <= x + width {
+            let (_, rects) = controls::segmented(frame, text, theme, dpi, cx, y, h, &nibs);
+            for (nib, (rx, ry, rw, rh)) in Nib::all().into_iter().zip(rects) {
+                self.buttons.push((rx, ry, rw, rh, Button::Nib(nib)));
+            }
         }
     }
 

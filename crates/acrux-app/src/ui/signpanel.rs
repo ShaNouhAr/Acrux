@@ -27,8 +27,9 @@ use acrux_features::fillsign::marks::{outline_of, Mark};
 use acrux_graphics::Rasterizer;
 
 use crate::platform::Frame;
+use crate::ui::controls::{self, Segment, SegmentItem, SwatchState};
 use crate::ui::lang::tr;
-use crate::ui::paint::{round_rect, round_rect_outline};
+use crate::ui::paint::{button, round_rect, round_rect_outline, ButtonLook};
 use crate::ui::sign::{fill_outline, ink_rgb, Item, Saved, INKS};
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
@@ -259,26 +260,40 @@ impl SignPanel {
         }
         y += (4.0 * dpi) as i32;
         y = Self::paint_heading(frame, text, theme, size, pad, y, tr("Marques"));
-        let cell = (fw - 2 * pad) / MARKS.len() as i32;
-        let cell_h = (38.0 * dpi) as i32;
+        let cell_h = (36.0 * dpi) as i32;
+        let inset = (2.0 * dpi) as i32;
+        let cell = (fw - 2 * pad - 2 * inset) / MARKS.len() as i32;
+        controls::well(frame, pad, y, fw - 2 * pad, cell_h, 7.0 * dpi, theme);
         for (index, mark) in MARKS.iter().enumerate() {
-            let x = pad + cell * index as i32;
+            let x = pad + inset + cell * index as i32;
             let item = Item::Mark(*mark);
             let chosen = self.item == Some(item);
             let hovered = self.hover == Some(Action::Pick(item));
             if chosen || hovered {
-                let (r, g, b) = if chosen { theme.accent } else { theme.hover };
-                frame.fill_rect(x, y, cell - (4.0 * dpi) as i32, cell_h, r, g, b);
+                let face = if chosen {
+                    theme.accent
+                } else {
+                    theme.separator
+                };
+                round_rect(
+                    frame,
+                    x,
+                    y + inset,
+                    cell,
+                    cell_h - 2 * inset,
+                    6.0 * dpi,
+                    face,
+                );
             }
             let color = if chosen { (255, 255, 255) } else { theme.text };
             let outline = outline_of(*mark);
-            let glyph = f64::from(20.0 * dpi);
+            let glyph = f64::from(18.0 * dpi);
             let (bw, bh) = (
                 (outline.bbox.x1 - outline.bbox.x0).max(0.01),
                 (outline.bbox.y1 - outline.bbox.y0).max(0.01),
             );
             let scale = (glyph / bw).min(glyph / bh);
-            let cx = f64::from(x) + f64::from(cell - (4.0 * dpi) as i32) / 2.0 - bw * scale / 2.0;
+            let cx = f64::from(x) + f64::from(cell) / 2.0 - bw * scale / 2.0;
             let cy = f64::from(y) + f64::from(cell_h) / 2.0 + bh * scale / 2.0;
             let m = Matrix::new(
                 scale,
@@ -289,104 +304,97 @@ impl SignPanel {
                 cy + outline.bbox.y0 * scale,
             );
             fill_outline(frame, raster, &outline, &m, color);
-            self.hits
-                .push((x, y, cell - (4.0 * dpi) as i32, cell_h, Action::Pick(item)));
+            self.hits.push((x, y, cell, cell_h, Action::Pick(item)));
         }
         y += cell_h + (10.0 * dpi) as i32;
         // 3. L'encre, commune à tout ce qu'on pose.
         y = Self::paint_heading(frame, text, theme, size, pad, y, tr("Encre"));
-        let swatch = (22.0 * dpi) as i32;
+        let swatch = (20.0 * dpi) as i32;
+        let ring = (3.0 * dpi) as i32;
         for index in 0..INKS.len() {
-            let x = pad + (swatch + (10.0 * dpi) as i32) * index as i32;
-            if self.color == index {
-                frame.fill_rect(
-                    x - (3.0 * dpi) as i32,
-                    y - (3.0 * dpi) as i32,
-                    swatch + (6.0 * dpi) as i32,
-                    swatch + (6.0 * dpi) as i32,
-                    theme.accent.0,
-                    theme.accent.1,
-                    theme.accent.2,
-                );
-            }
-            let (r, g, b) = ink_rgb(index);
-            frame.fill_rect(x, y, swatch, swatch, r, g, b);
-            frame.fill_rect(x, y, swatch, 1.max(dpi as i32), 0x8A, 0x8F, 0x99);
-            self.hits.push((
-                x - (3.0 * dpi) as i32,
-                y - (3.0 * dpi) as i32,
-                swatch + (6.0 * dpi) as i32,
-                swatch + (6.0 * dpi) as i32,
-                Action::Ink(index),
-            ));
+            let x = pad + ring + (swatch + (12.0 * dpi) as i32) * index as i32;
+            let state = if self.color == index {
+                SwatchState::Chosen
+            } else if self.hover == Some(Action::Ink(index)) {
+                SwatchState::Hovered
+            } else {
+                SwatchState::Plain
+            };
+            let rect = controls::swatch(
+                frame,
+                x,
+                y + ring,
+                swatch,
+                dpi,
+                ink_rgb(index),
+                state,
+                theme,
+            );
+            self.hits
+                .push((rect.0, rect.1, rect.2, rect.3, Action::Ink(index)));
         }
+        let swatch = swatch + 2 * ring;
         y += swatch + (14.0 * dpi) as i32;
         // Épaisseurs : trois traits, qu'on choisit en les voyant.
-        let cell = (fw - 2 * pad) / 3;
-        let cell_h = (26.0 * dpi) as i32;
-        for (index, weight) in Weight::all().into_iter().enumerate() {
-            let x = pad + cell * index as i32;
-            let chosen = self.weight == weight;
-            let hovered = self.hover == Some(Action::Style(self.nib, weight));
-            if chosen || hovered {
-                let (r, g, b) = if chosen { theme.accent } else { theme.hover };
-                frame.fill_rect(x, y, cell - (4.0 * dpi) as i32, cell_h, r, g, b);
-            }
-            let thickness = match weight {
-                Weight::Thin => 1.0,
-                Weight::Medium => 2.5,
-                Weight::Thick => 5.0,
-            };
-            let th = ((thickness * f64::from(dpi)) as i32).max(1);
-            let color = if chosen { (255, 255, 255) } else { theme.text };
-            frame.fill_rect(
-                x + (8.0 * dpi) as i32,
-                y + (cell_h - th) / 2,
-                cell - (20.0 * dpi) as i32,
-                th,
-                color.0,
-                color.1,
-                color.2,
-            );
-            self.hits.push((
-                x,
-                y,
-                cell - (4.0 * dpi) as i32,
-                cell_h,
-                Action::Style(self.nib, weight),
-            ));
+        let cell_h = (30.0 * dpi) as i32;
+        let draws: Vec<controls::BoxedDraw> = Weight::all()
+            .into_iter()
+            .map(|weight| {
+                let thickness = match weight {
+                    Weight::Thin => 1.0,
+                    Weight::Medium => 2.5,
+                    Weight::Thick => 5.0,
+                };
+                Box::new(
+                    move |frame: &mut Frame<'_>,
+                          (x, y, w, h): (i32, i32, i32, i32),
+                          ink: (u8, u8, u8)| {
+                        let th = ((thickness * f64::from(dpi)) as i32).max(1);
+                        let margin = (10.0 * dpi) as i32;
+                        frame.fill_rect(
+                            x + margin,
+                            y + (h - th) / 2,
+                            w - 2 * margin,
+                            th,
+                            ink.0,
+                            ink.1,
+                            ink.2,
+                        );
+                    },
+                ) as controls::BoxedDraw
+            })
+            .collect();
+        let weights: Vec<SegmentItem<'_>> = Weight::all()
+            .into_iter()
+            .enumerate()
+            .map(|(i, weight)| SegmentItem {
+                content: Segment::Custom {
+                    width: (52.0 * dpi) as i32,
+                    draw: &*draws[i],
+                },
+                on: self.weight == weight,
+                hovered: self.hover == Some(Action::Style(self.nib, weight)),
+            })
+            .collect();
+        let (_, rects) = controls::segmented(frame, text, theme, dpi, pad, y, cell_h, &weights);
+        for (weight, (rx, ry, rw, rh)) in Weight::all().into_iter().zip(rects) {
+            self.hits
+                .push((rx, ry, rw, rh, Action::Style(self.nib, weight)));
         }
         y += cell_h + (8.0 * dpi) as i32;
-        for (index, nib) in Nib::all().into_iter().enumerate() {
-            let x = pad + cell * index as i32;
-            let chosen = self.nib == nib;
-            let hovered = self.hover == Some(Action::Style(nib, self.weight));
-            if chosen || hovered {
-                let (r, g, b) = if chosen { theme.accent } else { theme.hover };
-                frame.fill_rect(x, y, cell - (4.0 * dpi) as i32, cell_h, r, g, b);
-            }
-            let color = if chosen {
-                (255, 255, 255)
-            } else {
-                theme.text_dim
-            };
-            let label = tr(nib.label());
-            let w = text.measure(size, label);
-            text.draw(
-                frame,
-                x as f32 + (cell as f32 - (4.0 * dpi) - w) / 2.0,
-                y as f32 + f32::midpoint(cell_h as f32, text.ascent(size)) - 1.0,
-                size,
-                label,
-                color,
-            );
-            self.hits.push((
-                x,
-                y,
-                cell - (4.0 * dpi) as i32,
-                cell_h,
-                Action::Style(nib, self.weight),
-            ));
+        // Pointes.
+        let nibs: Vec<SegmentItem<'_>> = Nib::all()
+            .into_iter()
+            .map(|nib| SegmentItem {
+                content: Segment::Label(tr(nib.label())),
+                on: self.nib == nib,
+                hovered: self.hover == Some(Action::Style(nib, self.weight)),
+            })
+            .collect();
+        let (_, rects) = controls::segmented(frame, text, theme, dpi, pad, y, cell_h, &nibs);
+        for (nib, (rx, ry, rw, rh)) in Nib::all().into_iter().zip(rects) {
+            self.hits
+                .push((rx, ry, rw, rh, Action::Style(nib, self.weight)));
         }
         y += cell_h + (16.0 * dpi) as i32;
         y = self.paint_button(
@@ -442,17 +450,21 @@ impl SignPanel {
         let size = theme.font_size * dpi;
         let h = (32.0 * dpi) as i32;
         let hovered = self.hover.as_ref() == Some(action);
-        let (r, g, b) = match (strong, hovered) {
-            (true, false) => theme.accent,
-            (true, true) => (
-                theme.accent.0.saturating_add(18),
-                theme.accent.1.saturating_add(18),
-                theme.accent.2.saturating_add(10),
-            ),
-            (false, true) => theme.separator,
-            (false, false) => theme.hover,
-        };
-        round_rect(frame, x, y, width, h, 9.0 * dpi, (r, g, b));
+        let ink = button(
+            frame,
+            x,
+            y,
+            width,
+            h,
+            dpi,
+            theme,
+            ButtonLook {
+                primary: strong,
+                hovered,
+                focused: false,
+                disabled: false,
+            },
+        );
         let w = text.measure(size, label);
         text.draw(
             frame,
@@ -460,7 +472,7 @@ impl SignPanel {
             y as f32 + f32::midpoint(h as f32, text.ascent(size)) - 1.0,
             size,
             label,
-            if strong { (255, 255, 255) } else { theme.text },
+            ink,
         );
         self.hits.push((x, y, width, h, action.clone()));
         y + h + (8.0 * dpi) as i32

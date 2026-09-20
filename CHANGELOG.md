@@ -48,6 +48,23 @@ fini — vu de l'extérieur, sur des captures, et corrigé pièce par pièce.
   « Couleur ») ont laissé la place aux valeurs elles-mêmes, et l'interligne
   se dit par une icône ; le titre du mode s'efface quand un bloc est ouvert.
 
+### La barre des annotations et « Remplir et signer », au même dessin
+
+- **Des contrôles communs** (`ui::controls`) : creux arrondi, contrôle
+  segmenté, pastille de couleur. La barre « Modifier le PDF », la barre des
+  annotations, le panneau « Remplir et signer » et la fenêtre de capture d'une
+  signature les emploient tous — ils se ressemblent enfin.
+- **La barre d'un outil d'annotation** (surligner, note, biffure) a la même
+  hauteur que la barre « Modifier le PDF », une pastille d'accent qui porte
+  **l'icône** de l'outil et son nom, et « Terminer » en bouton principal, avec
+  son survol.
+- **Le panneau « Remplir et signer »** : les marques dans un creux, l'encre en
+  pastilles rondes cerclées d'accent, l'épaisseur et la pointe en contrôles
+  segmentés, les boutons « Créer une signature », « Créer un paraphe » et
+  « Terminer » en boutons communs.
+- **La fenêtre de capture d'une signature** : sa ligne d'encre suit les mêmes
+  contrôles, et ses quatre boutons sont ceux des autres fenêtres.
+
 ### Le harnais de test invisible sait faire Ctrl+lettre
 
 - Une fenêtre invisible ne voit pas le vrai clavier : `GetKeyState` y lit

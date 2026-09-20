@@ -26,6 +26,7 @@
 )]
 
 use crate::platform::Frame;
+use crate::ui::controls::{self, Segment, SegmentItem, SwatchState};
 use crate::ui::paint::round_rect;
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
@@ -526,40 +527,15 @@ impl EditBar {
                     (c[2] * 255.0) as u8,
                 );
                 let index = self.hits.len();
-                let ring = s(3.0);
-                if i == self.color {
-                    round_rect(
-                        frame,
-                        x - ring,
-                        sy - ring,
-                        swatch + 2 * ring,
-                        swatch + 2 * ring,
-                        (swatch + 2 * ring) as f32 / 2.0,
-                        theme.accent,
-                    );
-                    round_rect(
-                        frame,
-                        x - ring / 3,
-                        sy - ring / 3,
-                        swatch + 2 * (ring / 3),
-                        swatch + 2 * (ring / 3),
-                        (swatch + 2 * (ring / 3)) as f32 / 2.0,
-                        theme.bar,
-                    );
+                let state = if i == self.color {
+                    SwatchState::Chosen
                 } else if self.hover == Some(index) {
-                    round_rect(
-                        frame,
-                        x - ring,
-                        sy - ring,
-                        swatch + 2 * ring,
-                        swatch + 2 * ring,
-                        (swatch + 2 * ring) as f32 / 2.0,
-                        theme.separator,
-                    );
-                }
-                round_rect(frame, x, sy, swatch, swatch, swatch as f32 / 2.0, rgb);
-                self.hits
-                    .push((x - ring, top, swatch + 2 * ring, ctl, BarAction::Color(i)));
+                    SwatchState::Hovered
+                } else {
+                    SwatchState::Plain
+                };
+                let (hx, _, hw, _) = controls::swatch(frame, x, sy, swatch, dpi, rgb, state, theme);
+                self.hits.push((hx, top, hw, ctl, BarAction::Color(i)));
                 x += swatch + s(6.0);
             }
 
@@ -695,9 +671,9 @@ impl EditBar {
         }
     }
 
-    /// Un contrôle segmenté : des cases côte à côte dans un même creux, la
-    /// case allumée en couleur d'accent. Rend la largeur occupée, ou rien si
-    /// la place manque.
+    /// Un contrôle segmenté (voir [`controls::segmented`]), dont chaque case
+    /// devient une zone cliquable. Rend la largeur occupée, ou rien si la
+    /// place manque.
     #[allow(clippy::too_many_arguments)] // le cadre, la police, le thème, la géométrie et les cases
     fn segmented(
         &mut self,
@@ -708,58 +684,47 @@ impl EditBar {
         x: i32,
         items: &[(Content<'_>, bool, BarAction)],
     ) -> Option<i32> {
-        let s = |v: f32| (v * g.dpi).round() as i32;
-        let inset = s(2.0);
-        let widths: Vec<i32> = items
+        // Les dessins d'alignement doivent vivre le temps de l'appel.
+        let draws: Vec<controls::BoxedDraw> = items
             .iter()
-            .map(|(content, _, _)| match content {
-                Content::Label(label) => (text.measure(g.size, label) as i32 + s(18.0)).max(g.ctl),
-                Content::Align(_) => g.ctl,
+            .map(|(content, _, _)| {
+                let kind = match content {
+                    Content::Align(kind) => *kind,
+                    Content::Label(_) => 0,
+                };
+                let dpi = g.dpi;
+                Box::new(
+                    move |frame: &mut Frame<'_>,
+                          (x, y, w, h): (i32, i32, i32, i32),
+                          ink: (u8, u8, u8)| {
+                        align_icon(frame, x, y, w, h, dpi, kind, ink);
+                    },
+                ) as controls::BoxedDraw
             })
             .collect();
-        let total = widths.iter().sum::<i32>() + 2 * inset;
-        if x + total > g.limit {
+        let first = self.hits.len();
+        let segments: Vec<SegmentItem<'_>> = items
+            .iter()
+            .enumerate()
+            .map(|(i, (content, on, _))| SegmentItem {
+                content: match content {
+                    Content::Label(label) => Segment::Label(label),
+                    Content::Align(_) => Segment::Custom {
+                        width: g.ctl,
+                        draw: &*draws[i],
+                    },
+                },
+                on: *on,
+                hovered: self.hover == Some(first + i),
+            })
+            .collect();
+        if x + controls::segmented_width(text, theme, g.dpi, g.ctl, &segments) > g.limit {
             return None;
         }
-        well(frame, x, g.top, total, g.ctl, g.radius, theme);
-        let mut sx = x + inset;
-        for ((content, on, action), w) in items.iter().zip(&widths) {
-            let index = self.hits.len();
-            let hovered = self.hover == Some(index);
-            let (fill, ink) = if *on {
-                (Some(theme.accent), (255, 255, 255))
-            } else if hovered {
-                (Some(theme.separator), theme.text)
-            } else {
-                (None, theme.text)
-            };
-            if let Some(fill) = fill {
-                round_rect(
-                    frame,
-                    sx,
-                    g.top + inset,
-                    *w,
-                    g.ctl - 2 * inset,
-                    g.radius - g.dpi,
-                    fill,
-                );
-            }
-            match content {
-                Content::Label(label) => {
-                    let lw = text.measure(g.size, label);
-                    text.draw(
-                        frame,
-                        sx as f32 + (*w as f32 - lw) / 2.0,
-                        g.baseline,
-                        g.size,
-                        label,
-                        ink,
-                    );
-                }
-                Content::Align(kind) => align_icon(frame, sx, g.top, *w, g.ctl, g.dpi, *kind, ink),
-            }
-            self.hits.push((sx, g.top, *w, g.ctl, *action));
-            sx += w;
+        let (total, rects) =
+            controls::segmented(frame, text, theme, g.dpi, x, g.top, g.ctl, &segments);
+        for ((_, _, action), (rx, ry, rw, rh)) in items.iter().zip(rects) {
+            self.hits.push((rx, ry, rw, rh, *action));
         }
         Some(total)
     }
@@ -790,7 +755,7 @@ impl EditBar {
             text.draw(frame, x as f32, g.baseline, g.size, label, theme.text_dim);
         }
         let x = x + label_w;
-        well(frame, x, g.top, total, g.ctl, g.radius, theme);
+        controls::well(frame, x, g.top, total, g.ctl, g.radius, theme);
         let inset = s(2.0);
         for (i, (glyph, action)) in [("\u{2212}", minus), ("+", plus)].into_iter().enumerate() {
             let bx = if i == 0 { x } else { x + g.ctl + value_w };
@@ -849,13 +814,6 @@ enum Content<'a> {
     Label(&'a str),
     /// L'icône d'un alignement (rang dans [`ALIGNMENTS`]).
     Align(usize),
-}
-
-/// Le creux dans lequel un groupe de contrôles est posé : un peu plus sombre
-/// que la barre, aux coins arrondis.
-#[allow(clippy::too_many_arguments)] // un rectangle, un rayon, un thème
-fn well(frame: &mut Frame<'_>, x: i32, y: i32, w: i32, h: i32, radius: f32, theme: &Theme) {
-    crate::ui::paint::round_rect_alpha(frame, x, y, w, h, radius, theme.hover, 0.7);
 }
 
 /// L'icône de l'interligne : trois lignes de texte et une flèche double qui
