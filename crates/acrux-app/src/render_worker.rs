@@ -143,6 +143,15 @@ pub enum EditOp {
         /// Texte à écrire.
         text: String,
     },
+    /// Déplacer ou redimensionner un élément de « remplir et signer ».
+    PlacedRect {
+        /// Indice de page.
+        page: usize,
+        /// Rang de l'annotation dans la page.
+        index: usize,
+        /// Nouveau rectangle, en coordonnées de page.
+        rect: acrux_core::Rect,
+    },
     /// Donner une valeur à un champ de formulaire (apparences régénérées).
     SetField {
         /// Nom qualifié du champ.
@@ -239,6 +248,9 @@ impl EditOp {
             .map(|_| ()),
             EditOp::Detach { name } => acrux_features::attach::remove_attachment(doc, name),
             EditOp::SetField { name, value } => set_field_value(doc, name, value.clone()),
+            EditOp::PlacedRect { page, index, rect } => {
+                acrux_features::fillsign::set_rect(doc, *page, *index, *rect)
+            }
             EditOp::Paragraph {
                 page,
                 frame,

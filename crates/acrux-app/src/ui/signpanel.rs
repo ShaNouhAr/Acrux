@@ -235,7 +235,21 @@ impl SignPanel {
                 y += (6.0 * dpi) as i32;
             }
         }
-        // 2. Ce qu'on ajoute soi-même.
+        // 2. Choisir et ajuster ce qui est déjà posé.
+        y = Self::paint_heading(frame, text, theme, size, pad, y, tr("Ajuster"));
+        y = self.paint_row(
+            frame,
+            text,
+            theme,
+            dpi,
+            pad,
+            y,
+            fw,
+            Item::Move,
+            tr("Choisir un élément posé, le déplacer, le redimensionner"),
+        );
+        y += (4.0 * dpi) as i32;
+        // 3. Ce qu'on ajoute soi-même.
         y = Self::paint_heading(frame, text, theme, size, pad, y, tr("Ajouter"));
         for (item, hint) in [
             (Item::Text, tr("Cliquez sur la page et tapez")),

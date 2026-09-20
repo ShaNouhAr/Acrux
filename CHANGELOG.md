@@ -7,6 +7,22 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
+## 0.14.0 — 20 septembre 2026
+
+### Ce qu'on pose devient un objet
+
+- **Une signature posée se sélectionne, se déplace et se redimensionne** :
+  huit poignées, comme pour un bloc de texte. C'est le rectangle de
+  l'annotation qui change, et son dessin s'y remet à l'échelle — donc une
+  signature agrandie reste nette.
+- **L'outil revient au déplacement après chaque pose**, comme dans Acrobat :
+  le panneau a désormais une entrée **« Déplacer »**, qui s'allume toute
+  seule une fois l'élément posé, et l'élément en question est déjà choisi.
+  Plus de pose en rafale involontaire.
+- **On peut aussi glisser une signature** depuis le panneau jusqu'à l'endroit
+  voulu, au lieu de la choisir puis de cliquer.
+- En mode déplacement, **un clic sur un élément déjà posé le reprend**.
+
 ## 0.13.0 — 20 septembre 2026
 
 ### Paramètres

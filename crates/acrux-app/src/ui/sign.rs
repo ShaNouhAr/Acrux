@@ -58,6 +58,10 @@ pub enum Item {
     Mark(Mark),
     /// Le stylo : on dessine directement sur la page.
     Draw,
+    /// Déplacer : on choisit et l'on ajuste ce qui est déjà posé, au lieu
+    /// d'en poser un de plus. C'est l'état où l'outil revient après chaque
+    /// pose, comme dans Acrobat.
+    Move,
 }
 
 impl Item {
@@ -74,6 +78,7 @@ impl Item {
             Item::Mark(Mark::Line) => "Trait",
             Item::Mark(Mark::Dot) => "Point",
             Item::Draw => "Dessiner",
+            Item::Move => "Déplacer",
         }
     }
 
@@ -86,8 +91,8 @@ impl Item {
             Item::Text => (140.0, 15.0),
             Item::Mark(Mark::Line) => (90.0, 16.0),
             Item::Mark(_) => (18.0, 18.0),
-            // Le stylo n'a pas de taille : c'est le geste qui la donne.
-            Item::Draw => (0.0, 0.0),
+            // Ni le stylo ni le déplacement ne posent quoi que ce soit.
+            Item::Draw | Item::Move => (0.0, 0.0),
         }
     }
 }

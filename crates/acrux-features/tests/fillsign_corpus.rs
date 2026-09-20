@@ -598,3 +598,39 @@ fn le_detourage_ne_garde_que_lencre() {
          {changed_by_cut} contre {changed_by_opaque}"
     );
 }
+
+#[test]
+fn un_element_pose_se_deplace_et_se_redimensionne() {
+    // Ce qu'on vient de poser doit rester manipulable : c'est une annotation,
+    // et son rectangle commande l'échelle de son apparence.
+    let path = corpus_files().into_iter().next().expect("corpus vide");
+    let doc = Document::load(&path).expect("chargement");
+    fillsign::place(&doc, &sign_options(0)).expect("pose");
+    let placed = fillsign::list(&doc).expect("inventaire");
+    let first = placed.first().expect("un élément posé").clone();
+    let cible = Rect::new(
+        first.rect.x0 + 40.0,
+        first.rect.y0 - 25.0,
+        first.rect.x0 + 40.0 + first.rect.width() * 1.5,
+        first.rect.y0 - 25.0 + first.rect.height() * 1.5,
+    );
+    fillsign::set_rect(&doc, first.page, first.index, cible).expect("déplacement");
+    let apres = fillsign::list(&doc).expect("inventaire");
+    let bouge = apres
+        .iter()
+        .find(|p| p.index == first.index)
+        .expect("l'élément est toujours là");
+    assert!((bouge.rect.x0 - cible.x0).abs() < 0.01, "{:?}", bouge.rect);
+    assert!(
+        (bouge.rect.width() - first.rect.width() * 1.5).abs() < 0.01,
+        "{:?}",
+        bouge.rect
+    );
+    // Et le fichier se relit.
+    let bytes = doc.save_full().expect("enregistrement");
+    let relu = Document::from_bytes(bytes).expect("relecture");
+    assert_eq!(
+        fillsign::list(&relu).expect("inventaire").len(),
+        placed.len()
+    );
+}

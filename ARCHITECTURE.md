@@ -283,7 +283,9 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   pression, effilage, éventail dans les virages, contour en cubiques rempli en règle non nulle),
   **tapée** (police manuscrite du système incorporée), **importée** (`cutout` : fond de papier
   retiré par estimation **locale** de l'éclairage), plus du texte libre et cinq marques (`marks`).
-  Chaque élément est une annotation avec son apparence ; `flatten` les fond dans les pages.
+  Chaque élément est une annotation avec son apparence ; `flatten` les fond dans les pages, et
+  `set_rect` la déplace ou la redimensionne — seul le rectangle change, le lecteur remettant
+  l'apparence à son échelle (§12.5.5), ce qui évite toute perte de qualité.
   La plume a trois **pointes** (`Nib` : stylo, plume, feutre) et trois **épaisseurs** (`Weight`).
   Deux façons de la proportionner, et elles ne se confondent pas : `Pen::styled` met le trait à
   l'échelle du dessin (une signature garde son allure qu'on la trace dans une fenêtre de 700 pixels

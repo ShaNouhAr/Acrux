@@ -284,6 +284,54 @@ pub fn remove(doc: &Document, page_index: usize, index: usize) -> Result<()> {
     crate::annotations::remove_annotation(doc, page, index)
 }
 
+/// Déplace ou redimensionne un élément déjà posé.
+///
+/// Seul le rectangle de l'annotation change : son apparence est un XObject de
+/// formulaire, que le lecteur remet **à l'échelle du rectangle** (§12.5.5).
+/// Une signature agrandie se redessine donc nette, sans perte, et un
+/// déplacement ne touche à rien d'autre.
+///
+/// # Errors
+/// Page ou annotation inexistante, ou annotation qui ne vient pas de
+/// « remplir et signer ».
+pub fn set_rect(doc: &Document, page_index: usize, index: usize, rect: Rect) -> Result<()> {
+    let pages = collect_pages(doc)?;
+    let page = pages
+        .get(page_index)
+        .ok_or_else(|| Error::Corrupt(format!("page {} inexistante", page_index + 1)))?;
+    let list = annots(doc, page);
+    let target = list
+        .get(index)
+        .ok_or_else(|| Error::Corrupt(format!("annotation {} inexistante", index + 1)))?;
+    let mut dict =
+        resolve_dict(doc, target).ok_or_else(|| Error::Corrupt("annotation illisible".into()))?;
+    if tag_of(doc, &dict).is_none() {
+        return Err(Error::Corrupt(
+            "cette annotation ne vient pas de « remplir et signer »".into(),
+        ));
+    }
+    let (x0, y0) = (rect.x0.min(rect.x1), rect.y0.min(rect.y1));
+    let (x1, y1) = (rect.x0.max(rect.x1), rect.y0.max(rect.y1));
+    dict.insert(
+        Name::new("Rect"),
+        Object::Array(vec![
+            Object::Real(x0),
+            Object::Real(y0),
+            Object::Real(x1),
+            Object::Real(y1),
+        ]),
+    );
+    match target {
+        Object::Reference(r) => {
+            doc.set(*r, Object::Dict(dict));
+            Ok(())
+        }
+        _ => Err(Error::Unsupported(
+            "annotation écrite dans la page : non déplaçable".into(),
+        )),
+    }
+}
+
 /// Fond définitivement les éléments posés dans le contenu des pages.
 ///
 /// Après quoi ils ne se déplacent plus, ne se suppriment plus, et se voient

@@ -340,6 +340,21 @@ impl AnnotTool {
     }
 }
 
+/// Élément de « remplir et signer » sélectionné sur la page.
+#[derive(Debug, Clone)]
+struct PlacedSel {
+    /// Page.
+    page: usize,
+    /// Rang de l'annotation dans la page.
+    index: usize,
+    /// Rectangle occupé, en coordonnées de page.
+    rect: Rect,
+    /// Geste en cours : poignée saisie, point de départ, rectangle courant.
+    drag: Option<(Option<objects_ui::Handle>, Point, Rect)>,
+    /// Poignée survolée.
+    hover: Option<objects_ui::Handle>,
+}
+
 /// Un trait en train d'être tracé au stylo, sur une page.
 #[derive(Debug)]
 struct Inking {
@@ -677,6 +692,12 @@ pub struct Viewer {
     replacing: Option<usize>,
     /// Tracé au stylo en cours, en coordonnées de page.
     inking: Option<Inking>,
+    /// Élément posé sélectionné : on peut le déplacer et le redimensionner,
+    /// comme n'importe quel objet.
+    placed: Option<PlacedSel>,
+    /// Une signature est « prise » dans le panneau : la lâcher sur la page
+    /// la pose là. C'est l'autre geste attendu, à côté du choix puis du clic.
+    carrying: bool,
     /// Fenêtre de capture d'une signature, ouverte par-dessus tout.
     capture: Option<Capture>,
     /// Signature enregistrée, conservée entre deux sessions.
@@ -822,6 +843,8 @@ impl Viewer {
             tools_anim: Anim::new(0.0, 0.16),
             replacing: None,
             inking: None,
+            placed: None,
+            carrying: false,
             capture: None,
             signatures,
             initials,
@@ -4831,6 +4854,10 @@ impl Viewer {
         let Some((page, point)) = self.page_at(x, y) else {
             return false;
         };
+        if item == SignItem::Move {
+            // Le mode déplacement ne pose rien : le clic sert à choisir.
+            return false;
+        }
         if item == SignItem::Draw {
             // Le stylo ne pose rien : il commence un trait, que le
             // relâchement du bouton écrira.
@@ -4978,7 +5005,11 @@ impl Viewer {
         let Some(item) = self.sign_panel.as_ref().and_then(|p| p.item) else {
             return;
         };
-        if self.capture.is_some() || item == SignItem::Draw || item == SignItem::Text {
+        if self.capture.is_some()
+            || item == SignItem::Draw
+            || item == SignItem::Text
+            || item == SignItem::Move
+        {
             return;
         }
         let Some((mx, my)) = self.last_mouse else {
@@ -5007,7 +5038,7 @@ impl Viewer {
                     _ => None,
                 }
             }
-            SignItem::Draw | SignItem::Text => None,
+            SignItem::Draw | SignItem::Text | SignItem::Move => None,
         };
         // Le point cliqué est le centre : l'aperçu montre exactement la boîte
         // où l'élément ira.
@@ -5095,6 +5126,155 @@ impl Viewer {
         sign::fill_outline(frame, &mut self.raster, &outline, &matrix, rgb);
     }
 
+    /// Sélectionne le dernier élément posé sur une page.
+    ///
+    /// Après une pose, Acrobat revient au **déplacement** et laisse l'élément
+    /// choisi : on l'ajuste tout de suite, sans changer d'outil. C'est ce que
+    /// fait cette méthode, appelée à la fin de chaque pose.
+    fn select_last_placed(&mut self, page: usize) {
+        let found = self
+            .loaded
+            .as_ref()
+            .and_then(|l| acrux_features::fillsign::list(&l.doc).ok())
+            .and_then(|list| {
+                list.into_iter()
+                    .filter(|p| p.page == page)
+                    .max_by_key(|p| p.index)
+            });
+        if let Some(found) = found {
+            self.placed = Some(PlacedSel {
+                page: found.page,
+                index: found.index,
+                rect: found.rect,
+                drag: None,
+                hover: None,
+            });
+        }
+        // Retour au déplacement : l'outil ne repose pas la même chose au clic
+        // suivant.
+        if let Some(panel) = &mut self.sign_panel {
+            panel.item = Some(SignItem::Move);
+        }
+    }
+
+    /// Élément posé sous un point de la page, s'il y en a un.
+    fn placed_at(&self, page: usize, point: Point) -> Option<PlacedSel> {
+        let list = acrux_features::fillsign::list(&self.loaded.as_ref()?.doc).ok()?;
+        list.into_iter()
+            .filter(|p| p.page == page && p.rect.contains(point))
+            // Le plus petit d'abord : une marque posée sur une signature
+            // reste atteignable.
+            .min_by(|a, b| {
+                (a.rect.width() * a.rect.height()).total_cmp(&(b.rect.width() * b.rect.height()))
+            })
+            .map(|p| PlacedSel {
+                page: p.page,
+                index: p.index,
+                rect: p.rect,
+                drag: None,
+                hover: None,
+            })
+    }
+
+    /// Rectangle de l'élément sélectionné dans la vue.
+    fn placed_view_rect(&self) -> Option<objects_ui::ViewRect> {
+        let placed = self.placed.as_ref()?;
+        let rect = placed.drag.map_or(placed.rect, |(_, _, r)| r);
+        self.page_rect_to_view(placed.page, rect)
+    }
+
+    /// Clic sur l'élément sélectionné : poignée ou déplacement. Rend vrai
+    /// s'il l'a pris.
+    fn placed_mouse_down(&mut self, x: i32, y: i32) -> bool {
+        let Some((page, point)) = self.page_at(x, y) else {
+            return false;
+        };
+        let handle = self
+            .placed_view_rect()
+            .and_then(|v| objects_ui::handle_at(v, f64::from(x), f64::from(y), self.dpi_scale));
+        // Rien de sélectionné, ou clic à côté : on prend ce qui est dessous.
+        let inside = self
+            .placed
+            .as_ref()
+            .is_some_and(|p| p.page == page && (handle.is_some() || p.rect.contains(point)));
+        if !inside {
+            let Some(found) = self.placed_at(page, point) else {
+                return false;
+            };
+            self.placed = Some(found);
+        }
+        if let Some(placed) = &mut self.placed {
+            placed.drag = Some((handle, point, placed.rect));
+        }
+        true
+    }
+
+    /// Suit le geste sur l'élément sélectionné.
+    fn placed_mouse_move(&mut self, x: i32, y: i32, dragging: bool) -> bool {
+        let Some((_, point)) = self.page_at(x, y) else {
+            return false;
+        };
+        let hover = self
+            .placed_view_rect()
+            .and_then(|v| objects_ui::handle_at(v, f64::from(x), f64::from(y), self.dpi_scale));
+        let Some(placed) = &mut self.placed else {
+            return false;
+        };
+        if !dragging {
+            let changed = placed.hover != hover;
+            placed.hover = hover;
+            return changed;
+        }
+        let Some((handle, from, _)) = placed.drag else {
+            return false;
+        };
+        let (dx, dy) = (point.x - from.x, point.y - from.y);
+        let rect = match handle {
+            Some(h) => objects_ui::resized(placed.rect, h, dx, dy, false),
+            None => Rect::new(
+                placed.rect.x0 + dx,
+                placed.rect.y0 + dy,
+                placed.rect.x1 + dx,
+                placed.rect.y1 + dy,
+            ),
+        };
+        placed.drag = Some((handle, from, rect));
+        true
+    }
+
+    /// Fin du geste : le nouveau rectangle est écrit dans le document.
+    fn placed_mouse_up(&mut self) -> bool {
+        let Some(placed) = &mut self.placed else {
+            return false;
+        };
+        let Some((_, _, rect)) = placed.drag.take() else {
+            return false;
+        };
+        let moved = (rect.x0 - placed.rect.x0).abs() > 0.5
+            || (rect.y0 - placed.rect.y0).abs() > 0.5
+            || (rect.width() - placed.rect.width()).abs() > 0.5;
+        if !moved {
+            return false;
+        }
+        let (page, index) = (placed.page, placed.index);
+        placed.rect = rect;
+        self.apply_edit(EditOp::PlacedRect { page, index, rect });
+        true
+    }
+
+    /// Dessine l'élément sélectionné et ses poignées.
+    fn paint_placed(&mut self, frame: &mut Frame<'_>) {
+        let Some(placed) = self.placed.as_ref() else {
+            return;
+        };
+        let rect = placed.drag.map_or(placed.rect, |(_, _, r)| r);
+        let handle = placed.drag.and_then(|(h, _, _)| h).or(placed.hover);
+        let (theme, dpi) = (self.theme, self.dpi_scale as f32);
+        if let Some(view) = self.page_rect_to_view(placed.page, rect) {
+            objects_ui::paint_selection(frame, &theme, dpi, view, handle);
+        }
+    }
+
     /// Envoie la pose au fil de rendu.
     fn apply_fillsign(&mut self, page: usize, rect: Rect, item: acrux_features::fillsign::Item) {
         let label = item.kind().to_string();
@@ -5110,6 +5290,7 @@ impl Viewer {
             options: Box::new(options),
         });
         self.set_notice(format!("posé : {label} en page {}", page + 1));
+        self.select_last_placed(page);
     }
 
     /// Dessine le panneau de l'outil, à gauche.
@@ -5138,6 +5319,8 @@ impl Viewer {
         match action {
             SignAction::Pick(item) => self.pick_sign_item(*item),
             SignAction::Use(index, initials) => {
+                // Prise en main : si l'on relâche sur la page, on pose là.
+                self.carrying = true;
                 let item = if *initials {
                     SignItem::Initials
                 } else {
@@ -5184,6 +5367,7 @@ impl Viewer {
             }
             SignAction::Close => {
                 self.sign_panel = None;
+                self.placed = None;
                 self.wake_anim();
                 self.capture = None;
                 if self.edit_overlay() {
@@ -5914,6 +6098,9 @@ impl App for Viewer {
                 } else {
                     self.toolbar.blur();
                     let (x, y) = (x - self.view_left() as i32, y - top);
+                    // Un nouveau clic met fin à une prise en main restée
+                    // en l'air (relâchée hors de la page, par exemple).
+                    self.carrying = false;
                     if self.prompt.is_none() && self.showing_home() {
                         self.click_recent(x, y, window);
                     } else if self.prompt.is_none() && x >= 0 && y < self.view_height() as i32 {
@@ -5928,6 +6115,14 @@ impl App for Viewer {
                             self.open_media(&media, window);
                         } else if self.objects.is_some() {
                             self.objects_mouse_down(x, y, modifiers.shift);
+                            window.request_redraw();
+                        } else if self
+                            .sign_panel
+                            .as_ref()
+                            .is_some_and(|p| p.item.is_none_or(|i| i == SignItem::Move))
+                            && self.placed_mouse_down(x, y)
+                        {
+                            // Mode déplacement : on saisit ce qui est déjà posé.
                             window.request_redraw();
                         } else if self.place_sign(x, y, window) {
                             // L'outil a posé quelque chose : ni sélection, ni lien.
@@ -5978,6 +6173,18 @@ impl App for Viewer {
                     .as_mut()
                     .map_or(sign::Action::None, |c| c.mouse_move(x, y, dragging));
                 self.sign_action(action, window);
+            }
+            Event::MouseUp { x, y, .. } if self.carrying => {
+                self.carrying = false;
+                let (vx, vy) = (x - self.view_left() as i32, y - self.view_top() as i32);
+                if vx >= 0 && vy >= 0 && vy < self.view_height() as i32 {
+                    self.place_sign(vx, vy, window);
+                }
+                window.request_redraw();
+            }
+            Event::MouseUp { .. } if self.placed.as_ref().is_some_and(|p| p.drag.is_some()) => {
+                self.placed_mouse_up();
+                window.request_redraw();
             }
             Event::MouseUp { .. } if self.inking.is_some() => {
                 self.ink_finish();
@@ -6058,6 +6265,18 @@ impl App for Viewer {
                         window.request_redraw();
                     }
                     return;
+                }
+                if self.sign_panel.is_some()
+                    && self
+                        .placed
+                        .as_ref()
+                        .is_some_and(|p| p.drag.is_some() || !dragging)
+                    && self.placed_mouse_move(x, y, dragging)
+                {
+                    window.request_redraw();
+                    if dragging {
+                        return;
+                    }
                 }
                 if self.inking.is_some() && dragging {
                     self.ink_move(x, y);
@@ -6180,6 +6399,9 @@ impl App for Viewer {
             self.paint_objects(&mut view);
             self.paint_inking(&mut view);
             self.paint_sign_ghost(&mut view);
+            if self.sign_panel.is_some() {
+                self.paint_placed(&mut view);
+            }
             self.paint_media(&mut view);
             self.paint_field_focus(&mut view);
             self.paint_search(&mut view);
