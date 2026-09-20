@@ -7187,15 +7187,6 @@ impl App for Viewer {
             }
             window.request_redraw();
         }
-        // La liste des polices dessine ses noms quelques-uns par image.
-        if self.edit_bar_pending() {
-            if self.waker.is_none() {
-                self.waker = Some(window.waker());
-            }
-            if let Some(w) = &self.waker {
-                w.wake();
-            }
-        }
         if self.step_search() {
             if self.waker.is_none() {
                 self.waker = Some(window.waker());

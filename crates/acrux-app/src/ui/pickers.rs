@@ -1261,6 +1261,16 @@ mod tests {
             .starts_with(&needle.to_lowercase()));
     }
 
+    /// Toutes les polices de la machine se laissent dessiner : aucune ne fait
+    /// tomber la liste, quelle que soit la bizarrerie de son fichier.
+    #[test]
+    fn toutes_les_polices_du_systeme_se_dessinent() {
+        let mut raster = Rasterizer::new();
+        for family in sysfonts::families() {
+            let _ = draw_name(family, &mut raster, 22.0, 440, 51);
+        }
+    }
+
     /// Un clic hors de la carte referme sans rien choisir.
     #[test]
     fn un_clic_dehors_referme() {

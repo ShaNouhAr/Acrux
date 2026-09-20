@@ -451,6 +451,16 @@ impl Viewer {
             mode.bar.active_size = active_size;
             mode.bar
                 .paint(frame, text, &mut self.raster, &theme, dpi, y);
+            // La liste des polices dessine ses noms quelques-uns par image :
+            // s'il en reste, **un** réveil par peinture en demande une autre.
+            // Surtout pas depuis la boucle d'événements : chaque réveil en
+            // posterait un nouveau, la file ne se viderait jamais, et Windows
+            // — qui ne repeint que file vide — figerait la fenêtre.
+            if mode.bar.pending() {
+                if let Some(w) = &self.waker {
+                    w.wake();
+                }
+            }
         }
     }
 
@@ -459,6 +469,9 @@ impl Viewer {
         let Some(action) = self.edit.as_mut().and_then(|e| e.bar.mouse_down(x, y)) else {
             return false;
         };
+        if self.waker.is_none() {
+            self.waker = Some(window.waker());
+        }
         self.edit_bar_do(action, window);
         true
     }
@@ -513,11 +526,6 @@ impl Viewer {
         if let Some(mode) = &mut self.edit {
             mode.bar.mouse_up();
         }
-    }
-
-    /// Vrai si la liste des polices a encore des noms à dessiner.
-    pub(super) fn edit_bar_pending(&self) -> bool {
-        self.edit.as_ref().is_some_and(|e| e.bar.pending())
     }
 
     /// Exécute ce que la barre du mode demande.

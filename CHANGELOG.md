@@ -7,6 +7,19 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
+## 0.19.1 — 20 septembre 2026
+
+### Correction
+
+- **La liste des polices figeait la fenêtre.** Les noms se dessinent dans leur
+  police quelques-uns par image ; pour demander l'image suivante, la boucle
+  d'événements postait un réveil… à chaque réveil. La file de messages ne se
+  vidait donc jamais, et Windows — qui ne repeint qu'une file vide — ne
+  redessinait plus rien : six noms affichés, puis plus aucune réaction. Le
+  réveil part maintenant de la peinture elle-même, un seul par image. Le mode
+  invisible des tests, qui peint de façon synchrone, ne pouvait pas le voir :
+  la correction a été vérifiée sur la vraie fenêtre.
+
 ## 0.19.0 — 20 septembre 2026
 
 ### Toutes les polices du système, comme dans un traitement de texte
