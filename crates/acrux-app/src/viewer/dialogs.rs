@@ -33,6 +33,8 @@ pub(super) enum Then {
     Updates,
     /// Document déjà protégé : changer le mot de passe, ou le retirer.
     Protection,
+    /// Vider la liste des documents récents.
+    ClearRecent,
 }
 
 /// Forme de la question, qui dit ce que veut chaque bouton.
@@ -295,6 +297,7 @@ impl Viewer {
                 self.apply_edit(EditOp::Delete { pages: vec![page] });
             }
             Then::InstallUpdate(url, version) => self.install_update_now(&url, &version),
+            Then::ClearRecent => self.clear_recent(),
         }
     }
 

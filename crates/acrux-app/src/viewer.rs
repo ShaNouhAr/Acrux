@@ -688,6 +688,8 @@ pub struct Viewer {
     welcome_thumbs: HashMap<PathBuf, (Option<Bitmap>, Instant)>,
     /// Zone du bouton « Ouvrir un document ».
     welcome_open: Option<(i32, i32, i32, i32)>,
+    /// Zone du lien « Vider l'historique » de l'écran d'accueil.
+    welcome_clear: Option<(i32, i32, i32, i32)>,
     /// L'accueil est affiché par-dessus le document ouvert, qui reste dans
     /// son onglet : c'est un retour à la base, pas une fermeture.
     home: bool,
@@ -1025,6 +1027,7 @@ impl Viewer {
             sign_panel: None,
             welcome_thumbs: HashMap::new(),
             welcome_open: None,
+            welcome_clear: None,
             home: false,
             welcome_scroll: 0.0,
             welcome_height: 0.0,
@@ -1439,6 +1442,7 @@ impl Viewer {
         let Some(text) = &mut self.text else {
             self.recent_hits.clear();
             self.welcome_open = None;
+            self.welcome_clear = None;
             self.welcome_thumbs = thumbs;
             return;
         };
@@ -1500,6 +1504,7 @@ impl Viewer {
         );
         y += bh + (34.0 * dpi) as i32;
         if recent.is_empty() {
+            self.welcome_clear = None;
             self.recent_hits = hits;
             self.welcome_open = open_hit;
             self.welcome_thumbs = thumbs;
@@ -1513,6 +1518,35 @@ impl Viewer {
             lang::tr("Documents récents"),
             t.text_dim,
         );
+        // Vider l'historique : un lien discret au bout de l'intertitre, qui
+        // ne prend sa couleur qu'au survol — on ne l'actionne pas tous les
+        // jours, il n'a pas à concurrencer « Ouvrir un document ».
+        {
+            let heading_w = text.measure(size, lang::tr("Documents récents")) as i32;
+            let label = lang::tr("Vider l'historique");
+            let lw = text.measure(size, label) as i32;
+            let lx = x + heading_w + (22.0 * dpi) as i32;
+            let (hy, hh) = (
+                y - (6.0 * dpi) as i32,
+                (size * 1.2) as i32 + (12.0 * dpi) as i32,
+            );
+            let hx = lx - (10.0 * dpi) as i32;
+            let hw = lw + (20.0 * dpi) as i32;
+            let over =
+                hover.is_some_and(|(mx, my)| mx >= hx && mx < hx + hw && my >= hy && my < hy + hh);
+            if over {
+                round_rect(frame, hx, hy, hw, hh, 7.0 * dpi, t.hover);
+            }
+            text.draw(
+                frame,
+                lx as f32,
+                y as f32 + text.ascent(size),
+                size,
+                label,
+                if over { t.text } else { t.accent },
+            );
+            self.welcome_clear = Some((hx, hy, hw, hh));
+        }
         y += (size * 2.0) as i32;
         // Une grille de cartes : la vignette dit de quel document il s'agit
         // bien plus vite que son nom de fichier.
@@ -1852,6 +1886,18 @@ impl Viewer {
         }
     }
 
+    /// Vide la liste des documents récents — la liste seulement : les
+    /// fichiers ne sont pas touchés.
+    pub(super) fn clear_recent(&mut self) {
+        self.prefs.recent.clear();
+        self.prefs.save();
+        self.welcome_thumbs.clear();
+        self.recent_hits.clear();
+        self.welcome_clear = None;
+        self.welcome_scroll = 0.0;
+        self.set_notice(lang::tr("Historique vidé").to_string());
+    }
+
     /// Ouvre le document récent situé sous `(x, y)`, le cas échéant.
     fn click_recent(&mut self, x: i32, y: i32, window: &mut dyn WindowHandle) -> bool {
         if self
@@ -1861,6 +1907,21 @@ impl Viewer {
             if let Some(path) = window.open_file_dialog() {
                 self.open(&path, window);
             }
+            return true;
+        }
+        if self
+            .welcome_clear
+            .is_some_and(|(bx, by, bw, bh)| x >= bx && x < bx + bw && y >= by && y < by + bh)
+        {
+            // On demande avant : la liste ne se retrouve pas.
+            self.confirm(
+                lang::tr("Vider l'historique"),
+                lang::tr(
+                    "La liste des documents récents sera effacée. Les fichiers eux-mêmes ne sont pas touchés.",
+                ),
+                lang::tr("Vider"),
+                Then::ClearRecent,
+            );
             return true;
         }
         let Some(index) = self

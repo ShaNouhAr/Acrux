@@ -157,6 +157,13 @@ static TABLE: &[(&str, &str)] = &[
     ("Dessiner", "Draw"),
     ("Document", "Document"),
     ("Documents récents", "Recent documents"),
+    ("Vider l'historique", "Clear history"),
+    ("Vider", "Clear"),
+    (
+        "La liste des documents récents sera effacée. Les fichiers eux-mêmes ne sont pas touchés.",
+        "The list of recent documents will be cleared. The files themselves are not touched.",
+    ),
+    ("Historique vidé", "History cleared"),
     ("Dupliquer la page", "Duplicate page"),
     ("Déplacer", "Move"),
     ("Effacer", "Clear"),
