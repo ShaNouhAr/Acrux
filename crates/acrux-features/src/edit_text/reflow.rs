@@ -44,7 +44,8 @@ use super::{
     encode, fmt, out_str, restore_matrices, rewrite_show_op, scan, write_matrix, write_tj, Cut,
     GlyphIndex, Item, Replacement,
 };
-use crate::text::{extract_page_text, Alignment, Line, PageText, Paragraph};
+use crate::text::{extract_page_text, Alignment, Glyph, Line, PageText, Paragraph};
+use super::runs::{Run, Styles};
 use std::fmt::Write as _;
 
 /// Options de recomposition.
@@ -95,6 +96,47 @@ pub struct ParagraphFrame {
     pub standard: Option<String>,
     /// Couleur d'un bloc **nouveau** ; un paragraphe existant garde la sienne.
     pub color: [f64; 3],
+    /// Police imposée au bloc entier : famille, graisse, italique.
+    ///
+    /// Vide, le bloc garde ses polices d'origine — c'est le cas ordinaire.
+    /// Renseignée, une police standard est ajoutée au document et tout le
+    /// bloc est réécrit avec elle : c'est « changer la police » d'Acrobat.
+    pub face: Option<FaceChoice>,
+    /// Inclinaison du bloc, en radians (0 pour un texte droit).
+    ///
+    /// Un filigrane est posé en biais ; le recomposer horizontalement le
+    /// redresserait. Les lignes se mettent donc en page dans le repère du
+    /// bloc, puis se posent tournées — et `x0`/`baseline` sont alors
+    /// l'**origine** du texte, non le coin de sa boîte.
+    pub rotation: f64,
+}
+
+/// Police choisie pour un bloc.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FaceChoice {
+    /// Famille (« Helvetica », « Times New Roman »…) ; vide = celle du bloc.
+    pub family: Option<String>,
+    /// Gras.
+    pub bold: bool,
+    /// Italique.
+    pub italic: bool,
+}
+
+impl FaceChoice {
+    /// Nom de famille à demander à la police standard, graisse comprise.
+    ///
+    /// C'est par le **nom** que passe le choix : « Times New Roman Bold »
+    /// désigne la police standard grasse la plus proche.
+    #[must_use]
+    pub fn named(&self, fallback: &str) -> String {
+        let family = self.family.clone().unwrap_or_else(|| fallback.to_string());
+        match (self.bold, self.italic) {
+            (true, true) => format!("{family} Bold Italic"),
+            (true, false) => format!("{family} Bold"),
+            (false, true) => format!("{family} Italic"),
+            (false, false) => family,
+        }
+    }
 }
 
 /// Position d'une frontière de caractère.
@@ -292,6 +334,20 @@ pub struct OpenedParagraph {
     pub drawn: String,
     /// Positions des frontières, sur le dessin d'origine.
     pub caret: CaretMap,
+    /// Style de chaque caractère : police, corps, couleur.
+    ///
+    /// Une ligne mêle souvent plusieurs styles ; les relever permet de les
+    /// **rendre** à l'écriture, au lieu d'aplatir le bloc d'une seule police.
+    pub styles: Styles,
+}
+
+impl OpenedParagraph {
+    /// Le texte auquel se rapportent les styles, tel qu'il était à
+    /// l'ouverture.
+    #[must_use]
+    pub fn text_at_open(&self) -> String {
+        self.text.clone()
+    }
 }
 
 /// Recompose le paragraphe `paragraph_index` de la page avec `new_text`.
@@ -319,7 +375,7 @@ pub fn reflow_paragraph(
         ))
     })?;
     let unit = unit_of_paragraph(para, &text);
-    write_paragraph(doc, page, &text, &unit, new_text, None, options).map(|_| ())
+    write_paragraph(doc, page, &text, &unit, new_text, None, options, None).map(|_| ())
 }
 
 /// Ouvre un bloc pour l'édition (indice dans [`text_units`]) : relève sa
@@ -363,14 +419,55 @@ pub fn open_unit(
     let target = Target::find(doc, page, text, unit)?;
     let size = target.size_text * target.scale;
     let crop = page.crop_box(doc);
-    let frame = frame_of(unit, text, size, target.font.clone(), &crop);
-    let (string, caret) = caret_from_glyphs(unit, text, size);
+    let slant = (target.rotation.abs() > 1e-4)
+        .then_some((target.rotation, target.trm.e, target.trm.f));
+    let frame = frame_of(unit, text, size, target.font.clone(), &crop, slant);
+    let (string, caret, sources) = caret_from_glyphs(unit, text, size);
+    let styles = styles_of(&target, &sources, size);
     Ok(OpenedParagraph {
         drawn: normalized(&glyph_text(unit, text)),
         frame,
         text: string,
         caret,
+        styles,
     })
+}
+
+/// Relève le style de chaque caractère : police, corps, couleur.
+///
+/// Le style se lit dans le **flux**, non dans l'extraction : c'est la
+/// ressource de police (`/F2`) et les octets de couleur qu'il faudra
+/// réémettre pour que le gras reste gras et le rouge rouge.
+fn styles_of(target: &Target, sources: &[Option<&Glyph>], base: f64) -> Styles {
+    let index = super::GlyphIndex::new(&target.scan);
+    let mut styles = Styles::default();
+    let mut per_char = Vec::with_capacity(sources.len());
+    let mut last = 0_u16;
+    for source in sources {
+        let id = source
+            .and_then(|glyph| index.find(&target.scan, glyph))
+            .and_then(|found| {
+                let op = target.scan.glyphs[found].site.op;
+                let state = &target.scan.ops.get(op)?.after;
+                let font = state.font.clone()?;
+                Some(Run {
+                    font,
+                    size: state.size,
+                    page_size: state.size * target.scale,
+                    fill: state.fill.restore(),
+                    color: source.map_or([0.0, 0.0, 0.0], |g| g.color),
+                })
+            })
+            .map(|run| styles.intern(run));
+        // Un blanc ajouté entre deux mots n'a pas de glyphe : il prend le
+        // style de ce qui le précède.
+        let id = id.unwrap_or(last);
+        last = id;
+        per_char.push(id);
+    }
+    styles.per_char = per_char;
+    styles.base = base;
+    styles
 }
 
 /// Bloc réduit à une seule ligne de la page.
@@ -443,6 +540,31 @@ pub fn set_paragraph_text(
     move_paragraph(doc, page, frame, frame, expected, new_text)
 }
 
+/// Comme [`move_paragraph`], en **rendant à chaque caractère son style** :
+/// sa police, son corps et sa couleur.
+///
+/// C'est ce qui permet de modifier une ligne où se mêlent du gras, de
+/// l'italique et un lien sans tout aplatir d'une seule police. Les styles se
+/// relèvent à l'ouverture ([`OpenedParagraph::styles`]) et se reportent sur
+/// le texte modifié ([`Styles::carry`]).
+///
+/// # Errors
+/// Bloc introuvable, ou recomposition impossible.
+// Le document, la page, deux boîtes, deux textes et les styles : sept
+// données distinctes, qu'un regroupement artificiel n'éclaircirait pas.
+#[allow(clippy::too_many_arguments)]
+pub fn move_paragraph_styled(
+    doc: &Document,
+    page: &Page,
+    from: &ParagraphFrame,
+    to: &ParagraphFrame,
+    expected: &str,
+    new_text: &str,
+    styles: Option<&Styles>,
+) -> Result<CaretMap> {
+    move_styled(doc, page, from, to, expected, new_text, styles)
+}
+
 /// Réécrit un bloc **dans une autre boîte** : même texte, autre place, autre
 /// largeur ou autre corps.
 ///
@@ -461,6 +583,20 @@ pub fn move_paragraph(
     expected: &str,
     new_text: &str,
 ) -> Result<CaretMap> {
+    move_styled(doc, page, from, to, expected, new_text, None)
+}
+
+/// Corps commun de [`move_paragraph`] et [`move_paragraph_styled`].
+#[allow(clippy::too_many_arguments)] // le document, deux boîtes, deux textes, le style
+fn move_styled(
+    doc: &Document,
+    page: &Page,
+    from: &ParagraphFrame,
+    to: &ParagraphFrame,
+    expected: &str,
+    new_text: &str,
+    styles: Option<&Styles>,
+) -> Result<CaretMap> {
     let text = extract_page_text(doc, page)?;
     let expected = normalized(expected);
     if expected.is_empty() {
@@ -470,11 +606,13 @@ pub fn move_paragraph(
             // n'ont pas de glyphe à retrouver ; les écrire ferait un bloc
             // invisible de plus à chaque frappe.
             let chars: Vec<char> = new_text.chars().collect();
-            let laid = lay_out_with(&chars, &Geometry::from(to), |c| {
+            let laid = lay_out_with(&chars, &Geometry::from(to), |_, c| {
+                // Aucun glyphe à mesurer ici : une largeur moyenne suffit à
+                // placer le curseur d'une zone encore vide.
                 if c == ' ' {
-                    0.28
+                    0.28 * to.size
                 } else {
-                    0.5
+                    0.5 * to.size
                 }
             });
             return Ok(caret_from_layout(&laid, to.size));
@@ -506,6 +644,7 @@ pub fn move_paragraph(
             Some(to),
             &ReflowOptions::default(),
             &target,
+            styles,
         )?;
         return Ok(caret_from_layout(&laid, to.size));
     }
@@ -522,6 +661,7 @@ pub fn move_paragraph(
         new_text,
         Some(to),
         &ReflowOptions::default(),
+        styles,
     )?;
     Ok(caret_from_layout(&laid, to.size))
 }
@@ -557,6 +697,8 @@ pub fn new_text_frame(
         font: Name::new("Helv"),
         standard: Some("Helvetica".into()),
         color,
+        face: None,
+        rotation: 0.0,
     }
 }
 
@@ -1041,6 +1183,23 @@ fn locate_whole(
     frame: &ParagraphFrame,
     expected: &str,
 ) -> Option<TextUnit> {
+    // Un bloc en biais ne se repère pas à sa ligne de base : sa boîte
+    // englobante ne dit rien de son origine. C'est son texte qui le désigne,
+    // et sa boîte qui départage deux homonymes.
+    if frame.rotation.abs() > 1e-4 {
+        return units
+            .iter()
+            .filter(|u| normalized(&glyph_text(u, text)) == expected)
+            .min_by(|a, b| {
+                let d = |u: &TextUnit| {
+                    (f64::midpoint(u.bbox.x0, u.bbox.x1) - frame.x0).hypot(
+                        f64::midpoint(u.bbox.y0, u.bbox.y1) - frame.baseline,
+                    )
+                };
+                d(a).total_cmp(&d(b))
+            })
+            .cloned();
+    }
     units
         .iter()
         .filter(|u| {
@@ -1068,7 +1227,35 @@ fn frame_of(
     size: f64,
     font: Name,
     crop: &Rect,
+    slant: Option<(f64, f64, f64)>,
 ) -> ParagraphFrame {
+    // Un bloc en biais se décrit par son **origine** et sa direction : sa
+    // boîte englobante, elle, ne dit rien de sa mise en page.
+    if let Some((rotation, x0, baseline)) = slant {
+        // Un filigrane ne coule pas : il tient sur sa ligne, dans sa
+        // direction. On lui laisse donc toute la diagonale de la page, et on
+        // le pose au fil du texte, sans retrait ni centrage — son origine
+        // **est** son début.
+        let width = crop.width().hypot(crop.height()).max(size);
+        return ParagraphFrame {
+            x0,
+            width,
+            alignment: Alignment::Left,
+            first_line_indent: 0.0,
+            line_spacing: if para.line_spacing > 0.1 {
+                para.line_spacing
+            } else {
+                size * 1.2
+            },
+            baseline,
+            size,
+            font,
+            standard: None,
+            color: unit_color(para, text),
+            face: None,
+            rotation,
+        };
+    }
     let baseline = first_baseline(para, text);
     let spacing = if para.line_spacing > 0.1 {
         para.line_spacing
@@ -1099,18 +1286,49 @@ fn frame_of(
         size,
         font,
         standard: None,
-        color: [0.0, 0.0, 0.0],
+        color: unit_color(para, text),
+        face: None,
+        rotation: 0.0,
     }
 }
 
+/// Encre d'un bloc : celle de son premier glyphe dessiné.
+///
+/// C'est ce qui permet de **redessiner** le bloc à l'identique pendant qu'on
+/// tape, sans repasser par le document.
+fn unit_color(para: &TextUnit, text: &PageText) -> [f64; 3] {
+    para.pieces
+        .iter()
+        .flat_map(|piece| piece_words(piece, text))
+        .flat_map(|w| w.glyphs.iter())
+        .find(|g| !g.is_space)
+        .map_or([0.0, 0.0, 0.0], |g| {
+            [
+                f64::from(g.color[0]),
+                f64::from(g.color[1]),
+                f64::from(g.color[2]),
+            ]
+        })
+}
+
+// Une ligne, ses mots, ses glyphes et ses césures : la boucle se lit d'un
+// trait, la couper en morceaux la rendrait plus obscure.
+#[allow(clippy::too_many_lines)]
 /// Texte éditable et positions des frontières, lus sur les glyphes dessinés.
 ///
 /// Les mots d'une ligne sont séparés par une espace, et les lignes aussi —
 /// sauf une césure (mot coupé par un trait d'union en fin de ligne, suite en
 /// minuscule) : le trait d'union disparaît et le mot se recolle, sans quoi la
 /// première frappe écrirait « exem- ple » au milieu d'une ligne.
-fn caret_from_glyphs(para: &TextUnit, text: &PageText, size: f64) -> (String, CaretMap) {
+fn caret_from_glyphs<'a>(
+    para: &TextUnit,
+    text: &'a PageText,
+    size: f64,
+) -> (String, CaretMap, Vec<Option<&'a Glyph>>) {
     let mut out = String::new();
+    // Le glyphe d'où vient chaque caractère : c'est par lui qu'on retrouvera
+    // sa police et sa couleur. Les blancs ajoutés entre mots n'en ont pas.
+    let mut sources: Vec<Option<&Glyph>> = Vec::new();
     let mut stops: Vec<CaretStop> = Vec::new();
     let mut lines: Vec<CaretLine> = Vec::new();
     let line_refs: Vec<(f64, &[crate::text::Word])> = para
@@ -1148,6 +1366,7 @@ fn caret_from_glyphs(para: &TextUnit, text: &PageText, size: f64) -> (String, Ca
                     line: li,
                 });
                 out.push(' ');
+                sources.push(None);
             }
             let glyph_count = word.glyphs.len();
             for (gi, glyph) in word.glyphs.iter().enumerate() {
@@ -1166,6 +1385,7 @@ fn caret_from_glyphs(para: &TextUnit, text: &PageText, size: f64) -> (String, Ca
                         line: li,
                     });
                     out.push(*c);
+                    sources.push(Some(glyph));
                 }
                 end_x = glyph.bbox.x1;
             }
@@ -1180,6 +1400,7 @@ fn caret_from_glyphs(para: &TextUnit, text: &PageText, size: f64) -> (String, Ca
                     line: li,
                 });
                 out.push(' ');
+                sources.push(None);
             }
             lines.push(CaretLine {
                 first,
@@ -1211,7 +1432,7 @@ fn caret_from_glyphs(para: &TextUnit, text: &PageText, size: f64) -> (String, Ca
             baseline: para.bbox.y0,
         });
     }
-    (out, CaretMap { stops, lines, size })
+    (out, CaretMap { stops, lines, size }, sources)
 }
 
 // ---------------------------------------------------------------------------
@@ -1219,15 +1440,15 @@ fn caret_from_glyphs(para: &TextUnit, text: &PageText, size: f64) -> (String, Ca
 // ---------------------------------------------------------------------------
 
 /// Ce qu'il faut pour poser des lignes.
-struct Geometry {
-    x0: f64,
-    width: f64,
-    alignment: Alignment,
-    indent: f64,
-    spacing: f64,
-    baseline: f64,
+pub(super) struct Geometry {
+    pub(super) x0: f64,
+    pub(super) width: f64,
+    pub(super) alignment: Alignment,
+    pub(super) indent: f64,
+    pub(super) spacing: f64,
+    pub(super) baseline: f64,
     /// Corps en points de page.
-    size: f64,
+    pub(super) size: f64,
 }
 
 impl From<&ParagraphFrame> for Geometry {
@@ -1246,34 +1467,44 @@ impl From<&ParagraphFrame> for Geometry {
 
 /// Une ligne posée.
 #[derive(Debug, Clone)]
-struct LaidLine {
+pub(super) struct LaidLine {
     /// Premier caractère de la ligne.
-    start: usize,
+    pub(super) start: usize,
     /// Caractère suivant le dernier de la ligne, blancs de fin compris.
-    end: usize,
+    pub(super) end: usize,
     /// Fin de ce qui est dessiné (blancs de fin et retour à la ligne exclus).
-    draw_end: usize,
+    pub(super) draw_end: usize,
     /// Début de la ligne.
-    x: f64,
+    pub(super) x: f64,
     /// Ligne de base.
-    baseline: f64,
+    pub(super) baseline: f64,
     /// Espace ajouté à chaque blanc pour justifier (points de page).
-    gap: f64,
+    pub(super) gap: f64,
     /// Abscisse de chaque frontière, de `start` à `end` inclus.
-    stops: Vec<f64>,
+    pub(super) stops: Vec<f64>,
 }
 
 /// Coupe un texte en lignes et calcule la place de chaque caractère.
-fn lay_out(prepared: &encode::Prepared, chars: &[char], g: &Geometry) -> Vec<LaidLine> {
-    lay_out_with(chars, g, |c| prepared.width(&c.to_string()))
+pub(super) fn lay_out(prepared: &encode::Prepared, chars: &[char], g: &Geometry) -> Vec<LaidLine> {
+    lay_out_with(chars, g, |_, c| prepared.width(&c.to_string()) * g.size)
 }
 
-/// Même découpe, avec une mesure d'avance quelconque (en cadratins) : c'est
-/// ce qui la rend testable sans document ni police.
-fn lay_out_with(chars: &[char], g: &Geometry, em: impl Fn(char) -> f64) -> Vec<LaidLine> {
+// La découpe en lignes, la justification et les frontières : trois passes
+// sur la même donnée, qu'on suit mieux ensemble que séparées.
+#[allow(clippy::too_many_lines)]
+/// Même découpe, avec une mesure d'avance quelconque **en points de page**,
+/// donnée pour chaque caractère : c'est ce qui permet à un mot en gras de
+/// mesurer ce qu'il mesure vraiment, et ce qui rend la découpe testable sans
+/// document ni police.
+pub(super) fn lay_out_with(
+    chars: &[char],
+    g: &Geometry,
+    advance: impl Fn(usize, char) -> f64,
+) -> Vec<LaidLine> {
     let widths: Vec<f64> = chars
         .iter()
-        .map(|c| if *c == '\n' { 0.0 } else { em(*c) * g.size })
+        .enumerate()
+        .map(|(i, c)| if *c == '\n' { 0.0 } else { advance(i, *c) })
         .collect();
     // 1. Coupure : aux retours à la ligne tapés, et aux espaces quand la
     //    ligne est pleine ; au caractère pour un mot plus large que la boîte.
@@ -1379,7 +1610,7 @@ fn lay_out_with(chars: &[char], g: &Geometry, em: impl Fn(char) -> f64) -> Vec<L
 }
 
 /// Positions des frontières d'après une mise en page.
-fn caret_from_layout(laid: &[LaidLine], size: f64) -> CaretMap {
+pub(super) fn caret_from_layout(laid: &[LaidLine], size: f64) -> CaretMap {
     let total = laid.last().map_or(0, |l| l.end);
     let mut stops = vec![
         CaretStop {
@@ -1414,6 +1645,129 @@ fn caret_from_layout(laid: &[LaidLine], size: f64) -> CaretMap {
         });
     }
     CaretMap { stops, lines, size }
+}
+
+/// Réécrit une opération de dessin **sans les glyphes du bloc**.
+///
+/// L'opération qui ne dessine que le bloc disparaît ; celle qui dessine
+/// aussi autre chose garde cet autre chose, à sa place exacte.
+fn cut_out(
+    doc: &Document,
+    page: &Page,
+    t: &Target,
+    op: usize,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<u8>> {
+    let ranges = t.cuts.get(&op).cloned().unwrap_or_default();
+    let cuts: Vec<Cut> = if ranges.is_empty() {
+        vec![Cut {
+            from: None,
+            to: None,
+            insert: None,
+        }]
+    } else {
+        ranges
+            .into_iter()
+            .map(|(from, to)| Cut {
+                from: Some(from),
+                to: Some(to),
+                insert: None,
+            })
+            .collect()
+    };
+    rewrite_show_op(doc, page, &t.scan, op, &cuts, warnings)
+}
+
+/// Prépare une police par style du bloc, prête à écrire.
+///
+/// Une police qui se dérobe ne doit pas faire perdre la frappe : cette
+/// tranche s'écrira avec celle du bloc.
+fn prepare_runs(
+    doc: &Document,
+    page: &Page,
+    t: &Target,
+    styles: Option<&Styles>,
+    new_text: &str,
+) -> Result<Vec<encode::Prepared>> {
+    let Some(styles) = styles else {
+        return Ok(Vec::new());
+    };
+    let mut fonts = Vec::with_capacity(styles.runs.len());
+    for run in &styles.runs {
+        match encode::prepare_in(doc, page, &t.scan.resources, &run.font, new_text, None) {
+            Ok(p) => fonts.push(p),
+            Err(_) => fonts.push(encode::prepare_in(
+                doc,
+                page,
+                &t.scan.resources,
+                &t.font,
+                new_text,
+                None,
+            )?),
+        }
+    }
+    Ok(fonts)
+}
+
+/// Matrice qui pose une ligne, inclinaison comprise.
+///
+/// Pour un texte droit, la ligne se pose à sa place dans la page. Pour un
+/// texte en biais, elle se pose **dans le repère du bloc** : son décalage
+/// local tourne avec lui, et le filigrane reste en biais.
+fn line_matrix(t: &Target, frame: Option<&ParagraphFrame>, line: &LaidLine) -> Matrix {
+    let slant = frame.map_or(0.0, |f| f.rotation);
+    if slant.abs() <= 1e-4 {
+        return Matrix::new(t.trm.a, t.trm.b, t.trm.c, t.trm.d, line.x, line.baseline);
+    }
+    let (sin, cos) = slant.sin_cos();
+    let origin = frame.map_or((t.trm.e, t.trm.f), |f| (f.x0, f.baseline));
+    let x = origin.0 + line.x * cos - line.baseline * sin;
+    let y = origin.1 + line.x * sin + line.baseline * cos;
+    Matrix::new(t.trm.a, t.trm.b, t.trm.c, t.trm.d, x, y)
+}
+
+/// Écrit une ligne en plusieurs tranches, une par style.
+///
+/// `scale` mène du corps écrit dans `Tf` au corps en points de page : c'est
+/// par lui que passe un redimensionnement du bloc.
+fn write_runs(
+    out: &mut Vec<u8>,
+    styles: &Styles,
+    fonts: &[encode::Prepared],
+    chars: &[char],
+    line: &LaidLine,
+    scale: f64,
+) {
+    let mut start = line.start;
+    while start < line.draw_end {
+        let id = styles.per_char.get(start).copied().unwrap_or(0);
+        let mut end = start + 1;
+        while end < line.draw_end && styles.per_char.get(end).copied().unwrap_or(0) == id {
+            end += 1;
+        }
+        let index = id as usize;
+        if let (Some(font), Some(run)) = (fonts.get(index), styles.runs.get(index)) {
+            let _ = write!(
+                out_str(out),
+                "/{} {} Tf ",
+                font.resource.as_str(),
+                fmt(run.size)
+            );
+            out.extend_from_slice(&run.fill);
+            out.push(b' ');
+            let piece = LaidLine {
+                start,
+                end,
+                draw_end: end,
+                x: line.x,
+                baseline: line.baseline,
+                gap: line.gap,
+                stops: Vec::new(),
+            };
+            write_tj(out, &line_items(font, chars, &piece, run.size * scale));
+        }
+        start = end;
+    }
 }
 
 /// Éléments `TJ` d'une ligne posée.
@@ -1452,7 +1806,16 @@ fn line_items(
 /// Bloc visé et ce qu'il faut savoir de son dessin.
 struct Target {
     scan: scan::Scan,
+    /// Inclinaison du texte, en radians.
+    rotation: f64,
     by_op: BTreeMap<usize, usize>,
+    /// Pour chaque opération touchée, les plages à retirer — vide quand
+    /// l'opération ne dessine que notre bloc et s'efface entière.
+    ///
+    /// C'est ce qui permet de modifier un paragraphe dont l'opération de
+    /// dessin porte **aussi** d'autres textes, fût-ce en plein milieu : on
+    /// n'y retire que nos glyphes, et les autres restent où ils sont.
+    cuts: BTreeMap<usize, Vec<(super::Pos, super::Pos)>>,
     first_op: usize,
     trm: Matrix,
     inverse: Matrix,
@@ -1532,6 +1895,9 @@ impl Target {
         for i in sites {
             *by_op.entry(scan.glyphs[*i].site.op).or_default() += 1;
         }
+        // Un bloc balisé occupe ses opérations à lui seul : elles s'effacent
+        // entières.
+        let cuts = by_op.keys().map(|op| (*op, Vec::new())).collect();
         let first_op = *by_op
             .keys()
             .next()
@@ -1555,10 +1921,12 @@ impl Target {
         Ok(Target {
             scan,
             by_op,
+            cuts,
             first_op,
             trm,
             inverse,
             scale,
+            rotation: trm.b.atan2(trm.a),
             font,
             size_text,
             stream,
@@ -1587,11 +1955,11 @@ impl Target {
             };
             // Les espaces entre les mots ne figurent pas dans `PageText` mais
             // font partie de la ligne : ils doivent disparaître avec elle.
+            // Un texte **étranger** posé au milieu, lui, reste où il est :
+            // on ne retire que nos glyphes, en plusieurs plages s'il le faut.
             for i in min..=max {
                 if !found.contains(&i) && scan.glyphs[i].text != " " {
-                    return Err(Error::Unsupported(
-                        "un autre texte est dessiné au milieu du paragraphe".into(),
-                    ));
+                    continue;
                 }
                 sites.push(i);
             }
@@ -1619,12 +1987,33 @@ impl Target {
                 *total.entry(g.site.op).or_default() += 1;
             }
         }
+        // Une opération qui dessine aussi d'autres textes n'est pas effacée
+        // en entier : on n'y retire que la plage de nos glyphes, et le reste
+        // garde sa place. Sans cela, un document où une seule opération pose
+        // le titre et son voisin serait inmodifiable.
+        let mut cuts: BTreeMap<usize, Vec<(super::Pos, super::Pos)>> = BTreeMap::new();
         for (op, count) in &by_op {
-            if total.get(op) != Some(count) {
-                return Err(Error::Unsupported(
-                    "une opération dessine à la fois le paragraphe et d'autres textes".into(),
-                ));
+            if total.get(op) == Some(count) {
+                cuts.insert(*op, Vec::new());
+                continue;
             }
+            // Nos glyphes de cette opération, groupés en plages continues :
+            // ce qui les sépare appartient à quelqu'un d'autre.
+            let mut ranges: Vec<(super::Pos, super::Pos)> = Vec::new();
+            let mut previous: Option<usize> = None;
+            for i in &sites {
+                let site = &scan.glyphs[*i].site;
+                if site.op != *op {
+                    continue;
+                }
+                let follows = previous.is_some_and(|p| p + 1 == *i);
+                match ranges.last_mut() {
+                    Some(last) if follows => last.1 = (site.item, site.end),
+                    _ => ranges.push(((site.item, site.start), (site.item, site.end))),
+                }
+                previous = Some(*i);
+            }
+            cuts.insert(*op, ranges);
         }
         let first_op = *by_op.keys().next().unwrap_or(&0);
         let first_site = &scan.glyphs[sites[0]].site;
@@ -1633,11 +2022,12 @@ impl Target {
         // 3. Géométrie : matrice de rendu du texte de la première ligne.
         let trm = first_site.tm_before.then(&ctm);
         let scale = trm.a.hypot(trm.b);
-        if scale < 1e-9 || trm.b.abs() > scale * 0.01 {
-            return Err(Error::Unsupported(
-                "paragraphe non horizontal : recomposition non prise en charge".into(),
-            ));
+        if scale < 1e-9 {
+            return Err(Error::Unsupported("bloc dégénéré".into()));
         }
+        // Un texte en biais n'est pas refusé : son inclinaison est relevée,
+        // et les lignes se poseront dans son repère à lui.
+        let rotation = trm.b.atan2(trm.a);
         let inverse = ctm
             .invert()
             .ok_or_else(|| Error::Corrupt("matrice courante non inversible".into()))?;
@@ -1648,7 +2038,9 @@ impl Target {
         let size_text = state.size;
         Ok(Target {
             scan,
+            rotation,
             by_op,
+            cuts,
             first_op,
             trm,
             inverse,
@@ -1701,11 +2093,15 @@ fn write_paragraph(
     new_text: &str,
     frame: Option<&ParagraphFrame>,
     options: &ReflowOptions,
+    styles: Option<&Styles>,
 ) -> Result<Vec<LaidLine>> {
     let t = Target::find(doc, page, text, para)?;
-    write_to(doc, page, para, new_text, frame, options, &t)
+    write_to(doc, page, para, new_text, frame, options, &t, styles)
 }
 
+// Préparer, mesurer, poser, écrire, remettre l'état : les cinq temps d'une
+// écriture, dans l'ordre.
+#[allow(clippy::too_many_lines)]
 /// Écrit le texte dans une cible déjà trouvée.
 #[allow(clippy::too_many_arguments)]
 fn write_to(
@@ -1716,12 +2112,47 @@ fn write_to(
     frame: Option<&ParagraphFrame>,
     options: &ReflowOptions,
     t: &Target,
+    styles: Option<&Styles>,
 ) -> Result<Vec<LaidLine>> {
     let chars: Vec<char> = new_text.chars().collect();
+    // Une police choisie dans la barre l'emporte sur celle du bloc : c'est
+    // « changer la police » d'Acrobat, et elle s'applique au bloc entier.
+    let chosen = frame.and_then(|f| f.face.clone());
+    let override_style = chosen.as_ref().map(|face| super::StyleOverride {
+        font: Some(face.named(t.font.as_str().as_str())),
+        size: None,
+        color: None,
+        bold: Some(face.bold),
+        italic: Some(face.italic),
+    });
     // La police est citée par le flux qu'on réécrit : page ou XObject.
-    let prepared = encode::prepare_in(doc, page, &t.scan.resources, &t.font, new_text, None)?;
-    // 4. Boîte et corps.
+    let prepared = encode::prepare_in(
+        doc,
+        page,
+        &t.scan.resources,
+        &t.font,
+        new_text,
+        override_style.as_ref(),
+    )?;
+    // Les styles du bloc, chacun avec sa police prête à écrire. Un bloc d'un
+    // seul style — le cas ordinaire — n'en a pas besoin.
+    let styles = styles
+        .filter(|_| chosen.is_none())
+        .filter(|s| !s.uniform() && s.per_char.len() == chars.len());
+    let fonts = prepare_runs(doc, page, t, styles, new_text)?;
+    // 4. Boîte et corps. Un bloc en biais se met en page dans son repère à
+    //    lui, l'origine à zéro : les lignes seront ensuite posées tournées.
+    let slanted = frame.is_some_and(|f| f.rotation.abs() > 1e-4);
     let mut geometry = match frame {
+        Some(f) if slanted => Geometry {
+            x0: 0.0,
+            width: f.width,
+            alignment: f.alignment,
+            indent: f.first_line_indent,
+            spacing: f.line_spacing,
+            baseline: 0.0,
+            size: f.size,
+        },
         Some(f) => Geometry::from(f),
         None => Geometry {
             x0: para.bbox.x0,
@@ -1737,11 +2168,27 @@ fn write_to(
             size: t.size_text * t.scale,
         },
     };
-    let mut laid = lay_out(&prepared, &chars, &geometry);
+    // Chaque caractère mesure selon **sa** police et **son** corps.
+    let ratio = |g: &Geometry| g.size / (t.size_text * t.scale).max(1e-9);
+    let measure = |g: &Geometry, i: usize, c: char| match (styles, fonts.is_empty()) {
+        (Some(styles), false) => {
+            let id = styles.per_char.get(i).copied().unwrap_or(0) as usize;
+            let font = fonts.get(id).unwrap_or(&prepared);
+            let size = styles
+                .runs
+                .get(id)
+                .map_or(t.size_text, |r| r.size)
+                * t.scale
+                * ratio(g);
+            font.width(&c.to_string()) * size
+        }
+        _ => prepared.width(&c.to_string()) * g.size,
+    };
+    let mut laid = lay_out_with(&chars, &geometry, |i, c| measure(&geometry, i, c));
     if frame.is_none() && !options.keep_font_size {
         while laid.len() > para.pieces.len() && geometry.size > options.min_size {
             geometry.size *= 0.95;
-            laid = lay_out(&prepared, &chars, &geometry);
+            laid = lay_out_with(&chars, &geometry, |i, c| measure(&geometry, i, c));
         }
     }
     let size_text = geometry.size / t.scale;
@@ -1752,30 +2199,58 @@ fn write_to(
     if let Some(f) = frame {
         let _ = write!(out_str(&mut out), "/{} BMC ", frame_tag(f).as_str());
     }
-    let changed = (size_text - t.size_text).abs() > 1e-9 || prepared.resource != t.font;
-    if changed {
-        let _ = write!(
-            out_str(&mut out),
-            "/{} {} Tf ",
-            prepared.resource.as_str(),
-            fmt(size_text)
-        );
-    }
-    for line in &laid {
-        let placed = Matrix::new(t.trm.a, t.trm.b, t.trm.c, t.trm.d, line.x, line.baseline);
-        write_matrix(&mut out, &placed.then(&t.inverse));
-        write_tj(
-            &mut out,
-            &line_items(&prepared, &chars, line, geometry.size),
-        );
-    }
-    if changed {
+    let with_runs = styles.filter(|_| !fonts.is_empty());
+    let touched = if let Some(styles) = with_runs {
+        // Un bloc à plusieurs styles : chaque tranche rétablit sa police et sa
+        // couleur avant d'écrire ses lettres. C'est ce qui garde le gras gras
+        // et le rouge rouge.
+        for line in &laid {
+            let placed = Matrix::new(t.trm.a, t.trm.b, t.trm.c, t.trm.d, line.x, line.baseline);
+            write_matrix(&mut out, &placed.then(&t.inverse));
+            write_runs(
+                &mut out,
+                styles,
+                &fonts,
+                &chars,
+                line,
+                t.scale * ratio(&geometry),
+            );
+        }
+        true
+    } else {
+        {
+            let changed = (size_text - t.size_text).abs() > 1e-9 || prepared.resource != t.font;
+            if changed {
+                let _ = write!(
+                    out_str(&mut out),
+                    "/{} {} Tf ",
+                    prepared.resource.as_str(),
+                    fmt(size_text)
+                );
+            }
+            for line in &laid {
+                let placed = line_matrix(t, frame, line);
+                write_matrix(&mut out, &placed.then(&t.inverse));
+                write_tj(
+                    &mut out,
+                    &line_items(&prepared, &chars, line, geometry.size),
+                );
+            }
+            changed
+        }
+    };
+    if touched {
+        let state = &t.scan.ops[t.first_op].after;
         let _ = write!(
             out_str(&mut out),
             "/{} {} Tf ",
             t.font.as_str(),
             fmt(t.size_text)
         );
+        // La couleur du bloc est rétablie telle qu'elle était : la suite du
+        // flux compte dessus.
+        out.extend_from_slice(&state.fill.restore());
+        out.push(b' ');
     }
     if frame.is_some() {
         out.extend_from_slice(b"EMC ");
@@ -1788,32 +2263,44 @@ fn write_to(
     // 6. Réécriture : le bloc remplace la première opération, les autres
     //    opérations de texte du paragraphe sont vidées (leur avance est
     //    conservée pour ne rien déplacer après elles).
+    let mut ignored = Vec::new();
+    // La première opération porte le bloc réécrit. Si elle dessine aussi
+    // d'autres textes, ceux-là restent : on ne retire que nos glyphes, puis
+    // on écrit le bloc à la suite.
+    let mut first = cut_out(doc, page, t, t.first_op, &mut ignored)?;
+    first.extend_from_slice(&out);
     let mut replacements = vec![Replacement {
         operation: t.first_op,
-        bytes: out,
+        bytes: first,
     }];
-    let mut ignored = Vec::new();
     for op in t.by_op.keys().skip(1) {
         replacements.push(Replacement {
             operation: *op,
-            bytes: rewrite_show_op(
-                doc,
-                page,
-                &t.scan,
-                *op,
-                &[Cut {
-                    from: None,
-                    to: None,
-                    insert: None,
-                }],
-                &mut ignored,
-            )?,
+            bytes: cut_out(doc, page, t, *op, &mut ignored)?,
         });
     }
     let content = super::rewrite_bytes(&t.scan.content, &replacements)?;
     match t.stream {
         Stream::Page => super::set_page_content(doc, page, content)?,
         Stream::Form(reference) => set_form_content(doc, reference, content)?,
+    }
+    // Les lignes d'un bloc en biais ont été posées dans son repère : on les
+    // rend en espace de page, pour que le curseur tombe où il faut.
+    if slanted {
+        if let Some(f) = frame {
+            let (sin, cos) = f.rotation.sin_cos();
+            for line in &mut laid {
+                let (lx, ly) = (line.x, line.baseline);
+                let x = f.x0 + lx * cos - ly * sin;
+                let y = f.baseline + lx * sin + ly * cos;
+                let shift = x - lx;
+                for stop in &mut line.stops {
+                    *stop += shift;
+                }
+                line.x = x;
+                line.baseline = y;
+            }
+        }
     }
     Ok(laid)
 }
@@ -1927,7 +2414,7 @@ mod tests {
     /// La découpe de l'écriture, avec une police qui mesure tout à 0,5 em :
     /// c'est la découpe qu'on teste, pas la police.
     fn lay_out_fixed(chars: &[char], g: &Geometry) -> Vec<LaidLine> {
-        lay_out_with(chars, g, |_| 0.5)
+        lay_out_with(chars, g, |_, _| 0.5 * g.size)
     }
 
     #[test]

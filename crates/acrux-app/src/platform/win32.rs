@@ -215,6 +215,8 @@ struct MONITORINFO {
 const WS_VISIBLE: DWORD = 0x1000_0000;
 const CW_USEDEFAULT: i32 = 0x8000_0000_u32 as i32;
 const SW_SHOW: i32 = 5;
+const SW_MAXIMIZE: i32 = 3;
+const SIZE_MAXIMIZED: WPARAM = 2;
 const SWP_NOMOVE: UINT = 0x0002;
 const SWP_NOZORDER: UINT = 0x0004;
 const SWP_NOACTIVATE: UINT = 0x0010;
@@ -234,6 +236,10 @@ const SM_CYSMICON: i32 = 50;
 const IDC_ARROW: usize = 32512;
 const IDC_IBEAM: usize = 32513;
 const IDC_HAND: usize = 32649;
+const IDC_SIZENWSE: usize = 32642;
+const IDC_SIZENESW: usize = 32643;
+const IDC_SIZEWE: usize = 32644;
+const IDC_SIZENS: usize = 32645;
 const CS_DBLCLKS: UINT = 0x0008;
 const WM_SETCURSOR: UINT = 0x0020;
 const WM_LBUTTONDBLCLK: UINT = 0x0203;
@@ -572,6 +578,8 @@ struct WindowState {
     app: Box<dyn App>,
     hwnd: HWND,
     width: u32,
+    /// La fenêtre occupe tout l'écran de bureau.
+    maximised: bool,
     height: u32,
     /// Tampon BGRA (ligne 0 en haut).
     backbuffer: Vec<u8>,
@@ -608,6 +616,8 @@ type FrameTheme = (bool, (u8, u8, u8), (u8, u8, u8));
 #[derive(Default)]
 struct WindowStateActions {
     title: Option<String>,
+    /// La fenêtre occupe tout l'écran de bureau, à l'instant du message.
+    maximised: bool,
     redraw: bool,
     close: bool,
     hwnd: HWND,
@@ -701,6 +711,10 @@ impl WindowHandle for Handle<'_> {
 
     fn set_cursor(&mut self, cursor: Cursor) {
         self.state.cursor = Some(cursor);
+    }
+
+    fn maximised(&self) -> bool {
+        self.state.maximised
     }
 
     fn set_clipboard_text(&mut self, text: &str) {
@@ -1131,6 +1145,7 @@ fn high_i16(l: LPARAM) -> i32 {
 fn deliver(state: &mut WindowState, event: Event) {
     let mut actions = WindowStateActions {
         hwnd: state.hwnd,
+        maximised: state.maximised,
         ..Default::default()
     };
     {
@@ -1398,6 +1413,7 @@ fn handle_message(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRES
     let state = unsafe { &mut *ptr };
     match msg {
         WM_SIZE => {
+            state.maximised = wparam == SIZE_MAXIMIZED;
             let mut rect = RECT::default();
             // SAFETY : hwnd valide, rect vivant.
             unsafe {
@@ -1667,7 +1683,13 @@ fn drawn_cursor(shape: Shape) -> Option<HCURSOR> {
 /// Retourne un message si l'enregistrement de la classe de fenêtre ou la
 /// création de la fenêtre échoue.
 #[allow(clippy::too_many_lines)] // création de la fenêtre puis boucle de messages, linéaire
-pub fn run(title: &str, width: u32, height: u32, app: Box<dyn App>) -> Result<(), String> {
+pub fn run(
+    title: &str,
+    width: u32,
+    height: u32,
+    maximised: bool,
+    app: Box<dyn App>,
+) -> Result<(), String> {
     // Résolution par moniteur (Windows 10 1703+) ; ignoré si absent.
     // SAFETY : sans précondition ; -4 = DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2.
     unsafe {
@@ -1677,11 +1699,15 @@ pub fn run(title: &str, width: u32, height: u32, app: Box<dyn App>) -> Result<()
     // SAFETY : null = module courant.
     let instance = unsafe { GetModuleHandleW(null()) };
     // SAFETY : IDC_* sont des ressources système prédéfinies.
-    let (arrow, beam, pointer) = unsafe {
+    let (arrow, beam, pointer, size_we, size_ns, size_nwse, size_nesw) = unsafe {
         (
             LoadCursorW(null_mut(), IDC_ARROW as *const u16),
             LoadCursorW(null_mut(), IDC_IBEAM as *const u16),
             LoadCursorW(null_mut(), IDC_HAND as *const u16),
+            LoadCursorW(null_mut(), IDC_SIZEWE as *const u16),
+            LoadCursorW(null_mut(), IDC_SIZENS as *const u16),
+            LoadCursorW(null_mut(), IDC_SIZENWSE as *const u16),
+            LoadCursorW(null_mut(), IDC_SIZENESW as *const u16),
         )
     };
     let drawn = |shape| drawn_cursor(shape).unwrap_or(arrow);
@@ -1696,6 +1722,10 @@ pub fn run(title: &str, width: u32, height: u32, app: Box<dyn App>) -> Result<()
         drawn(Shape::Move),
         drawn(Shape::Pen),
         drawn(Shape::Place),
+        size_we,
+        size_ns,
+        size_nwse,
+        size_nesw,
     ];
     let cursor = cursors[0];
     let icon = program_icon(instance, SM_CXICON, SM_CYICON);
@@ -1723,6 +1753,7 @@ pub fn run(title: &str, width: u32, height: u32, app: Box<dyn App>) -> Result<()
         app,
         hwnd: null_mut(),
         width: 0,
+        maximised: false,
         height: 0,
         backbuffer: Vec::new(),
         pending_title: None,
@@ -1787,7 +1818,8 @@ pub fn run(title: &str, width: u32, height: u32, app: Box<dyn App>) -> Result<()
             deliver(&mut *state_ptr, Event::DpiChanged(dpi as f32 / 96.0));
         }
         if !headless() {
-            ShowWindow(hwnd, SW_SHOW);
+            // Rouverte comme on l'a laissée : agrandie, elle le reste.
+            ShowWindow(hwnd, if maximised { SW_MAXIMIZE } else { SW_SHOW });
             UpdateWindow(hwnd);
             SetCursor(cursor);
         }

@@ -64,13 +64,26 @@ impl Prepared {
     pub fn encode(&self, text: &str) -> Encoded {
         let mut out = Encoded::default();
         for c in text.chars() {
-            match self.table.get(&c) {
-                Some(code) => {
-                    out.widths.push(measure(&self.font, code));
-                    out.bytes.extend_from_slice(code);
-                }
-                None => out.lost.push(c),
+            if let Some(code) = self.table.get(&c) {
+                out.widths.push(measure(&self.font, code));
+                out.bytes.extend_from_slice(code);
+                continue;
             }
+            // Une ligature absente s'écrit en lettres : « fi » lié devient
+            // « f » puis « i ». Sans cela, changer la police d'un texte en
+            // ferait disparaître des lettres — « bénéficiez » perdrait son
+            // « fi ».
+            let parts = decomposed(c);
+            if !parts.is_empty() && parts.chars().all(|p| self.table.contains_key(&p)) {
+                for part in parts.chars() {
+                    if let Some(code) = self.table.get(&part) {
+                        out.widths.push(measure(&self.font, code));
+                        out.bytes.extend_from_slice(code);
+                    }
+                }
+                continue;
+            }
+            out.lost.push(c);
         }
         out
     }
@@ -188,6 +201,32 @@ fn prepare_with(
             );
             Ok(prepared)
         }
+    }
+}
+
+/// Lettres d'un caractère composé, quand une police ne le connaît pas.
+///
+/// Les ligatures d'abord — elles abondent dans les documents d'un
+/// traitement de texte — puis quelques signes typographiques dont
+/// l'absence se verrait.
+fn decomposed(c: char) -> &'static str {
+    match c {
+        '\u{fb00}' => "ff",
+        '\u{fb01}' => "fi",
+        '\u{fb02}' => "fl",
+        '\u{fb03}' => "ffi",
+        '\u{fb04}' => "ffl",
+        '\u{fb05}' | '\u{fb06}' => "st",
+        '\u{0152}' => "OE",
+        '\u{0153}' => "oe",
+        '\u{00c6}' => "AE",
+        '\u{00e6}' => "ae",
+        '\u{2018}' | '\u{2019}' => "'",
+        '\u{201c}' | '\u{201d}' => "\"",
+        '\u{2013}' | '\u{2014}' => "-",
+        '\u{2026}' => "...",
+        '\u{00a0}' | '\u{202f}' | '\u{2009}' => " ",
+        _ => "",
     }
 }
 
@@ -476,6 +515,20 @@ fn font_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// Police système où prendre les glyphes qui manquent à un sous-ensemble
+/// incorporé, le temps d'une frappe.
+///
+/// La famille d'abord ; à défaut une police latine courante, pour qu'on voie
+/// **toujours** ce qu'on tape. Ce n'est qu'un aperçu : à l'écriture, c'est
+/// [`prepare`] qui complète vraiment la police du document.
+pub(crate) fn spare_font(base_font: &str) -> Option<TrueTypeFont> {
+    let wanted = ['e', 'é', 'A', '1'];
+    find_system_font(base_font, &wanted)
+        .or_else(|| find_system_font("Arial", &wanted))
+        .or_else(|| find_system_font("DejaVuSans", &wanted))
+        .or_else(|| find_system_font("LiberationSans", &wanted))
+}
+
 /// Cherche la police système de la même famille contenant les caractères
 /// demandés : fichiers dont le nom commence par la famille, classés par
 /// concordance de style (`georgiab.ttf` pour Georgia-Bold…).
@@ -572,13 +625,25 @@ pub(crate) fn standard_font(
     standard(doc, page, family, bold, italic).map(|p| p.resource)
 }
 
-fn standard(
-    doc: &Document,
-    page: &Page,
-    family: &str,
-    bold: bool,
-    italic: bool,
-) -> Result<Prepared> {
+/// Police prête à **mesurer**, chargée telle quelle : rien n'est ajouté au
+/// document, rien n'y est modifié.
+///
+/// C'est ce qu'il faut pour dessiner un aperçu pendant qu'on tape — la page
+/// n'est réécrite qu'à la sortie du bloc.
+pub(crate) fn measuring(doc: &Document, dict: &Dict, resource: Name) -> Result<Prepared> {
+    let font = LoadedFont::load(doc, dict)?;
+    let table = reverse_table(&font);
+    Ok(Prepared {
+        resource,
+        font,
+        warnings: Vec::new(),
+        table,
+    })
+}
+
+/// Dictionnaire d'une des quatorze polices standard, le plus proche de la
+/// famille demandée.
+pub(crate) fn standard_dict(family: &str, bold: bool, italic: bool) -> Dict {
     let lower = strip_subset_prefix(family).to_ascii_lowercase();
     let bold = bold || ["bold", "black", "heavy"].iter().any(|k| lower.contains(k));
     let italic = italic || lower.contains("italic") || lower.contains("oblique");
@@ -618,6 +683,21 @@ fn standard(
         Name::new("Encoding"),
         Object::Name(Name::new("WinAnsiEncoding")),
     );
+    dict
+}
+
+fn standard(
+    doc: &Document,
+    page: &Page,
+    family: &str,
+    bold: bool,
+    italic: bool,
+) -> Result<Prepared> {
+    let dict = standard_dict(family, bold, italic);
+    let base = dict
+        .get(&Name::new("BaseFont"))
+        .and_then(Object::as_name)
+        .map_or_else(|| "Helvetica".to_string(), |n| n.as_str().clone());
     let resource = super::add_font_resource(doc, page, &dict)?;
     let font = LoadedFont::load(doc, &dict)?;
     let table = reverse_table(&font);

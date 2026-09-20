@@ -604,9 +604,11 @@ fn une_zone_neuve_se_tape_au_milieu_dune_page_chargee() {
     // La zone commence à droite d'une ligne existante : elle est étroite, le
     // texte y coule sur deux lignes, et l'extraction les lit dans l'ordre de
     // la page. On vérifie donc les deux morceaux, pas une chaîne d'un tenant.
+    // Le filigrane traverse la page : il s'intercale entre nos deux lignes
+    // dans l'ordre de lecture, sans que notre texte en soit coupé.
     let apres = page_text(&doc, 0);
-    assert!(apres.contains("Bonjourtout"), "{apres}");
-    assert!(apres.contains("lemonde"), "{apres}");
+    assert!(apres.contains("Bonjour"), "{apres}");
+    assert!(apres.contains("toutlemonde"), "{apres}");
     // Le texte d'origine n'a pas bougé.
     assert!(page_text(&doc, 0).contains("Cedocumentdesynthèse"));
 }

@@ -398,6 +398,11 @@ struct Loaded {
     history: Vec<EditOp>,
     /// Modifications annulées, prêtes à être rétablies.
     redo: Vec<EditOp>,
+    /// Le prochain enregistrement doit réécrire le fichier **en entier**.
+    ///
+    /// Un chiffrement posé ou retiré ne tient pas dans une mise à jour
+    /// incrémentale : tout le fichier change de clé.
+    full_save: bool,
     /// Modifications non enregistrées.
     modified: bool,
     /// Champs de formulaire (AcroForm), rechargés après chaque modification.
@@ -453,6 +458,9 @@ enum PromptKind {
         doc: Document,
         pages: Vec<Page>,
     },
+    /// Mot de passe qui protégera le document. La seconde saisie confirme
+    /// la première : un mot de passe masqué mal tapé enfermerait le document.
+    Protect { confirm: Option<String> },
     /// Texte d'une note à poser sur `page` au point `(x, y)` (espace page).
     Note { page: usize, x: f64, y: f64 },
     /// Valeur d'un champ de formulaire.
@@ -607,6 +615,8 @@ pub struct Viewer {
     height: u32,
     /// Échelle DPI de la fenêtre (1.0 = 96 dpi).
     dpi_scale: f64,
+    /// La fenêtre est agrandie (bouton « agrandir »).
+    window_max: bool,
     /// Zoom logique (1.0 = 100 % à 96 dpi).
     zoom: f64,
     fit: Fit,
@@ -762,6 +772,12 @@ pub struct Viewer {
 /// État de la recherche dans le document.
 struct Search {
     input: TextInput,
+    /// Champ « remplacer par », quand on l'a demandé (Ctrl+H).
+    replace: Option<TextInput>,
+    /// Le clavier va au champ de remplacement.
+    on_replace: bool,
+    /// Boutons dessinés au dernier tour, pour les cliquer.
+    buttons: Vec<SearchTarget>,
     /// Occurrences : (page, boîte en espace PDF).
     hits: Vec<(usize, Rect)>,
     /// Occurrence courante.
@@ -771,6 +787,79 @@ struct Search {
     /// Nombre de pages déjà parcourues : la recherche avance par tranches
     /// pour ne jamais figer l'interface sur un gros document.
     scanned: usize,
+}
+
+/// Un rectangle cliquable du bandeau de recherche : sa position, sa taille,
+/// et ce qu'il fait.
+type SearchTarget = (i32, i32, i32, i32, ReplaceButton);
+
+/// Ce que l'on touche en cliquant dans le bandeau de recherche.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplaceButton {
+    /// Le champ « rechercher ».
+    Find,
+    /// Le champ « remplacer par ».
+    With,
+    /// Remplacer l'occurrence courante et passer à la suivante.
+    One,
+    /// Remplacer toutes les occurrences du document.
+    All,
+}
+
+/// Dessine le bandeau de remplacement sous le champ de recherche. Rend
+/// l'ordonnée atteinte et les rectangles cliquables.
+///
+/// Les boutons ne sont rendus que s'il y a quelque chose à remplacer :
+/// grisés, ils ne répondent pas au clic.
+fn paint_replace_bar(
+    frame: &mut Frame<'_>,
+    text: &mut TextRenderer,
+    search: &Search,
+    theme: &Theme,
+    dpi: f32,
+    (x, y, box_w, box_h): (i32, i32, i32, i32),
+) -> (i32, Vec<SearchTarget>) {
+    let t = theme;
+    let mut buttons = Vec::new();
+    let Some(r) = &search.replace else {
+        return (y, buttons);
+    };
+    let step = box_h + (4.0 * dpi) as i32;
+    let y = y + step;
+    frame.fill_rect(x - 2, y - 2, box_w + 4, box_h + 4, t.bar.0, t.bar.1, t.bar.2);
+    r.draw(frame, text, t, dpi, x, y, box_w, box_h);
+    buttons.push((x, y, box_w, box_h, ReplaceButton::With));
+    let y = y + step;
+    let gap = (4.0 * dpi) as i32;
+    let bw = (box_w - gap) / 2;
+    let usable = !search.hits.is_empty();
+    let size = t.font_size * dpi;
+    for (i, (label, what)) in [
+        (lang::tr("Remplacer"), ReplaceButton::One),
+        (lang::tr("Tout remplacer"), ReplaceButton::All),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let bx = x + i as i32 * (bw + gap);
+        let face = if usable { t.hover } else { t.bar };
+        round_rect(frame, bx, y, bw, box_h, 4.0 * dpi, face);
+        let lw = text.measure(size, label);
+        let ink = if usable { t.text } else { t.text_dim };
+        text.draw_clipped(
+            frame,
+            bx as f32 + (bw as f32 - lw) / 2.0,
+            y as f32 + (box_h as f32 + text.ascent(size)) / 2.0 - 1.0,
+            size,
+            label,
+            ink,
+            bw as f32 - 4.0 * dpi,
+        );
+        if usable {
+            buttons.push((bx, y, bw, box_h, what));
+        }
+    }
+    (y, buttons)
 }
 
 impl Viewer {
@@ -794,6 +883,7 @@ impl Viewer {
             width: 0,
             height: 0,
             dpi_scale: 1.0,
+            window_max: prefs.window_max,
             scroll_y: 0.0,
             scroll_x: 0.0,
             drag_last: None,
@@ -1865,6 +1955,29 @@ impl Viewer {
                             });
                         }
                     }
+                    PromptKind::Protect { confirm } => {
+                        let confirm = confirm.clone();
+                        match confirm {
+                            // Première saisie : on la redemande.
+                            None if !value.is_empty() => {
+                                self.prompt = None;
+                                self.ask_password(Some(value));
+                            }
+                            None => {
+                                prompt.error =
+                                    Some(crate::ui::lang::tr("un mot de passe vide ne protège rien").into());
+                            }
+                            Some(first) if first == value => {
+                                self.prompt = None;
+                                self.protect_with(&value, window);
+                            }
+                            Some(_) => {
+                                prompt.error =
+                                    Some(crate::ui::lang::tr("les deux saisies diffèrent").into());
+                                prompt.input.clear();
+                            }
+                        }
+                    }
                     PromptKind::Note { page, x, y } => {
                         let (page, x, y) = (*page, *x, *y);
                         self.prompt = None;
@@ -2523,6 +2636,11 @@ impl Viewer {
             t.bar.2,
         );
         s.input.draw(frame, text, &t, dpi, x, y, box_w, box_h);
+        let mut buttons: Vec<SearchTarget> =
+            vec![(x, y, box_w, box_h, ReplaceButton::Find)];
+        // Le champ « remplacer par » et ses deux boutons, sous la recherche.
+        let (y, more) = paint_replace_bar(frame, text, s, &t, dpi, (x, y, box_w, box_h));
+        buttons.extend(more);
         let scanning = s.scanned < self.loaded.as_ref().map_or(0, |l| l.pages.len());
         let counter = if s.input.value.is_empty() {
             String::new()
@@ -2554,6 +2672,9 @@ impl Viewer {
                 &counter,
                 t.text_dim,
             );
+        }
+        if let Some(s) = &mut self.search {
+            s.buttons = buttons;
         }
     }
 
@@ -2660,6 +2781,7 @@ impl Viewer {
             password,
             history: Vec::new(),
             redo: Vec::new(),
+            full_save: false,
             modified: false,
             fields,
             comments,
@@ -3349,6 +3471,8 @@ impl Viewer {
 
     /// Exécute une commande de la palette. Chaque entrée appelle exactement
     /// la même fonction que son raccourci clavier.
+    // Une commande par ligne : la liste se lit comme un sommaire.
+    #[allow(clippy::too_many_lines)]
     fn run_command(&mut self, command: Command, window: &mut dyn WindowHandle) {
         log_line(&format!("palette : {command:?}"));
         match command {
@@ -3414,6 +3538,7 @@ impl Viewer {
             }
             Command::ToggleTheme => self.toggle_theme(window),
             Command::Search => self.open_search(),
+            Command::Replace => self.open_replace(),
             Command::Copy => {
                 let text = self.selected_text();
                 if !text.is_empty() {
@@ -3448,7 +3573,94 @@ impl Viewer {
             Command::FillSign => self.toggle_fillsign(window),
             Command::MarkRedaction => self.mark_redaction(),
             Command::ApplyRedactions => self.apply_redactions(),
+            Command::Protect => self.protect_command(),
+            Command::Unprotect => self.remove_protection(),
         }
+    }
+
+    /// « Protéger par mot de passe » : sur un document déjà protégé, on
+    /// demande d'abord ce qu'on veut en faire.
+    fn protect_command(&mut self) {
+        let protected = self.loaded.as_ref().is_some_and(|l| l.password.is_some());
+        if !protected {
+            self.ask_password(None);
+            return;
+        }
+        self.push_choice(
+            crate::ui::lang::tr("Ce document est déjà protégé"),
+            crate::ui::lang::tr("Changer son mot de passe, ou retirer la protection ?"),
+            &[
+                crate::ui::lang::tr("Changer le mot de passe"),
+                crate::ui::lang::tr("Retirer la protection"),
+                crate::ui::lang::tr("Annuler"),
+            ],
+            crate::viewer::dialogs::Then::Protection,
+        );
+    }
+
+    /// Demande le mot de passe qui protégera le document.
+    ///
+    /// Comme dans Acrobat, on le saisit deux fois : masqué, une faute de
+    /// frappe enfermerait le document pour de bon.
+    fn ask_password(&mut self, first: Option<String>) {
+        if self.loaded.is_none() {
+            return;
+        }
+        let again = first.is_some();
+        let mut input = TextInput::new("");
+        input.masked = true;
+        self.prompt = Some(Prompt {
+            title: crate::ui::lang::tr("Protéger par mot de passe").into(),
+            label: if again {
+                crate::ui::lang::tr("Confirmez le mot de passe").into()
+            } else {
+                crate::ui::lang::tr("Mot de passe d'ouverture du document").into()
+            },
+            input,
+            error: None,
+            kind: PromptKind::Protect { confirm: first },
+        });
+    }
+
+    /// Chiffre le document avec ce mot de passe, puis l'enregistre.
+    ///
+    /// Le chiffrement ne vaut que sur le fichier : il faut donc réécrire le
+    /// document **en entier**, et non y ajouter une mise à jour.
+    fn protect_with(&mut self, password: &str, window: &mut dyn WindowHandle) {
+        let Some(l) = &mut self.loaded else { return };
+        let bytes = password.as_bytes();
+        let permissions = acrux_document::protect::Permissions::all();
+        if let Err(e) = l.doc.protect(bytes, bytes, permissions) {
+            self.set_notice(format!("protection impossible : {e}"));
+            return;
+        }
+        l.password = Some(bytes.to_vec());
+        l.modified = true;
+        l.full_save = true;
+        self.title_dirty = true;
+        self.set_notice(
+            crate::ui::lang::tr("document protégé : le mot de passe sera demandé à l'ouverture").into(),
+        );
+        // Un chiffrement qui reste en mémoire ne protège rien : on écrit.
+        self.save(false, window);
+    }
+
+    /// Retire la protection d'un document chiffré.
+    fn remove_protection(&mut self, ) {
+        let Some(l) = &mut self.loaded else { return };
+        if l.password.is_none() {
+            self.set_notice(crate::ui::lang::tr("ce document n'est pas protégé").into());
+            return;
+        }
+        if let Err(e) = l.doc.unprotect() {
+            self.set_notice(format!("retrait impossible : {e}"));
+            return;
+        }
+        l.password = None;
+        l.modified = true;
+        l.full_save = true;
+        self.title_dirty = true;
+        self.set_notice(crate::ui::lang::tr("protection retirée : enregistrez pour l'appliquer").into());
     }
 
     /// Applique une modification au document (et à la copie du fil de rendu).
@@ -3550,6 +3762,9 @@ impl Viewer {
 
     /// Annule la dernière modification.
     fn undo(&mut self, window: &mut dyn WindowHandle) {
+        // La saisie en cours n'est pas encore au document : on l'y porte,
+        // sans quoi l'annulation défairait la modification d'avant.
+        self.close_active();
         let Some(l) = &mut self.loaded else { return };
         let Some(op) = l.history.pop() else { return };
         let ops = l.history.clone();
@@ -3561,6 +3776,7 @@ impl Viewer {
 
     /// Rétablit la dernière modification annulée.
     fn redo_edit(&mut self, window: &mut dyn WindowHandle) {
+        self.close_active();
         let Some(l) = &mut self.loaded else { return };
         let Some(op) = l.redo.pop() else { return };
         let redo = l.redo.clone();
@@ -3603,6 +3819,8 @@ impl Viewer {
 
     /// Enregistre (`save_as` : demande un nouveau chemin et réécrit tout).
     fn save(&mut self, save_as: bool, window: &mut dyn WindowHandle) -> bool {
+        // Ce qui est tapé mais pas encore écrit doit l'être avant le fichier.
+        self.close_active();
         let Some(l) = &self.loaded else { return false };
         let suggested = l.path.file_name().map_or_else(
             || "document.pdf".to_string(),
@@ -3616,8 +3834,9 @@ impl Viewer {
         } else {
             l.path.clone()
         };
-        // Enregistrer sous ou document réparé : réécriture complète ; sinon ajout incrémental.
-        let bytes = if save_as || l.doc.was_repaired() {
+        // Enregistrer sous, document réparé ou chiffrement changé :
+        // réécriture complète ; sinon ajout incrémental.
+        let bytes = if save_as || l.doc.was_repaired() || l.full_save {
             l.doc.save_full()
         } else {
             l.doc.save_incremental()
@@ -3680,12 +3899,152 @@ impl Viewer {
         if self.loaded.is_some() {
             self.search = Some(Search {
                 input: TextInput::new("Rechercher dans le document"),
+                replace: None,
+                on_replace: false,
+                buttons: Vec::new(),
                 hits: Vec::new(),
                 current: 0,
                 last_query: String::new(),
                 scanned: 0,
             });
         }
+    }
+
+    /// Ouvre la recherche **avec** le champ de remplacement.
+    ///
+    /// C'est le « Rechercher et remplacer » d'Acrobat : on cherche un texte,
+    /// on en donne un autre, et le document est réécrit sans que rien ne
+    /// bouge autour — chaque occurrence garde sa police et sa couleur.
+    fn open_replace(&mut self) {
+        if self.loaded.is_none() {
+            return;
+        }
+        if self.search.is_none() {
+            self.open_search();
+        }
+        if let Some(s) = &mut self.search {
+            if s.replace.is_none() {
+                s.replace = Some(TextInput::new("Remplacer par…"));
+            }
+            // Le clavier va au champ qui manque : on ne remplace rien tant
+            // qu'on n'a pas dit quoi chercher.
+            s.on_replace = !s.input.value.is_empty();
+            s.input.focused = !s.on_replace;
+            if let Some(r) = &mut s.replace {
+                r.focused = s.on_replace;
+            }
+        }
+    }
+
+    /// Ce que vise un clic dans le bandeau de recherche, s'il en vise quelque
+    /// chose. Les rectangles ont été relevés au dernier dessin, dans le repère
+    /// de la vue : on y ramène le clic.
+    fn search_hit(&self, x: i32, y: i32) -> Option<ReplaceButton> {
+        let s = self.search.as_ref()?;
+        let x = x - self.view_left() as i32;
+        let y = y - self.view_top() as i32;
+        s.buttons
+            .iter()
+            .find(|(bx, by, bw, bh, _)| x >= *bx && x < bx + bw && y >= *by && y < by + bh)
+            .map(|(_, _, _, _, what)| *what)
+    }
+
+    /// Remplace l'occurrence courante, puis passe à la suivante.
+    fn replace_current(&mut self) {
+        let Some((find, with, hit)) = self.search.as_ref().and_then(|s| {
+            let with = s.replace.as_ref()?.value.clone();
+            let hit = s.hits.get(s.current).copied()?;
+            Some((s.input.value.clone(), with, hit))
+        }) else {
+            return;
+        };
+        if find.is_empty() {
+            return;
+        }
+        let page = hit.0;
+        // On retrouve la plage **par son rang** : les boîtes surlignées et les
+        // plages éditables sortent du même parcours de la page, dans le même
+        // ordre. C'est donc bien l'occurrence que l'utilisateur voit qui est
+        // remplacée, et non la première venue du document.
+        let rank = self.search.as_ref().map_or(0, |s| {
+            s.hits[..s.current].iter().filter(|h| h.0 == page).count()
+        });
+        let target = self.loaded.as_mut().and_then(|l| {
+            let text = &l.text(page).0;
+            let ranges = acrux_features::edit_text::find_ranges(text, &find);
+            // Par prudence : si les deux parcours ne comptent pas le même
+            // nombre d'occurrences, on préfère ne rien toucher.
+            if ranges.len() != acrux_features::text::find(text, &find).len() {
+                return None;
+            }
+            ranges.get(rank).copied()
+        });
+        let Some(target) = target else {
+            self.set_notice(crate::ui::lang::tr("occurrence introuvable").into());
+            return;
+        };
+        // Une modification referme la recherche (le document a changé sous
+        // elle) : on la met de côté pour la rendre telle quelle, et l'on
+        // reparcourt le document. Le rang courant ne bouge pas : l'occurrence
+        // remplacée ayant disparu, c'est la suivante qui se trouve surlignée.
+        let saved = self.search.take();
+        self.apply_edit(EditOp::EditText {
+            page,
+            line: target.line,
+            start: target.start,
+            end: target.end,
+            text: with,
+        });
+        self.restore_search(saved);
+    }
+
+    /// Rend au bandeau de recherche l'état qu'il avait avant une
+    /// modification, et refait le tour du document.
+    fn restore_search(&mut self, saved: Option<Search>) {
+        let Some(mut s) = saved else { return };
+        s.hits.clear();
+        s.buttons.clear();
+        s.scanned = 0;
+        // Vider la dernière requête force le nouveau parcours.
+        s.last_query.clear();
+        let current = s.current;
+        self.search = Some(s);
+        self.update_search();
+        while self.step_search() {}
+        if let Some(s) = &mut self.search {
+            s.current = if s.hits.is_empty() {
+                0
+            } else {
+                current.min(s.hits.len() - 1)
+            };
+        }
+        self.scroll_to_hit();
+    }
+
+    /// Remplace toutes les occurrences du document, d'un seul geste
+    /// annulable.
+    fn replace_all(&mut self) {
+        let Some((find, with)) = self
+            .search
+            .as_ref()
+            .and_then(|s| Some((s.input.value.clone(), s.replace.as_ref()?.value.clone())))
+        else {
+            return;
+        };
+        if find.is_empty() {
+            return;
+        }
+        let found = self.search.as_ref().map_or(0, |s| s.hits.len());
+        let mut saved = self.search.take();
+        if let Some(s) = &mut saved {
+            s.current = 0;
+        }
+        self.apply_edit(EditOp::ReplaceAll { find, with });
+        self.restore_search(saved);
+        self.set_notice(crate::ui::lang::trf(
+            "{} occurrence(s) remplacée(s)",
+            &[&found.to_string()],
+        ));
     }
 
     fn toggle_theme(&mut self, window: &mut dyn WindowHandle) {
@@ -4001,6 +4360,9 @@ impl Viewer {
 
     /// Remet le document actif dans la liste et en active un autre.
     fn select_tab(&mut self, index: usize) {
+        // La saisie porte sur **ce** document : on l'y écrit avant d'en
+        // changer.
+        self.close_active();
         self.leave_home();
         self.edit = None;
         self.annot_tool = None;
@@ -5527,11 +5889,16 @@ impl Viewer {
         self.prefs.two_up_cover = self.two_up_cover;
         self.prefs.signatures = self.signatures.iter().map(Saved::encode).collect();
         self.prefs.initials = self.initials.as_ref().map(Saved::encode);
-        if self.width > 0 && self.height > 0 && self.dpi_scale > 0.0 {
+        // La taille retenue est celle d'une fenêtre **ordinaire** : celle
+        // d'une fenêtre agrandie vaut le bureau entier, et la rouvrir à cette
+        // taille sans l'agrandir la ferait déborder de l'écran — on y perdrait
+        // le panneau de droite et la barre d'état.
+        if self.width > 0 && self.height > 0 && self.dpi_scale > 0.0 && !self.window_max {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let logical = |v: u32| (f64::from(v) / self.dpi_scale).round() as u32;
             self.prefs.window = (logical(self.width), logical(self.height));
         }
+        self.prefs.window_max = self.window_max;
         self.prefs.save();
     }
 
@@ -5853,6 +6220,7 @@ impl App for Viewer {
             Event::Resize { width, height } => {
                 self.width = width;
                 self.height = height;
+                self.window_max = window.maximised();
                 self.clamp_scroll();
                 self.title_dirty = true;
             }
@@ -6009,13 +6377,40 @@ impl App for Viewer {
                     p.error = None;
                 }
             }
-            Event::Key(key, m) if self.search.is_some() => {
-                let action = self
+            // La tabulation passe du champ « rechercher » au champ
+            // « remplacer », comme dans n'importe quel formulaire.
+            Event::Key(Key::Tab, _)
+                if self
                     .search
-                    .as_mut()
-                    .map_or(InputAction::None, |s| s.input.key(key, m.shift));
+                    .as_ref()
+                    .is_some_and(|s| s.replace.is_some()) =>
+            {
+                if let Some(s) = &mut self.search {
+                    s.on_replace = !s.on_replace;
+                    s.input.focused = !s.on_replace;
+                    if let Some(r) = &mut s.replace {
+                        r.focused = s.on_replace;
+                    }
+                }
+                window.request_redraw();
+            }
+            Event::Key(key, m) if self.search.is_some() => {
+                let on_replace = self.search.as_ref().is_some_and(|s| s.on_replace);
+                let action = self.search.as_mut().map_or(InputAction::None, |s| {
+                    if on_replace {
+                        s.replace
+                            .as_mut()
+                            .map_or(InputAction::None, |r| r.key(key, m.shift))
+                    } else {
+                        s.input.key(key, m.shift)
+                    }
+                });
                 match action {
                     InputAction::Cancel => self.search = None,
+                    // Entrée dans le champ de remplacement remplace
+                    // l'occurrence courante ; dans l'autre, elle passe à la
+                    // suivante.
+                    InputAction::Submit if on_replace => self.replace_current(),
                     InputAction::Submit => {
                         self.update_search();
                         if let Some(s) = &mut self.search {
@@ -6030,20 +6425,28 @@ impl App for Viewer {
                         }
                         self.scroll_to_hit();
                     }
+                    InputAction::Changed if on_replace => {}
                     InputAction::Changed => {
                         self.update_search();
                         self.scroll_to_hit();
                     }
                     InputAction::None => {}
                 }
+                window.request_redraw();
             }
             Event::Char(c, m) if self.search.is_some() && !m.ctrl => {
+                let on_replace = self.search.as_ref().is_some_and(|s| s.on_replace);
                 if let Some(s) = &mut self.search {
-                    if s.input.insert_char(c) == InputAction::Changed {
+                    if on_replace {
+                        if let Some(r) = s.replace.as_mut() {
+                            let _ = r.insert_char(c);
+                        }
+                    } else if s.input.insert_char(c) == InputAction::Changed {
                         self.update_search();
                         self.scroll_to_hit();
                     }
                 }
+                window.request_redraw();
             }
             Event::Key(key, m) => self.key(key, m, window),
             Event::Char(c, m) => {
@@ -6054,6 +6457,7 @@ impl App for Viewer {
                                 self.open(&p, window);
                             }
                         }
+                        'h' | 'H' | '\u{8}' => self.open_replace(),
                         's' | 'S' => {
                             self.save(m.shift, window);
                         }
@@ -6146,6 +6550,26 @@ impl App for Viewer {
                         self.run_command(c, window);
                     } else {
                         self.palette = None;
+                    }
+                    window.request_redraw();
+                    return;
+                }
+                // Le bandeau de recherche flotte au-dessus de la page : ses
+                // champs et ses boutons se cliquent avant elle.
+                if let Some(what) = self.search_hit(x, y) {
+                    match what {
+                        ReplaceButton::Find | ReplaceButton::With => {
+                            let on_replace = what == ReplaceButton::With;
+                            if let Some(s) = &mut self.search {
+                                s.on_replace = on_replace;
+                                s.input.focused = !on_replace;
+                                if let Some(r) = &mut s.replace {
+                                    r.focused = on_replace;
+                                }
+                            }
+                        }
+                        ReplaceButton::One => self.replace_current(),
+                        ReplaceButton::All => self.replace_all(),
                     }
                     window.request_redraw();
                     return;

@@ -86,6 +86,8 @@ pub enum Command {
     ToggleTheme,
     /// Rechercher.
     Search,
+    /// Rechercher et remplacer.
+    Replace,
     /// Copier la sélection.
     Copy,
     /// Tout sélectionner.
@@ -132,6 +134,10 @@ pub enum Command {
     MarkRedaction,
     /// Appliquer les biffures.
     ApplyRedactions,
+    /// Protéger le document par un mot de passe.
+    Protect,
+    /// Retirer la protection d'un document chiffré.
+    Unprotect,
 }
 
 /// Une entrée de la palette.
@@ -159,6 +165,20 @@ pub fn describe(command: Command) -> Option<(&'static str, &'static str)> {
 
 /// Toutes les commandes, dans l'ordre d'affichage quand rien n'est filtré.
 const ENTRIES: &[Entry] = &[
+    Entry {
+        label: "Protéger par mot de passe",
+        shortcut: "",
+        keywords: "proteger mot de passe chiffrer securite password encrypt",
+        command: Command::Protect,
+        needs_document: true,
+    },
+    Entry {
+        label: "Retirer la protection",
+        shortcut: "",
+        keywords: "retirer protection dechiffrer mot de passe decrypt",
+        command: Command::Unprotect,
+        needs_document: true,
+    },
     Entry {
         label: "Paramètres",
         shortcut: "",
@@ -360,6 +380,13 @@ const ENTRIES: &[Entry] = &[
         shortcut: "Ctrl+F",
         keywords: "trouver chercher recherche texte occurrences",
         command: Command::Search,
+        needs_document: true,
+    },
+    Entry {
+        label: "Rechercher et remplacer",
+        shortcut: "Ctrl+H",
+        keywords: "remplacer substituer corriger partout texte",
+        command: Command::Replace,
         needs_document: true,
     },
     Entry {

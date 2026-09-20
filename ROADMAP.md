@@ -37,6 +37,7 @@ Livrable : rendu conforme à Acrobat sur le corpus, mesuré par comparaison d'im
 - [~] Ouverture (dialogue, ligne de commande, dépôt, mot de passe demandé pour les documents chiffrés), défilement continu, zoom, ajustement largeur, rendu sur fil séparé (interface jamais figée) ; rotation faite ; plein écran (F11), dispositions continu / page unique / deux pages (`ui/prefs.rs`), onglets (un par document, `ui/tabs.rs`, plusieurs fichiers en ligne de commande, Ctrl+Tab, Ctrl+W) et écran d'accueil avec les documents récents faits ; mode lecture à faire
 - [~] Navigation : liens cliquables (destinations explicites et nommées, actions nommées, URI ouvertes dans le navigateur, curseur main), signets (`acrux-features/navigation.rs`, `acr links/outline`) ; panneau latéral (F4 ou bouton) avec vignettes rendues par le fil de rendu (réordonnables par glisser-déposer) arbre de signets dépliable, liste des commentaires (clic = aller au commentaire) et calques cochables (`ui/panel.rs`, `acrux_render::layers` + `RenderOptions::layers`) ; onglet « Fichiers » des **pièces jointes** (clic = enregistrer par le dialogue système, bouton = joindre un fichier) ; **étiquettes de page** `/PageLabels` affichées et acceptées en saisie dans le champ de page et la barre d'état (`acrux-features/pagelabels.rs`, Ctrl+G) ; portfolios (`/Collection`) à faire
 - [x] Recherche : moteur (`text::find`) et interface (Ctrl+F, champ de saisie interne, surlignage des occurrences, Entrée / Maj+Entrée, compteur, parcours incrémental par tranches de 12 ms qui ne fige jamais la fenêtre — 210 pages et 2 790 occurrences restent fluides)
+- [x] Rechercher et remplacer (Ctrl+H) : second champ sous la recherche, boutons « Remplacer » et « Tout remplacer », remplacement chirurgical qui garde la police, le corps et la couleur de chaque occurrence (`render_worker::replace_all`, test `replace_corpus`)
 - [x] Sélection de texte (`acrux-app/selection.rs` : curseurs entre glyphes, glisser, double / triple clic, Maj+clic, multi-pages, curseur en I) et copie dans le presse-papiers (Ctrl+C, Ctrl+A)
 - [~] Impression (dialogue système, plage de pages, ajustement à la zone imprimable, rendu à la résolution de l'imprimante), plein écran (F11), navigation des champs au clavier (Tab / Entrée), préférences persistées (thème, disposition, zoom, panneau, fenêtre, fichiers récents) ; raccourcis configurables et localisation à faire
 - [x] Palette de commandes (Ctrl+Maj+P, `ui/palette.rs`) : toutes les commandes de l'application avec leur raccourci, filtrage par fragment, par sous-séquence et par synonyme, accents optionnels dans les deux sens ; tient lieu de barre de menus et de documentation vivante des raccourcis
@@ -183,11 +184,56 @@ Livrable : version 0.2, parité avec Acrobat Standard hors édition de texte.
   baisse. **Déplacement et redimensionnement** : un clic sélectionne le bloc (huit poignées), on le
   glisse ou l'on tire une poignée, le texte reflue dans la nouvelle largeur, des repères
   l'aimantent aux blocs voisins, et il ne peut pas sortir de la page (`edit_text::move_paragraph`).
-  À faire : déplacer une image dans le même mode ; blocs en biais (filigranes), opérations qui
-  dessinent deux textes à la fois ;
-  gras, italique, famille et couleur d'un bloc existant ; images dans le même mode
-  (« Modifier les objets » reste un outil à part) ; texte ajouté hors WinAnsi (police standard) ;
-  poignées pour élargir une zone.
+  **La frappe ne touche plus au document** : la police du bloc est chargée une fois
+  (`edit_text::LiveText`), chaque lettre n'est plus qu'une mise en page en mémoire, et c'est
+  l'application qui dessine les glyphes par-dessus le texte d'origine masqué. Le document n'est
+  réécrit **qu'à la sortie du bloc**, en une opération d'annulation — la frappe est donc
+  instantanée quelle que soit la page, et ce qu'on voit en tapant est au pixel près ce qui sera
+  écrit (test `live_text_corpus`). Les lettres absentes du sous-ensemble incorporé sont empruntées
+  à la police système le temps de la saisie.
+  **Comme dans Acrobat** : un seul clic ouvre le bloc et y pose le curseur ; le cadre porte huit
+  poignées rondes et une bordure qui déplace ; déplacer ou redimensionner **reflue le texte en
+  direct**, sans rien écrire ; « cliquer à côté » valide.
+  **Les styles sont conservés** (`edit_text::Styles`) : le style de chaque caractère — police,
+  corps, couleur — est relevé à l'ouverture, reporté sur le texte modifié (ce qui n'a pas bougé
+  garde le sien, ce qu'on tape prend celui de son voisin de gauche) et rendu à l'écriture, tranche
+  par tranche. Modifier une ligne qui mêle gras, italique et lien ne l'aplatit plus (test
+  `styled_edit_corpus`).
+  **Le bloc reste posé après l'écriture**, comme une signature : cadre, poignées, déplacement au
+  glisser ou aux flèches, Suppr pour l'effacer, un clic dedans pour reprendre la frappe.
+  **Tout le texte du corpus se modifie** (186 blocs sur 186) : une opération qui dessine le
+  paragraphe **et** d'autres textes n'est plus refusée — on n'y retire que nos glyphes, en
+  plusieurs morceaux s'il le faut — et un texte **en biais** se recompose dans son repère, en
+  gardant son inclinaison.
+  **La mise en forme se change depuis la barre** : police (quatre familles), gras, italique,
+  alignement (quatre boutons dessinés) et interligne, appliqués au bloc entier et visibles
+  aussitôt ; la barre se met au diapason du bloc ouvert. Une ligature absente de la police
+  choisie s'écrit en lettres, au lieu de disparaître.
+  À faire : rotation d'un bloc **par l'utilisateur** ; mise en forme d'une **partie** du bloc
+  (la sélection) et non du bloc entier ; déplacer une image dans le même mode ; aperçu en direct
+  d'un bloc en biais (il repasse aujourd'hui par le document).
+- [x] **Modifier le texte d'une image** (`acrux-features/src/ocr/`, `acr` à venir) : un document
+  scanné ne porte pas de texte, seulement des pixels. Acrux les **relit** — séparation de l'encre
+  et du papier par le seuil d'Otsu, découpe en croix (colonnes puis lignes, la gouttière mesurée
+  en largeurs de lettre), puis comparaison de chaque tache aux formes des polices installées,
+  la place sur la ligne et la proportion départageant « o », « O » et « 0 ». La segmentation est
+  arbitrée par la reconnaissance elle-même : une tache qui se lit mal et dont les moitiés se
+  lisent bien était deux lettres collées. Rien n'est appris : les modèles sont les vraies polices
+  du système, dessinées et relues **par le même chemin** que l'image.
+  Dans « Modifier le PDF », cliquer sur du texte d'image l'ouvre comme du vrai texte ; à
+  l'écriture, les pixels d'origine sont couverts de la couleur du papier et le texte est posé
+  par-dessus, dans une police, sélectionnable et cherchable. Mesure sur une page réelle rendue en
+  300 ppp : **0,09 d'écart d'édition moyen**, la moitié des lignes lues exactement
+  (`ocr_corpus`). En deçà de 250 ppp la lecture se dégrade vite — c'est la limite de toute
+  reconnaissance, et la confiance rendue avec chaque ligne le dit.
+  À faire : en-têtes minuscules (moins de 20 px de corps), écriture manuscrite, pages de travers
+  (redressement), tableaux.
+- [x] **Protéger un document par mot de passe** depuis l'application (`Command::Protect`) : le mot
+  de passe est demandé deux fois, masqué — une faute de frappe enfermerait le document —, le
+  document est chiffré (`Document::protect`, AES) puis réécrit en entier, et le mot de passe est
+  redemandé à l'ouverture. Sur un document déjà protégé, la même entrée propose de changer le mot
+  de passe ou de retirer la protection. Le chiffrement existait dans la bibliothèque et en ligne
+  de commande ; il manquait à l'interface.
 - [x] **Les questions d'Acrux sont dessinées par Acrux** (`acrux-app/src/ui/dialog.rs`,
   `acrux-app/src/viewer/dialogs.rs`) : plus de boîte du système. Les boutons nomment l'action
   (« Enregistrer », « Ne pas enregistrer », « Annuler »), la fenêtre ne bloque pas le programme —

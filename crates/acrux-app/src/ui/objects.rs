@@ -29,7 +29,7 @@
 
 use acrux_core::Rect;
 
-use crate::platform::Frame;
+use crate::platform::{Cursor, Frame};
 use crate::ui::theme::Theme;
 
 /// Rectangle en pixels de la vue.
@@ -129,6 +129,19 @@ impl Handle {
     #[must_use]
     pub fn changes_height(self) -> bool {
         !matches!(self, Handle::Left | Handle::Right | Handle::Body)
+    }
+
+    /// Pointeur qui convient à cette poignée : comme dans Acrobat, la flèche
+    /// dit dans quel sens la boîte va s'étirer.
+    #[must_use]
+    pub fn cursor(self) -> Cursor {
+        match self {
+            Handle::Left | Handle::Right => Cursor::ResizeWE,
+            Handle::Top | Handle::Bottom => Cursor::ResizeNS,
+            Handle::TopLeft | Handle::BottomRight => Cursor::ResizeNWSE,
+            Handle::TopRight | Handle::BottomLeft => Cursor::ResizeNESW,
+            Handle::Body => Cursor::Move,
+        }
     }
 }
 
@@ -230,24 +243,29 @@ pub fn paint_selection(
     frame.fill_rect(x, y, thickness, h, r, g, b);
     frame.fill_rect(x + w - thickness, y, thickness, h, r, g, b);
 
-    let size = (HANDLE * f64::from(dpi)) as i32;
+    // Les poignées sont **rondes**, comme celles d'Acrobat : un disque blanc
+    // cerné d'accent, qui se remplit quand le pointeur le touche.
+    let size = (HANDLE * f64::from(dpi)).round().max(6.0);
+    let radius = size / 2.0;
     for handle in Handle::ALL {
         let (ax, ay) = handle.anchor();
         let hx = box_.x + ax * box_.w;
         let hy = box_.y + (1.0 - ay) * box_.h;
-        let (px, py) = ((hx as i32) - size / 2, (hy as i32) - size / 2);
-        // Un liseré clair autour : la poignée reste visible sur un fond de
-        // la même couleur qu'elle.
-        frame.fill_rect(px - 1, py - 1, size + 2, size + 2, 0xFF, 0xFF, 0xFF);
+        let (px, py) = ((hx - radius) as i32, (hy - radius) as i32);
+        let carre = size as i32;
         let filled = hovered == Some(handle);
-        let (hr, hg, hb) = if filled {
-            (0xFF, 0xFF, 0xFF)
-        } else {
-            (r, g, b)
-        };
-        frame.fill_rect(px, py, size, size, hr, hg, hb);
-        if filled {
-            frame.fill_rect(px + 1, py + 1, size - 2, size - 2, r, g, b);
+        crate::ui::paint::round_rect(frame, px, py, carre, carre, radius as f32, (r, g, b));
+        if !filled {
+            let inset = (f64::from(dpi)).round().max(1.0) as i32;
+            crate::ui::paint::round_rect(
+                frame,
+                px + inset,
+                py + inset,
+                (carre - 2 * inset).max(1),
+                (carre - 2 * inset).max(1),
+                (radius - f64::from(inset)) as f32,
+                (0xFF, 0xFF, 0xFF),
+            );
         }
     }
 }

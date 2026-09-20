@@ -38,6 +38,10 @@ pub struct RenderRequest {
 /// Modification du document, appliquée à l'identique par le visualiseur et
 /// par le fil de rendu (chacun possède sa copie du document).
 #[derive(Debug, Clone)]
+// Une opération de texte porte deux boîtes de paragraphe, plus grosses que
+// les autres variantes : les mettre derrière un pointeur ferait une
+// indirection à chaque frappe pour économiser quelques octets par message.
+#[allow(clippy::large_enum_variant)]
 pub enum EditOp {
     /// Pivoter des pages (multiple de 90°).
     Rotate {
@@ -72,6 +76,13 @@ pub enum EditOp {
         end: usize,
         /// Texte de remplacement.
         text: String,
+    },
+    /// Remplacer un texte partout dans le document.
+    ReplaceAll {
+        /// Texte cherché (la casse est ignorée).
+        find: String,
+        /// Texte de remplacement.
+        with: String,
     },
     /// Modifier un objet de la page : déplacer, redimensionner, supprimer,
     /// réordonner.
@@ -166,6 +177,7 @@ impl EditOp {
     ///
     /// # Errors
     /// Page absente ou document illisible.
+    #[allow(clippy::too_many_lines)] // une branche par sorte de modification
     pub fn apply(&self, doc: &Document) -> acrux_core::Result<()> {
         match self {
             EditOp::Rotate { pages, degrees } => {
@@ -202,6 +214,7 @@ impl EditOp {
                     style: None,
                 }],
             ),
+            EditOp::ReplaceAll { find, with } => replace_all(doc, find, with).map(|_| ()),
             EditOp::EditObject { page, edits } => {
                 let pages = acrux_document::collect_pages(doc)?;
                 let target = pages.get(*page).ok_or_else(|| {
@@ -624,4 +637,39 @@ impl Drop for RenderWorker {
             drop(h);
         }
     }
+}
+
+/// Remplace toutes les occurrences d'un texte dans le document.
+///
+/// La réécriture est **chirurgicale** : chaque occurrence garde la police,
+/// le corps et la couleur de ce qu'elle remplace, et le reste de la page ne
+/// bouge pas d'un glyphe. Rend le nombre d'occurrences remplacées.
+///
+/// # Errors
+/// Page illisible, ou réécriture impossible.
+pub fn replace_all(doc: &Document, find: &str, with: &str) -> acrux_core::Result<usize> {
+    if find.is_empty() {
+        return Ok(0);
+    }
+    let pages = acrux_document::collect_pages(doc)?;
+    let mut edits = Vec::new();
+    for (index, page) in pages.iter().enumerate() {
+        let Ok(text) = acrux_features::text::extract_page_text(doc, page) else {
+            continue;
+        };
+        for target in acrux_features::edit_text::find_ranges(&text, find) {
+            edits.push(TextEdit {
+                page: index,
+                target,
+                new_text: with.to_string(),
+                style: None,
+            });
+        }
+    }
+    if edits.is_empty() {
+        return Ok(0);
+    }
+    let count = edits.len();
+    apply_edits(doc, &edits)?;
+    Ok(count)
 }

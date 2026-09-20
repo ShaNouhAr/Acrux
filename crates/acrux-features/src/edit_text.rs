@@ -65,7 +65,9 @@
 //! ```
 
 mod encode;
+pub mod live;
 mod reflow;
+pub mod runs;
 mod scan;
 
 use std::collections::{HashMap, HashSet};
@@ -79,8 +81,12 @@ use acrux_render::page::page_content;
 
 use crate::text::{extract_page_text, Glyph, PageText};
 
+pub use live::{Face, LaidText, LaidTextLine, LiveText, PlacedGlyph};
+pub use runs::{Run, Styles};
 pub use reflow::{
-    line_at, line_unit, move_paragraph, new_text_frame, normalized, open_paragraph, open_unit,
+    line_at, line_unit, move_paragraph, move_paragraph_styled, new_text_frame, normalized,
+    FaceChoice,
+    open_paragraph, open_unit,
     reflow_paragraph, set_paragraph_text, text_frame_at, text_units, CaretLine, CaretMap,
     CaretStop, NewTextStyle, OpenedParagraph, ParagraphFrame, Piece, ReflowOptions, TextUnit,
 };

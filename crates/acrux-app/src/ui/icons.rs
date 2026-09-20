@@ -84,6 +84,8 @@ pub enum Icon {
     Export,
     /// Trombone (joindre un fichier).
     Attach,
+    /// Cadenas fermé (protéger par mot de passe).
+    Lock,
 }
 
 /// Contour d'une page, motif commun à beaucoup d'icônes.
@@ -349,6 +351,19 @@ pub fn geometry(icon: Icon) -> (Path, Path) {
             page(&mut lines, 5.0, 3.5, 14.0, 17.0);
             polyline(&mut lines, &[(9.0, 9.0), (15.0, 15.0)]);
             polyline(&mut lines, &[(15.0, 9.0), (9.0, 15.0)]);
+        }
+        Icon::Lock => {
+            // Un cadenas : le corps plein, l'anse au-dessus.
+            bar(&mut fills, 5.5, 11.0, 13.0, 9.5);
+            // L'anse : deux montants et un demi-cercle approché par une
+            // polyligne — assez fine pour se lire à seize pixels.
+            let mut anse = vec![(8.5, 11.0), (8.5, 7.5)];
+            for step in 0..=8 {
+                let angle = std::f64::consts::PI * (1.0 - f64::from(step) / 8.0);
+                anse.push((12.0 + 3.5 * angle.cos(), 7.5 - 3.5 * angle.sin()));
+            }
+            anse.push((15.5, 11.0));
+            polyline(&mut lines, &anse);
         }
         Icon::Redact => {
             page(&mut lines, 5.0, 3.5, 14.0, 17.0);

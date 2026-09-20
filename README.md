@@ -260,6 +260,7 @@ dans la barre d'outils et « page iii (3 / 240) » dans la barre d'état, et sai
 | glisser sur le texte | sélectionner (double-clic : mot, triple-clic : ligne, `Maj+clic` : étendre) |
 | `Ctrl+C`, `Ctrl+A` | copier, tout sélectionner |
 | `Ctrl+F` | rechercher (`Entrée` / `Maj+Entrée` : occurrence suivante / précédente) |
+| `Ctrl+H` | rechercher et remplacer (`Tab` : d'un champ à l'autre, `Entrée` : remplacer, ou « Tout remplacer ») |
 
 | Modifier | |
 | --- | --- |

@@ -182,6 +182,8 @@ pub struct Prefs {
     pub two_up_cover: bool,
     /// Taille de la fenêtre au dernier arrêt, en pixels logiques.
     pub window: (u32, u32),
+    /// La fenêtre était agrandie à la fermeture.
+    pub window_max: bool,
     /// Vérifier l'existence d'une version plus récente au démarrage, au plus
     /// une fois par jour.
     pub check_updates: bool,
@@ -216,6 +218,7 @@ impl Default for Prefs {
             zoom: 1.0,
             two_up_cover: false,
             window: (1100, 900),
+            window_max: false,
             check_updates: true,
             last_update_check: 0,
             signatures: Vec::new(),
@@ -304,6 +307,7 @@ impl Prefs {
                     }
                 }
                 "two-up-cover" => p.two_up_cover = value == "1" || value == "true",
+                "window-max" => p.window_max = value == "1",
                 "window" => {
                     if let Some((w, h)) = value.split_once('x') {
                         if let (Ok(w), Ok(h)) = (w.trim().parse(), h.trim().parse()) {
@@ -351,6 +355,7 @@ impl Prefs {
         let _ = writeln!(out, "zoom={}", self.zoom);
         let _ = writeln!(out, "two-up-cover={}", u8::from(self.two_up_cover));
         let _ = writeln!(out, "window={}x{}", self.window.0, self.window.1);
+        let _ = writeln!(out, "window-max={}", u8::from(self.window_max));
         let _ = writeln!(out, "langue={}", self.language);
         let _ = writeln!(out, "mises-a-jour={}", u8::from(self.check_updates));
         let _ = writeln!(out, "derniere-verification={}", self.last_update_check);
@@ -405,6 +410,7 @@ mod tests {
             zoom: 1.25,
             two_up_cover: true,
             window: (1440, 960),
+            window_max: false,
             check_updates: false,
             last_update_check: 20_350,
             signatures: vec!["typed:Élise Marchand".into()],

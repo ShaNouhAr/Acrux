@@ -105,11 +105,19 @@ pub enum Cursor {
     Pen,
     /// Poser un élément : signature, paraphe, marque.
     Place,
+    /// Redimensionner en largeur (bords gauche et droit).
+    ResizeWE,
+    /// Redimensionner en hauteur (bords haut et bas).
+    ResizeNS,
+    /// Redimensionner en diagonale « ↘ » (coins haut-gauche, bas-droit).
+    ResizeNWSE,
+    /// Redimensionner en diagonale « ↗ » (coins haut-droit, bas-gauche).
+    ResizeNESW,
 }
 
 impl Cursor {
     /// Nombre de pointeurs.
-    pub const COUNT: usize = 10;
+    pub const COUNT: usize = 14;
 }
 
 /// Modificateurs enfoncés.
@@ -358,6 +366,15 @@ pub trait WindowHandle {
     fn waker(&self) -> Box<dyn Waker>;
     /// Change la forme du pointeur (appliquée jusqu'au prochain changement).
     fn set_cursor(&mut self, cursor: Cursor);
+
+    /// Vrai si la fenêtre occupe tout l'écran de bureau (bouton « agrandir »).
+    ///
+    /// Une fenêtre agrandie doit être **rouverte agrandie** : rouvrir à sa
+    /// taille en fenêtre ordinaire la ferait déborder de l'écran, et la
+    /// moitié droite de l'interface se retrouverait hors de vue.
+    fn maximised(&self) -> bool {
+        false
+    }
     /// Place du texte dans le presse-papiers du système.
     fn set_clipboard_text(&mut self, text: &str);
     /// Texte du presse-papiers du système, s'il en contient.
@@ -417,14 +434,20 @@ pub trait App {
 ///
 /// # Errors
 /// Impossible de créer la fenêtre.
-pub fn run(title: &str, width: u32, height: u32, app: Box<dyn App>) -> Result<(), String> {
+pub fn run(
+    title: &str,
+    width: u32,
+    height: u32,
+    maximised: bool,
+    app: Box<dyn App>,
+) -> Result<(), String> {
     #[cfg(windows)]
     {
-        win32::run(title, width, height, app)
+        win32::run(title, width, height, maximised, app)
     }
     #[cfg(not(windows))]
     {
-        let _ = (title, width, height, app);
+        let _ = (title, width, height, maximised, app);
         Err("plateforme non prise en charge pour l'instant (Windows uniquement)".into())
     }
 }

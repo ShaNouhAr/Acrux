@@ -841,8 +841,19 @@ pub fn fill_outline(
     if outline.is_empty() {
         return;
     }
+    fill_path(frame, raster, &path_of(outline), matrix, color);
+}
+
+/// Remplit un tracé quelconque — un glyphe, par exemple — dans la fenêtre.
+pub fn fill_path(
+    frame: &mut Frame<'_>,
+    raster: &mut Rasterizer,
+    path: &Path,
+    matrix: &Matrix,
+    color: (u8, u8, u8),
+) {
     let (w, h) = (frame.width, frame.height);
-    let mask = raster.path_coverage(&path_of(outline), matrix, FillRule::NonZero, w, h);
+    let mask = raster.path_coverage(path, matrix, FillRule::NonZero, w, h);
     let data = mask.data();
     let bounds = mask.bounds();
     let (x0, y0) = (bounds.0, bounds.1);

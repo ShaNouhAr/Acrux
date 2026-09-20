@@ -50,9 +50,28 @@ pub enum BarAction {
     Larger,
     /// Choisir une couleur de la palette.
     Color(usize),
+    /// Police suivante de la liste.
+    NextFamily,
+    /// Gras.
+    Bold,
+    /// Italique.
+    Italic,
+    /// Alignement du bloc.
+    Align(usize),
+    /// Interligne plus serré.
+    Tighter,
+    /// Interligne plus large.
+    Looser,
     /// Quitter le mode.
     Close,
 }
+
+/// Familles proposées : celles qu'un document emploie neuf fois sur dix, et
+/// que toute machine sait dessiner.
+pub const FAMILIES: [&str; 4] = ["Helvetica", "Times New Roman", "Courier New", "Verdana"];
+
+/// Alignements, dans l'ordre des boutons.
+pub const ALIGNMENTS: [&str; 4] = ["gauche", "centré", "droite", "justifié"];
 
 /// Couleurs proposées pour le texte ajouté : noir, gris, bleu, rouge, vert.
 ///
@@ -294,6 +313,10 @@ pub fn color_index(color: [f64; 3]) -> usize {
 
 /// Barre du mode, sous la barre d'outils.
 #[derive(Debug)]
+// Gras, italique, corps imposé, couleur imposée, bloc ouvert : cinq
+// interrupteurs indépendants, qu'un regroupement artificiel n'éclaircirait
+// pas.
+#[allow(clippy::struct_excessive_bools)]
 pub struct EditBar {
     /// Outil actif.
     pub tool: EditTool,
@@ -303,6 +326,19 @@ pub struct EditBar {
     pub color: usize,
     /// Corps du paragraphe en cours, à afficher à la place du défaut.
     pub active_size: Option<f64>,
+    /// Police du bloc en cours : rang dans [`FAMILIES`], ou rien quand le
+    /// bloc garde la sienne.
+    pub family: Option<usize>,
+    /// Gras du bloc en cours.
+    pub bold: bool,
+    /// Italique du bloc en cours.
+    pub italic: bool,
+    /// Alignement du bloc en cours (rang dans [`ALIGNMENTS`]).
+    pub align: usize,
+    /// Interligne du bloc en cours, en corps (1,2 = 120 %).
+    pub leading: f64,
+    /// Un bloc est ouvert : les réglages agissent sur lui.
+    pub editing: bool,
     /// Le corps a été choisi dans la barre : il s'impose au texte ajouté,
     /// qui sinon prend celui du texte voisin.
     pub size_set: bool,
@@ -319,6 +355,12 @@ impl Default for EditBar {
             size: 12.0,
             color: 0,
             active_size: None,
+            family: None,
+            bold: false,
+            italic: false,
+            align: 0,
+            leading: 1.2,
+            editing: false,
             size_set: false,
             color_set: false,
             hits: Vec::new(),
@@ -500,6 +542,133 @@ impl EditBar {
             x += swatch + (8.0 * dpi) as i32;
         }
 
+        // Mise en forme du bloc ouvert : police, graisse, alignement,
+        // interligne. Ce sont les réglages d'Acrobat, et ils n'ont de sens
+        // que lorsqu'un bloc est ouvert.
+        if self.editing {
+            x += (10.0 * dpi) as i32;
+            separator(frame, theme, x, top, inner);
+            x += (14.0 * dpi) as i32;
+
+            // La police : un bouton qui fait défiler les familles.
+            let family = self
+                .family
+                .and_then(|i| FAMILIES.get(i))
+                .copied()
+                .unwrap_or("Police du texte");
+            // Largeur figée sur le plus long des noms : sans cela, changer de
+            // police déplacerait tous les boutons suivants sous le pointeur.
+            let widest = FAMILIES
+                .iter()
+                .chain(std::iter::once(&"Police du texte"))
+                .map(|f| text.measure(size, f) as i32)
+                .max()
+                .unwrap_or(0);
+            let fw_label = widest + (22.0 * dpi) as i32;
+            frame.fill_rect(
+                x,
+                top,
+                fw_label,
+                inner,
+                theme.hover.0,
+                theme.hover.1,
+                theme.hover.2,
+            );
+            text.draw(
+                frame,
+                (x + (11.0 * dpi) as i32) as f32,
+                b,
+                size,
+                family,
+                theme.text,
+            );
+            self.hits.push((x, top, fw_label, inner, BarAction::NextFamily));
+            x += fw_label + (8.0 * dpi) as i32;
+
+            // Gras et italique.
+            for (label, on, action) in [
+                ("G", self.bold, BarAction::Bold),
+                ("I", self.italic, BarAction::Italic),
+            ] {
+                let bw = button;
+                let (fill, ink) = if on {
+                    (theme.accent, (255, 255, 255))
+                } else {
+                    (theme.hover, theme.text)
+                };
+                frame.fill_rect(x, top, bw, inner, fill.0, fill.1, fill.2);
+                let lw = text.measure(size, label);
+                text.draw(
+                    frame,
+                    x as f32 + (bw as f32 - lw) / 2.0,
+                    b,
+                    size,
+                    label,
+                    ink,
+                );
+                self.hits.push((x, top, bw, inner, action));
+                x += bw + (4.0 * dpi) as i32;
+            }
+            x += (6.0 * dpi) as i32;
+
+            // Alignement : quatre boutons dessinés en barres, celui du bloc
+            // allumé. Les glyphes d'alignement d'Unicode manquent à trop de
+            // polices pour qu'on s'y fie.
+            for i in 0..ALIGNMENTS.len() {
+                let bw = button;
+                let on = self.align == i;
+                let (fill, ink) = if on {
+                    (theme.accent, (255, 255, 255))
+                } else {
+                    (theme.hover, theme.text)
+                };
+                frame.fill_rect(x, top, bw, inner, fill.0, fill.1, fill.2);
+                align_icon(frame, x, top, bw, inner, dpi, i, ink);
+                self.hits.push((x, top, bw, inner, BarAction::Align(i)));
+                x += bw + (4.0 * dpi) as i32;
+            }
+            x += (6.0 * dpi) as i32;
+
+            // Interligne.
+            text.draw(frame, x as f32, b, size, "Interligne", theme.text_dim);
+            x += text.measure(size, "Interligne") as i32 + (8.0 * dpi) as i32;
+            for (label, action) in [("−", BarAction::Tighter), ("+", BarAction::Looser)] {
+                if action == BarAction::Looser {
+                    let value = format!("{:.2}", self.leading);
+                    let vw = text.measure(size, &value) as i32;
+                    text.draw(
+                        frame,
+                        (x + (4.0 * dpi) as i32) as f32,
+                        b,
+                        size,
+                        &value,
+                        theme.text,
+                    );
+                    x += vw + (8.0 * dpi) as i32;
+                }
+                frame.fill_rect(
+                    x,
+                    top,
+                    button,
+                    inner,
+                    theme.hover.0,
+                    theme.hover.1,
+                    theme.hover.2,
+                );
+                let lw = text.measure(size, label);
+                text.draw(
+                    frame,
+                    x as f32 + (button as f32 - lw) / 2.0,
+                    b,
+                    size,
+                    label,
+                    theme.text,
+                );
+                self.hits.push((x, top, button, inner, action));
+                x += button + (4.0 * dpi) as i32;
+            }
+        }
+
         // Terminer, à droite.
         let label = "Terminer";
         let w = text.measure(size, label) as i32 + (26.0 * dpi) as i32;
@@ -524,6 +693,47 @@ impl EditBar {
             );
             self.hits.push((bx, top, w, inner, BarAction::Close));
         }
+    }
+}
+
+/// Quatre barres qui disent l'alignement : à gauche, centrées, à droite, ou
+/// toutes pleines pour le justifié.
+// Le cadre, sa boîte, l'échelle, la sorte et l'encre : huit valeurs, toutes
+// nécessaires au dessin.
+#[allow(clippy::too_many_arguments)]
+fn align_icon(
+    frame: &mut Frame<'_>,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    dpi: f32,
+    kind: usize,
+    ink: (u8, u8, u8),
+) {
+    let thick = (1.5 * dpi).max(1.0) as i32;
+    let gap = (3.0 * dpi).max(2.0) as i32;
+    let full = (w as f32 * 0.56) as i32;
+    let short = (full as f32 * 0.62) as i32;
+    let total = thick * 4 + gap * 3;
+    let mut ly = y + (h - total) / 2;
+    for row in 0..4 {
+        // Une ligne sur deux est courte, comme un vrai paragraphe ; un texte
+        // justifié n'a que sa dernière ligne courte.
+        let len = if kind == 3 {
+            if row < 3 { full } else { short }
+        } else if row % 2 == 0 {
+            full
+        } else {
+            short
+        };
+        let lx = match kind {
+            1 => x + (w - len) / 2,
+            2 => x + (w + full) / 2 - len,
+            _ => x + (w - full) / 2,
+        };
+        frame.fill_rect(lx, ly, len, thick, ink.0, ink.1, ink.2);
+        ly += thick + gap;
     }
 }
 

@@ -110,6 +110,50 @@ au point près, `[` `]` pour l'ordre, Suppr pour retirer.
 
 Tests : `tests/edit_objects_corpus.rs`.
 
+## Lire le texte d'une image (`ocr`)
+
+Un document scanné ne porte pas de texte, seulement des pixels. Ce module les
+relit, pour qu'on puisse **modifier** ce texte comme n'importe quel autre.
+
+La chaîne tient en trois temps, et chacun a son fichier :
+
+1. `ocr::image` sépare **l'encre du papier** par le seuil d'Otsu (1979) —
+   celui qui rend les deux groupes de pixels les plus distincts possible.
+   Aucun réglage à donner : c'est l'histogramme de l'image qui décide. Le
+   module garde aussi la **couverture** en demi-teintes, car comparer des
+   formes demande le lissage, pas seulement le noir et blanc.
+2. `ocr::segment` découpe, par la méthode dite **en croix** : ce que des
+   rangées blanches séparent, puis ce que des colonnes blanches séparent, et
+   l'on recommence. Un en-tête qui traverse la page se détache ainsi du
+   corps, et le corps se sépare alors en colonnes. La gouttière se mesure en
+   **largeurs de lettre** — trois lettres séparent deux colonnes, une seule
+   sépare deux mots.
+3. `ocr::shapes` reconnaît : chaque tache est ramenée à une grille de 16 × 16
+   et comparée aux mêmes grilles tirées des **polices installées sur la
+   machine**. Deux mesures s'ajoutent à la forme, sans lesquelles « o », « O »
+   et « 0 » seraient indiscernables : la proportion de la boîte, et sa place
+   par rapport à la ligne de base, en hauteurs d'x.
+
+Deux choix font toute la précision :
+
+- **Les modèles sont dessinés puis relus par le même chemin que l'image** —
+  même lissage, même binarisation, même grille. Un contour rasterisé
+  directement en seize cases ne ressemble pas à une lettre photographiée puis
+  réduite, et l'appariement s'effondre.
+- **La segmentation est arbitrée par la reconnaissance.** Deux lettres qui se
+  touchent ne font qu'une tache ; aucune mesure géométrique ne les distingue
+  d'un « m », qui a lui aussi un creux au milieu. On lit donc la tache
+  entière, puis ses deux moitiés, et l'on garde ce qui se lit le mieux.
+
+Rien n'est appris. Le taux de reconnaissance mesuré sur les polices du
+système va de 98 % à 100 % dès 28 pixels de corps, 85 % à 20 pixels, 41 % à
+14 — c'est la résolution qui commande, comme pour toute reconnaissance. Sur
+une vraie page rendue en 300 ppp, l'écart d'édition moyen est de **0,09**.
+
+`ocr::mask` couvre une zone de la page d'un rectangle plein : c'est ce qui
+efface le texte d'origine avant d'écrire le nouveau par-dessus. L'image
+elle-même n'est jamais touchée.
+
 ## Remplir et signer (`fillsign`)
 
 L'outil le plus utilisé d'Acrobat, et le sens courant de « signer un PDF » :

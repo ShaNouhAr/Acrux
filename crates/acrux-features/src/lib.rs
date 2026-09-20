@@ -47,6 +47,7 @@ pub mod forms;
 pub mod linkedit;
 pub mod media;
 pub mod navigation;
+pub mod ocr;
 pub mod outline_edit;
 pub mod pagelabels;
 pub mod pages;

@@ -113,6 +113,12 @@ const ROWS: &[Row] = &[
         true,
     ),
     Row::Heading("Protéger"),
+    Row::Tool(
+        "Protéger par mot de passe",
+        Icon::Lock,
+        Command::Protect,
+        true,
+    ),
     Row::Tool("Biffer", Icon::Redact, Command::RedactTool, true),
     Row::Tool(
         "Appliquer les biffures",

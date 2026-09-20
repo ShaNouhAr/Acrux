@@ -7,6 +7,165 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
+## 0.17.0 — 20 septembre 2026
+
+### Rechercher et remplacer
+
+- **Ctrl+H** ouvre, sous le champ de recherche, un champ **« Remplacer par… »**
+  et deux boutons : **Remplacer** (l'occurrence surlignée, puis on passe à la
+  suivante) et **Tout remplacer** (le document entier, d'un seul geste
+  annulable). La tabulation passe d'un champ à l'autre, Entrée dans le second
+  remplace. C'était l'une des fonctions d'Acrobat qui nous manquaient.
+- Le remplacement n'est pas une refonte du document : c'est la même écriture
+  chirurgicale que la modification de texte. Chaque occurrence garde la
+  **police, le corps et la couleur** de ce qu'elle remplace, et le reste de la
+  page ne bouge pas d'un glyphe (test `replace_corpus`).
+- Le bandeau **reste ouvert** après un remplacement, et le document est
+  reparcouru : on enchaîne les occurrences sans rouvrir la recherche.
+
+### Ctrl+Z pendant la frappe
+
+- Annuler une lettre effacée en pleine modification de texte se comportait
+  étrangement : Ctrl+Z ne défaisait pas la frappe, il **refermait le bloc** et
+  annulait toute la séance. Le mode de saisie a désormais sa propre pile :
+  Ctrl+Z défait la dernière frappe, Ctrl+Y la refait, et le bloc reste ouvert.
+- Le découpage suit celui d'un traitement de texte : les caractères qui se
+  suivent forment **une seule étape**, et l'on coupe quand on change de geste
+  (taper puis effacer), qu'on déplace le curseur, ou qu'on tape un blanc ou
+  une ponctuation — Ctrl+Z défait donc un mot, jamais toute une phrase.
+- Quand il n'y a plus rien à défaire dans le bloc, Ctrl+Z le referme et rend
+  la main à l'annulation du document, comme avant.
+
+### Mettre le texte en forme, comme dans Acrobat
+
+- La barre du mode « Modifier le PDF » porte désormais, dès qu'un bloc est
+  ouvert : **police** (quatre familles qui défilent), **gras**, **italique**,
+  **alignement** (gauche, centré, droite, justifié, dessinés en barres comme
+  dans Acrobat) et **interligne**. Tout s'applique au bloc entier et se voit
+  immédiatement, sans rien écrire dans le fichier avant la sortie du bloc.
+- La barre se met au diapason du bloc ouvert : on y lit son corps, son
+  alignement et son interligne au lieu de réglages valables pour un autre.
+- Le bouton de police garde une **largeur fixe** : changer de famille ne
+  déplace plus les boutons suivants sous le pointeur.
+
+### Une ligature ne perd plus de lettres
+
+- Changer la police d'un texte lui faisait perdre ses ligatures : le « ﬁ » de
+  « bénéficiez », absent de la nouvelle police, disparaissait purement et
+  simplement. Une ligature qu'une police ne connaît pas s'écrit désormais
+  **en lettres** (« ﬁ » → « f » puis « i »), à l'écriture comme à l'aperçu.
+  Même chose pour « œ », « æ », les guillemets courbes et les tirets longs.
+
+### La fenêtre se rouvre comme on l'a laissée
+
+- Agrandie à la fermeture, elle se rouvre **agrandie**. Elle mémorisait
+  jusqu'ici la taille du bureau entier mais se rouvrait en fenêtre ordinaire,
+  donc débordant de l'écran.
+
+### Tout le texte se modifie
+
+- Un paragraphe dessiné par une opération qui porte **aussi d'autres textes**
+  était refusé (« une opération dessine à la fois le paragraphe et d'autres
+  textes ») : c'est le cas de beaucoup de formulaires. On ne retire désormais
+  de l'opération que **nos** glyphes — en plusieurs morceaux s'il le faut — et
+  ce qui appartient aux voisins reste exactement où il est.
+- Un texte **en biais** — un filigrane — se modifie lui aussi : son
+  inclinaison est relevée, ses lignes se mettent en page dans son repère et se
+  posent tournées.
+- Sur le corpus d'épreuve, la part du texte modifiable passe de 94 % à
+  **100 %** (186 blocs sur 186), et le test interdit qu'elle baisse.
+
+### Protéger un document par mot de passe
+
+- Nouvelle entrée **« Protéger par mot de passe »** dans le panneau, sous
+  « Protéger » : le mot de passe est demandé deux fois (masqué), le document
+  est chiffré puis enregistré. Il sera redemandé à l'ouverture.
+- Sur un document déjà protégé, la même entrée propose de **changer le mot de
+  passe** ou de **retirer la protection**.
+- Le chiffrement existait dans la bibliothèque (`acr protect`) mais
+  l'application ne savait pas s'en servir : c'était l'une des fonctions
+  d'Acrobat qui nous manquaient.
+
+### Les styles d'un texte survivent à sa modification
+
+- Une ligne qui mêle du **gras**, de l'*italique*, un lien coloré ou deux
+  corps différents gardait jusqu'ici un seul style quand on la modifiait :
+  tout était aplati d'une même police. Le style de **chaque caractère** est
+  désormais relevé à l'ouverture, reporté à chaque frappe — ce qui n'a pas
+  bougé garde le sien, ce qu'on tape prend celui de son voisin de gauche — et
+  rendu à l'écriture, police par police et couleur par couleur.
+- L'aperçu les montre aussi : ce qu'on voit en tapant reste ce qu'on obtient.
+
+### Écrire, puis déplacer, comme une signature
+
+- **Une fois le texte écrit, le bloc reste posé** : son cadre et ses huit
+  poignées demeurent, on le glisse, on le redimensionne, exactement comme une
+  signature qu'on vient de poser. Un clic dedans rend la main au texte,
+  curseur au point cliqué.
+- On pose un bloc en cliquant à côté, ou avec **Échap** ; une seconde fois,
+  il se referme.
+- Sur un bloc posé : les **flèches** le déplacent au point près (dix avec
+  Maj), **Entrée** rouvre le texte, **Suppr** l'efface.
+
+### Corrections d'usage
+
+- **Glisser dans un texte le sélectionne** au lieu de déplacer le bloc : le
+  corps du cadre appartenait à tort aux poignées, et l'on ne pouvait plus
+  sélectionner un mot à la souris.
+- Le contour d'un glyphe est cherché dans **sa** police : une lettre d'un mot
+  en gras pouvait disparaître de l'aperçu.
+- Une zone de texte encore vide ne montre plus de cadre ni de poignées : un
+  clic dans le blanc ne couvre plus la page de repères.
+
+### La frappe est instantanée
+
+- **Taper ne réécrit plus le document.** La police du bloc est chargée une
+  fois à l'ouverture ; chaque lettre n'est plus qu'une mise en page en
+  mémoire, et c'est l'application qui dessine les glyphes, par-dessus le
+  texte d'origine masqué. Le fichier n'est écrit **qu'en sortant du bloc**.
+  Une frappe coûtait une trentaine de millisecondes sur une page ordinaire,
+  bien davantage sur une page chargée ; elle est désormais immédiate, quelle
+  que soit la page.
+- **Ce qu'on voit en tapant est ce qu'on obtient** : l'aperçu emploie la
+  mise en page qui écrira, et tombe à moins d'un centième de point de
+  l'écriture réelle (test `live_text_corpus`).
+- **Les lettres qui manquent à la police du PDF s'affichent quand même.** Une
+  police incorporée ne porte que les lettres déjà sur la page ; les autres
+  sont empruntées à la police système de la même famille le temps de la
+  saisie — celle-là même qui complétera le fichier à l'écriture.
+- **Toute une séance ne fait qu'une opération d'annulation** : frappe,
+  déplacement et redimensionnement compris.
+
+### Le texte se modifie comme dans Acrobat
+
+- **Un seul clic** ouvre un bloc et y pose le curseur. Il n'y a plus de
+  double-clic, ni d'état « sélectionné » séparé de l'écriture.
+- Le cadre porte **huit poignées rondes** ; sa bordure déplace le bloc, une
+  poignée le redimensionne, et **le texte reflue sous les yeux** — sans que
+  rien ne soit écrit avant la fin.
+- Le pointeur dit ce que fera le clic : flèches de redimensionnement sur les
+  poignées, croix de déplacement sur le bord, barre de texte dedans.
+- La touche majuscule retient un déplacement sur un axe ; les repères
+  d'alignement aimantent le bloc à ses voisins.
+- « Cliquer à côté » valide, comme dans Acrobat.
+
+### Modifier le texte d'une image
+
+- Un document **scanné** ne porte pas de texte : Acrux le relit. Encre et
+  papier séparés par le seuil d'Otsu, découpe en croix (colonnes, puis
+  lignes), puis chaque tache comparée aux formes des polices installées.
+- Dans « Modifier le PDF », **cliquer sur du texte d'image l'ouvre comme du
+  vrai texte**. À l'écriture, les pixels d'origine sont couverts de la
+  couleur du papier et le texte est posé par-dessus, dans une police, avec sa
+  graisse et son corps : il devient sélectionnable et cherchable.
+- Mesure sur une page réelle rendue en 300 ppp : **0,09 d'écart moyen**, la
+  moitié des lignes lues exactement. En deçà de 250 ppp la lecture se dégrade
+  — c'est la limite de toute reconnaissance, et la confiance rendue avec
+  chaque ligne le dit : une ligne mal lue n'est pas proposée à la
+  modification.
+- Rien n'est appris ni deviné : les modèles sont les **vraies polices du
+  système**, dessinées puis relues par le même chemin que l'image.
+
 ## 0.16.0 — 20 septembre 2026
 
 ### La page ne clignote plus quand on déplace

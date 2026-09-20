@@ -31,6 +31,8 @@ pub(super) enum Then {
     Settings,
     /// Réglages des mises à jour.
     Updates,
+    /// Document déjà protégé : changer le mot de passe, ou le retirer.
+    Protection,
 }
 
 /// Forme de la question, qui dit ce que veut chaque bouton.
@@ -92,6 +94,9 @@ impl Viewer {
         if index >= self.tab_count() {
             return;
         }
+        // Ce qui est tapé n'est pas encore au document : sans cela, on
+        // fermerait un onglet réputé intact en perdant la saisie.
+        self.close_active();
         let modified = if index == self.active_tab {
             self.loaded.as_ref().is_some_and(|l| l.modified)
         } else {
@@ -130,6 +135,9 @@ impl Viewer {
         if self.dialogs.iter().any(|d| matches!(d.then, Then::Quit)) {
             return;
         }
+        // La saisie en cours passe au document avant qu'on se demande s'il
+        // est modifié — sinon elle disparaîtrait sans un mot.
+        self.close_active();
         let active = self.loaded.as_ref().is_some_and(|l| l.modified);
         let others = self.others.iter().filter(|l| l.modified).count();
         let total = others + usize::from(active);
@@ -245,6 +253,11 @@ impl Viewer {
                     _ => {}
                 },
                 Then::Updates => self.updates_answer(index, window),
+                Then::Protection => match index {
+                    0 => self.ask_password(None),
+                    1 => self.remove_protection(),
+                    _ => {}
+                },
                 _ => {}
             }
             return;
@@ -265,7 +278,11 @@ impl Viewer {
         }
         match asking.then.clone() {
             // Rien à faire : un message, ou un choix déjà appliqué.
-            Then::Nothing | Then::Language | Then::Settings | Then::Updates => {}
+            Then::Nothing
+            | Then::Language
+            | Then::Settings
+            | Then::Updates
+            | Then::Protection => {}
             Then::CloseTab => {
                 let active = self.active_tab;
                 self.close_tab_now(active);

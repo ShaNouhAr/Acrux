@@ -139,6 +139,9 @@ static TABLE: &[(&str, &str)] = &[
     ("Aucune version plus récente n'a été trouvée.", "No newer version was found."),
     ("Biffer", "Redact"),
     ("Bleu", "Blue"),
+    ("Ce document est déjà protégé", "This document is already protected"),
+    ("Changer le mot de passe", "Change the password"),
+    ("Changer son mot de passe, ou retirer la protection ?", "Change its password, or remove the protection?"),
     ("Chercher au démarrage", "Check at startup"),
     ("Choisir un élément posé, le déplacer, le redimensionner", "Pick a placed item, move it, resize it"),
     ("Choisir une image…", "Choose an image…"),
@@ -146,6 +149,7 @@ static TABLE: &[(&str, &str)] = &[
     ("Cliquez sur la page et tapez", "Click the page and type"),
     ("Coche", "Check"),
     ("Commenter", "Comment"),
+    ("Confirmez le mot de passe", "Confirm the password"),
     ("Couleur", "Colour"),
     ("Croix", "Cross"),
     ("Créer un paraphe", "Create initials"),
@@ -185,6 +189,7 @@ static TABLE: &[(&str, &str)] = &[
     ("Modifier le PDF", "Edit PDF"),
     ("Modifier le texte", "Edit text"),
     ("Modifier les objets", "Edit objects"),
+    ("Mot de passe d'ouverture du document", "Password to open the document"),
     ("Moyen", "Medium"),
     ("Ne pas enregistrer", "Don't save"),
     ("Ne plus chercher", "Stop checking"),
@@ -201,11 +206,16 @@ static TABLE: &[(&str, &str)] = &[
     ("Point", "Dot"),
     ("Poser une note", "Add a note"),
     ("Protéger", "Protect"),
+    ("Protéger par mot de passe", "Protect with a password"),
     ("Quitter sans enregistrer", "Quit without saving"),
+    ("Rechercher et remplacer", "Find and replace"),
     ("Rechercher maintenant", "Check now"),
     ("Refaire", "Redo it"),
+    ("Remplacer", "Replace"),
+    ("Remplacer par…", "Replace with…"),
     ("Remplir et signer", "Fill and sign"),
     ("Retirer", "Remove"),
+    ("Retirer la protection", "Remove the protection"),
     ("Rond", "Circle"),
     ("Rouge", "Red"),
     ("Signature", "Signature"),
@@ -221,6 +231,7 @@ static TABLE: &[(&str, &str)] = &[
     ("Terminer", "Done"),
     ("Texte", "Text"),
     ("Tout enregistrer", "Save all"),
+    ("Tout remplacer", "Replace all"),
     ("Tracer", "Draw"),
     ("Tracez votre signature ici — Ctrl+Z défait le dernier trait", "Draw your signature here — Ctrl+Z undoes the last stroke"),
     ("Tracez à main levée", "Draw freehand"),
@@ -233,20 +244,32 @@ static TABLE: &[(&str, &str)] = &[
     ("accueil", "home"),
     ("activée", "on"),
     ("auto", "auto"),
+    ("bloc posé : glissez-le, tirez une poignée, ou cliquez dedans pour écrire", "block placed: drag it, pull a handle, or click inside to type"),
     ("bloc sélectionné : glissez pour le déplacer, les poignées pour le redimensionner, double-cliquez pour écrire", "block selected: drag to move it, the handles to resize it, double-click to type"),
     ("ce bloc ne peut pas être déplacé", "this block cannot be moved"),
+    ("ce document n'est pas protégé", "this document is not protected"),
     ("continu", "continuous"),
     ("continu, deux pages", "continuous, two pages"),
     ("deux pages", "two pages"),
+    ("document protégé : le mot de passe sera demandé à l'ouverture", "document protected: the password will be asked when opening it"),
     ("désactivée", "off"),
     ("largeur", "width"),
+    ("le texte de cette image n'a pas pu etre relu", "the text of this image could not be read"),
+    ("lecture du texte de l'image...", "reading the text in the image..."),
+    ("les deux saisies diffèrent", "the two entries differ"),
     ("mises à jour : recherche au démarrage", "updates: checking at startup"),
     ("mises à jour : recherche désactivée", "updates: checking off"),
+    ("occurrence introuvable", "occurrence not found"),
     ("ou déposez un PDF sur la fenêtre · Ctrl+Maj+P pour toutes les commandes", "or drop a PDF on the window · Ctrl+Shift+P for every command"),
     ("page", "page"),
     ("page unique", "single page"),
+    ("protection retirée : enregistrez pour l'appliquer", "protection removed: save to apply it"),
+    ("remplacer substituer corriger partout texte", "replace substitute correct everywhere text"),
+    ("texte de l'image reconnu : modifiez-le", "text recognised in the image: edit it"),
+    ("un mot de passe vide ne protège rien", "an empty password protects nothing"),
     ("{} documents ouverts ont été modifiés. Les enregistrer avant de quitter ?", "{} open documents have been modified. Save them before quitting?"),
     ("{} documents récents", "{} recent documents"),
+    ("{} occurrence(s) remplacée(s)", "{} occurrence(s) replaced"),
     ("« {} » a été modifié. Enregistrer les modifications avant de le fermer ?", "“{}” has been modified. Save the changes before closing it?"),
     ("« {} » a été modifié. Enregistrer les modifications avant de quitter ?", "“{}” has been modified. Save the changes before quitting?"),
     ("Épais", "Thick"),
@@ -255,6 +278,15 @@ static TABLE: &[(&str, &str)] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// La langue est **globale** : deux épreuves qui la changent en même
+    /// temps se marcheraient dessus. Elles passent donc l'une après l'autre.
+    static SEUL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Prend la langue pour soi le temps d'une épreuve.
+    fn seul() -> std::sync::MutexGuard<'static, ()> {
+        SEUL.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 
     #[test]
     fn la_table_est_triee_et_sans_doublon() {
@@ -270,6 +302,7 @@ mod tests {
 
     #[test]
     fn le_francais_se_rend_tel_quel() {
+        let _seul = seul();
         apply(Lang::French, Lang::English);
         assert_eq!(tr("Terminer"), "Terminer");
         assert!(!english());
@@ -277,6 +310,7 @@ mod tests {
 
     #[test]
     fn langlais_traduit_ce_quil_connait() {
+        let _seul = seul();
         apply(Lang::English, Lang::French);
         assert_eq!(tr("Terminer"), "Done");
         // Ce qui manque à la table reste lisible.
@@ -289,6 +323,7 @@ mod tests {
 
     #[test]
     fn auto_suit_le_systeme() {
+        let _seul = seul();
         apply(Lang::Auto, Lang::English);
         assert!(english());
         apply(Lang::Auto, Lang::French);
@@ -297,6 +332,7 @@ mod tests {
 
     #[test]
     fn les_trous_se_remplissent_dans_les_deux_langues() {
+        let _seul = seul();
         apply(Lang::French, Lang::French);
         assert_eq!(trf("{} documents récents", &["4"]), "4 documents récents");
         apply(Lang::English, Lang::French);
