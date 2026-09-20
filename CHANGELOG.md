@@ -17,6 +17,14 @@ c'est la section correspondante de ce fichier qui devient la page de version.
   bas tapées au clavier**, que l'outil texte ne savait pas viser ; un trait
   qui fait le bord d'un cadre n'en est pas une (`fillsign::boxes::field_lines`).
 
+- Le texte d'une ligne à remplir se pose **au-dessus du trait**, jambages
+  compris — et c'est vrai aussi du **deuxième clic** : tant qu'une zone de
+  saisie était ouverte, le clic suivant passait par l'éditeur de texte, qui
+  écrivait à l'endroit brut du clic, sur le trait. Il repasse maintenant par
+  « Remplir et signer », qui sait viser la ligne, la case ou le peigne.
+- Le harnais invisible a son presse-papiers d'essai (`ACRUX_CLIPBOARD`), pour
+  éprouver le collage sans toucher à celui de la personne.
+
 ## 0.22.0 — 20 septembre 2026
 
 - **Les peignes se remplissent** — BIC, IBAN, date : ces rangées de cases

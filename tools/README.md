@@ -26,6 +26,10 @@ Options passées à `Start-App` par la table `-Env`, par exemple pour répondre 
 Start-App $pdf -Env @{ ACRUX_SAVE_DIR = "C:\temp\sortie"; ACRUX_CONFIRM = "oui" }
 ```
 
+`ACRUX_CLIPBOARD` donne au mode invisible un presse-papiers d'essai (`` et `
+` en toutes
+lettres) : le vrai presse-papiers de la machine n'est jamais lu ni écrit.
+
 Les captures sont des PPM bruts ; `scratchpad/ppm2png.py` les convertit en PNG pour les regarder.
 
 `Drag` trace un geste continu (bouton enfoncé, une suite de points, relâchement) : c'est ce

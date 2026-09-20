@@ -987,6 +987,18 @@ impl Viewer {
             return true;
         }
         self.close_active();
+        // Au service de « remplir et signer », un clic ailleurs **repasse par
+        // lui** : c'est lui qui sait viser une ligne à remplir, une case, un
+        // peigne. Sans cela, le deuxième clic ouvrait une zone à l'endroit
+        // brut du clic — sur le trait, et non au-dessus comme le premier.
+        if self.edit_overlay() && self.sign_panel.is_some() {
+            if !self.place_sign(x, y, window) {
+                // Rien à remplir ici : l'écriture s'arrête là.
+                self.leave_edit();
+            }
+            window.request_redraw();
+            return true;
+        }
         match tool {
             EditTool::AddText => self.open_new_box(page, pt, window),
             EditTool::Select => {

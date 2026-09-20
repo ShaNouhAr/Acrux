@@ -729,7 +729,12 @@ impl WindowHandle for Handle<'_> {
             return Some(t.clone());
         }
         if headless() {
-            return None;
+            // Le mode invisible ne touche pas au presse-papiers de la
+            // personne : les essais lui donnent le leur (`ACRUX_CLIPBOARD`,
+            // où retour chariot et saut de ligne s'écrivent `\r` et `\n`).
+            return std::env::var("ACRUX_CLIPBOARD")
+                .ok()
+                .map(|t| t.replace("\\r", "\r").replace("\\n", "\n"));
         }
         clipboard_text(self.state.hwnd)
     }
