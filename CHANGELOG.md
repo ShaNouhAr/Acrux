@@ -7,7 +7,7 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
-## 0.22.0 — non publiée
+## 0.22.0 — 20 septembre 2026
 
 - **Les peignes se remplissent** — BIC, IBAN, date : ces rangées de cases
   alignées, une par caractère. Dans « Remplir et signer » (et là seulement),
