@@ -324,6 +324,45 @@ fn add_font_resource(doc: &Document, page: &Page, font: &Dict) -> Result<Name> {
     Ok(name)
 }
 
+/// Inscrit aux ressources de la page une police **déjà écrite** dans le
+/// document — une police système incorporée — et renvoie son nom de
+/// ressource.
+///
+/// # Errors
+/// Page non indirecte ou ressources illisibles.
+pub(crate) fn add_font_reference(
+    doc: &Document,
+    page: &Page,
+    font: acrux_document::ObjectRef,
+) -> Result<Name> {
+    let mut page_dict = current_page_dict(doc, page)?;
+    let resources_entry = page_dict.get(&Name::new("Resources")).cloned();
+    let mut resources = match &resources_entry {
+        Some(o) => doc.resolve(o)?.as_dict().cloned().unwrap_or_default(),
+        None => Dict::new(),
+    };
+    let mut fonts = doc
+        .dict_get(&resources, "Font")?
+        .and_then(|f| f.as_dict().cloned())
+        .unwrap_or_default();
+    let name = (0..1000)
+        .map(|i| Name::new(&format!("AKF{i}")))
+        .find(|n| !fonts.contains_key(n))
+        .ok_or_else(|| Error::Corrupt("trop de polices ajoutées".into()))?;
+    fonts.insert(name.clone(), Object::Reference(font));
+    resources.insert(Name::new("Font"), Object::Dict(fonts));
+    if let Some(Object::Reference(r)) = resources_entry {
+        doc.set(r, Object::Dict(resources));
+    } else {
+        page_dict.insert(Name::new("Resources"), Object::Dict(resources));
+        let page_ref = page
+            .reference
+            .ok_or_else(|| Error::Corrupt("la page doit être un objet indirect".into()))?;
+        doc.set(page_ref, Object::Dict(page_dict));
+    }
+    Ok(name)
+}
+
 /// Positions des occurrences de `needle` sous forme de plages éditables
 /// (recherche insensible à la casse, comme [`crate::text::find`]).
 #[must_use]

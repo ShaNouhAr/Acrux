@@ -9,14 +9,37 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 
 ## 0.19.0 — non publiée
 
-### Une liste pour la police
+### Toutes les polices du système, comme dans un traitement de texte
 
-- Le bouton de police de la barre « Modifier le PDF » faisait défiler les
-  familles à chaque clic : on tournait en rond sans voir où l'on allait. Il
-  déroule maintenant **une liste** sous lui — « Police du texte » (celle du
-  bloc), puis les familles — où la police courante est marquée, la ligne
-  survolée relevée ; un clic choisit et referme, Échap ou un clic ailleurs
-  referme sans rien changer. Le choix s'applique au bloc sur-le-champ.
+- Le bouton de police de la barre « Modifier le PDF » faisait défiler quatre
+  familles à chaque clic. Il déroule maintenant **la liste de toutes les
+  polices installées** sur la machine — plusieurs centaines sur un Windows
+  ordinaire —, **chaque nom dessiné dans sa propre police**. Un champ de
+  recherche a le focus dès l'ouverture : on tape « geo », il reste Georgia,
+  Entrée la choisit. Les polices **récentes** viennent en tête, la police du
+  bloc est marquée, les flèches, Page préc./suiv., la molette et Échap font ce
+  qu'on attend.
+- La police choisie est **incorporée pour de bon** dans le document
+  (sous-ensemble TrueType, `/Type0` Identity-H, `/ToUnicode`) : ce qu'on voit
+  est ce que tout autre lecteur montrera. L'aperçu pendant la frappe emploie
+  le même fichier, donc les mêmes largeurs. Les quatorze polices standard ne
+  servent plus que de repli. Nouveau module `acrux_features::sysfonts`
+  (catalogue des familles par la table `name`, quatre dessins par famille, lu
+  une fois en tâche de fond à l'entrée dans le mode).
+
+### Un vrai nuancier
+
+- Les cinq pastilles de couleur laissent la place à **un bouton** qui montre
+  l'encre en cours et déroule un nuancier : les **couleurs du thème** avec
+  leurs teintes claires et foncées, les **couleurs vives**, les **récentes**,
+  puis une couleur **personnalisée** — carré saturation-luminosité, réglette
+  de teinte, code hexadécimal. Un clic sur une pastille choisit et referme ;
+  glisser dans le carré ou la réglette recolore le bloc **en direct**.
+- La couleur s'applique maintenant **au bloc ouvert**, même s'il existait déjà
+  dans le document (avant, seule une zone neuve et vide la prenait) : le
+  paragraphe est réécrit avec son encre, un mot gras reste gras, et l'encre
+  d'avant est rétablie derrière lui pour la suite de la page
+  (`ParagraphFrame::ink`).
 
 ## 0.18.0 — 20 septembre 2026
 

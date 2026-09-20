@@ -21,6 +21,7 @@
 //! | `tabs`    | barre d'onglets (un par document ouvert)              |
 //! | `paint`   | coins arrondis, ombres douces, aplats translucides    |
 //! | `palette` | palette de commandes filtrable (Ctrl+Maj+P)           |
+//! | `pickers` | liste des polices du système et nuancier              |
 //! | `signpanel` | panneau « remplir et signer » : signatures, encre  |
 //! | `sign`    | outil « remplir et signer » : barre et capture        |
 //! | `objects` | outil « modifier » : boîte de sélection et poignées   |
@@ -42,6 +43,7 @@ pub mod objects;
 pub mod paint;
 pub mod palette;
 pub mod panel;
+pub mod pickers;
 pub mod prefs;
 pub mod sign;
 pub mod signpanel;

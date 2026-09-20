@@ -248,16 +248,67 @@ pub fn embed_preferring(
     style: FontStyle,
     preferred: &[&str],
 ) -> Result<EmbeddedFont> {
+    let wanted = wanted_chars(text);
+    let (path, font) = best_font(&wanted, style, preferred)?;
+    let family = path
+        .file_stem()
+        .map_or_else(String::new, |s| s.to_string_lossy().into_owned());
+    embed_loaded(doc, text, style, &family, font)
+}
+
+/// Incorpore **une famille nommée** du système, dans le style demandé.
+///
+/// C'est « changer la police » d'un traitement de texte : la famille est
+/// celle que l'utilisateur a choisie dans la liste, et c'est son vrai dessin
+/// qui entre dans le PDF. Un style que la famille n'a pas — le gras d'une
+/// police qui n'en a pas — se rabat sur le dessin le plus proche.
+///
+/// # Errors
+/// Famille absente du système, fichier illisible, ou sous-ensemble
+/// impossible à produire.
+pub fn embed_family(
+    doc: &Document,
+    text: &str,
+    family: &str,
+    bold: bool,
+    italic: bool,
+) -> Result<EmbeddedFont> {
+    let entry = crate::sysfonts::find(family)
+        .ok_or_else(|| Error::Unsupported(format!("police « {family} » absente du système")))?;
+    let font = entry
+        .face(bold, italic)
+        .and_then(crate::sysfonts::load)
+        .ok_or_else(|| Error::Unsupported(format!("police « {family} » illisible")))?;
+    let style = match (bold, italic) {
+        (true, true) => FontStyle::BoldItalic,
+        (true, false) => FontStyle::Bold,
+        (false, true) => FontStyle::Italic,
+        (false, false) => FontStyle::Regular,
+    };
+    embed_loaded(doc, text, style, &entry.name, font)
+}
+
+/// Les caractères distincts d'un texte, triés.
+fn wanted_chars(text: &str) -> Vec<char> {
     let mut wanted: Vec<char> = text.chars().filter(|c| *c != '\n').collect();
     wanted.sort_unstable();
     wanted.dedup();
     if wanted.is_empty() {
         wanted.push(' ');
     }
-    let (path, font) = best_font(&wanted, style, preferred)?;
-    let family = path
-        .file_stem()
-        .map_or_else(String::new, |s| s.to_string_lossy().into_owned());
+    wanted
+}
+
+/// Incorpore une police déjà lue : sous-ensemble, `/Type0`, `/ToUnicode`.
+fn embed_loaded(
+    doc: &Document,
+    text: &str,
+    style: FontStyle,
+    family: &str,
+    font: TrueTypeFont,
+) -> Result<EmbeddedFont> {
+    let wanted = wanted_chars(text);
+    let family = family.to_string();
     // Le glyphe 0 (`.notdef`) est toujours du voyage : c'est lui qui sert de
     // repli, et le sous-ensemble doit de toute façon le contenir.
     let mut gids: Vec<u16> = vec![0];
@@ -380,7 +431,7 @@ fn vertical_metrics(font: &TrueTypeFont, upem: f64) -> (f64, f64) {
 }
 
 /// Dossiers où chercher des polices, du plus spécifique au plus général.
-fn font_dirs() -> Vec<PathBuf> {
+pub(crate) fn font_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(custom) = std::env::var("ACRUX_FONT_DIR") {
         dirs.push(PathBuf::from(custom));

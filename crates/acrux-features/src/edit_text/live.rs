@@ -60,6 +60,9 @@ fn faces_in(font: &encode::Prepared, c: char) -> Vec<(Face, f64)> {
 }
 
 /// Ce qu'une police doit connaître pour qu'on tape sans secours.
+/// Document de travail vide, pour y charger une police le temps d'un aperçu.
+const SCRATCH: &[u8] = b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Size 2 /Root 1 0 R >>\nstartxref\n0\n%%EOF\n";
+
 const COMMON: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 \
      éèêëàâäîïôöùûüçÉÈÀÇ,.;:!?'()-/%€$&@+=";
 
@@ -148,6 +151,11 @@ impl LiveText {
     /// # Errors
     /// Police du bloc introuvable ou illisible.
     pub fn open(doc: &Document, page: &Page, frame: &ParagraphFrame) -> Result<Self> {
+        // Une police du système choisie dans la barre : l'aperçu la charge
+        // pour de bon, sans quoi ce qu'on voit ne serait pas ce qu'on obtient.
+        if let Some(live) = Self::open_system(frame) {
+            return Ok(live);
+        }
         let dict = font_dict(doc, page, frame)?;
         let prepared = encode::measuring(doc, &dict, frame.font.clone())?;
         // La police de secours ne se cherche que si elle sert : une police
@@ -171,6 +179,57 @@ impl LiveText {
             prepared,
             runs: Vec::new(),
             spare,
+            color,
+        })
+    }
+
+    /// Largeur d'un texte dans la police du bloc, pour un corps de 1.
+    ///
+    /// C'est la mesure qu'emploie la mise en page de l'aperçu : elle dit
+    /// avec quelle police il travaille vraiment.
+    #[must_use]
+    pub fn width_of(&self, text: &str) -> f64 {
+        self.prepared.width(text)
+    }
+
+    /// Ouvre la saisie avec une police **du système**, si le bloc en demande
+    /// une et qu'elle est installée.
+    ///
+    /// Le document n'est pas touché : la police est incorporée dans un
+    /// document de travail, jetable, d'où elle se charge comme n'importe
+    /// quelle police de PDF — mêmes largeurs, mêmes contours qu'à l'écriture.
+    /// Le sous-ensemble couvre l'alphabet latin étendu ; ce qui en sort est
+    /// dessiné depuis le fichier lui-même, qui sert aussi de secours.
+    fn open_system(frame: &ParagraphFrame) -> Option<Self> {
+        let face = frame.face.as_ref()?;
+        let family = crate::sysfonts::find(face.family.as_deref()?)?;
+        let font = crate::sysfonts::load(family.face(face.bold, face.italic)?)?;
+        let chars: String = (0x20u32..0x7F)
+            .chain(0xA0..0x180)
+            .chain(0x2010..0x2040)
+            .chain([0x20AC, 0x2122])
+            .filter_map(char::from_u32)
+            .filter(|c| font.unicode_to_gid(*c).is_some_and(|g| g != 0))
+            .collect();
+        let scratch = Document::from_bytes(SCRATCH.to_vec()).ok()?;
+        let embedded =
+            crate::fontembed::embed_family(&scratch, &chars, &family.name, face.bold, face.italic)
+                .ok()?;
+        let dict = scratch.get(embedded.reference).ok()?.as_dict().cloned()?;
+        let prepared = encode::measuring(&scratch, &dict, frame.font.clone()).ok()?;
+        #[allow(clippy::cast_possible_truncation)]
+        let color = [
+            frame.color[0] as f32,
+            frame.color[1] as f32,
+            frame.color[2] as f32,
+        ];
+        Some(Self {
+            prepared,
+            runs: Vec::new(),
+            spare: Some(Spare {
+                font,
+                paths: RefCell::new(HashMap::new()),
+            }),
             color,
         })
     }

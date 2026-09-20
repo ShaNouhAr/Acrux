@@ -675,3 +675,138 @@ fn un_bloc_se_deplace_et_se_redimensionne() {
         .count();
     assert!(apres > avant, "{apres} lignes après, {avant} avant");
 }
+
+// --- Polices du système ---------------------------------------------------
+
+/// Une famille installée, qui sait écrire l'alphabet : le test ne dépend
+/// d'aucune police en particulier.
+fn an_installed_family() -> Option<&'static acrux_features::sysfonts::Family> {
+    acrux_features::sysfonts::families().iter().find(|f| {
+        f.face(false, false)
+            .and_then(acrux_features::sysfonts::load)
+            .is_some_and(|font| {
+                "Bonjour Acrux"
+                    .chars()
+                    .all(|c| c == ' ' || font.unicode_to_gid(c).is_some_and(|g| g != 0))
+            })
+    })
+}
+
+/// Choisir une police du système l'**incorpore pour de bon** : le document
+/// reçoit son vrai dessin en sous-ensemble, et le texte se relit.
+#[test]
+fn une_police_du_systeme_sincorpore_pour_de_bon() {
+    let Some(family) = an_installed_family() else {
+        // Une machine sans aucune police : rien à éprouver.
+        return;
+    };
+    let doc = Document::load(corpus("reels/chrome-skia-2pages-texte-tableau-svg.pdf")).unwrap();
+    let (_, _, opened) = a_paragraph(&doc).expect("un paragraphe");
+    let mut frame = opened.frame.clone();
+    frame.face = Some(acrux_features::edit_text::FaceChoice {
+        family: Some(family.name.clone()),
+        bold: false,
+        italic: false,
+    });
+    let pages = collect_pages(&doc).unwrap();
+    set_paragraph_text(&doc, &pages[0], &frame, &opened.drawn, "Bonjour Acrux")
+        .unwrap_or_else(|e| panic!("police « {} » refusée : {e}", family.name));
+
+    // Le texte se relit tel quel.
+    assert!(
+        page_text(&doc, 0).contains(&normalized("Bonjour Acrux")),
+        "texte relu : {}",
+        page_text(&doc, 0)
+    );
+    // Et la page cite une police incorporée (`/Type0` avec son programme),
+    // pas une des quatorze polices standard.
+    let pages = collect_pages(&doc).unwrap();
+    let page = doc.get(pages[0].reference.unwrap()).unwrap();
+    let resources = doc
+        .dict_get(page.as_dict().unwrap(), "Resources")
+        .unwrap()
+        .unwrap();
+    let fonts = doc
+        .dict_get(resources.as_dict().unwrap(), "Font")
+        .unwrap()
+        .unwrap();
+    let embedded = fonts.as_dict().unwrap().iter().any(|(name, value)| {
+        name.0.starts_with(b"AKF")
+            && doc.resolve(value).is_ok_and(|f| {
+                f.as_dict()
+                    .and_then(|d| d.get(&acrux_document::Name::new("Subtype")))
+                    .and_then(acrux_document::Object::as_name)
+                    == Some(&acrux_document::Name::new("Type0"))
+            })
+    });
+    assert!(
+        embedded,
+        "la police « {} » devait être incorporée",
+        family.name
+    );
+}
+
+/// L'aperçu de la frappe emploie la **même** police que l'écriture : les
+/// largeurs qu'il mesure sont celles du fichier choisi, pas d'une police de
+/// remplacement.
+#[test]
+fn lapercu_mesure_avec_la_police_choisie() {
+    let Some(family) = an_installed_family() else {
+        return;
+    };
+    let doc = Document::load(corpus("reels/chrome-skia-2pages-texte-tableau-svg.pdf")).unwrap();
+    let (_, _, opened) = a_paragraph(&doc).expect("un paragraphe");
+    let pages = collect_pages(&doc).unwrap();
+    let mut frame = opened.frame.clone();
+    frame.face = Some(acrux_features::edit_text::FaceChoice {
+        family: Some(family.name.clone()),
+        bold: false,
+        italic: false,
+    });
+    let live = acrux_features::edit_text::LiveText::open(&doc, &pages[0], &frame).unwrap();
+    let font = family
+        .face(false, false)
+        .and_then(acrux_features::sysfonts::load)
+        .unwrap();
+    let gid = font.unicode_to_gid('B').unwrap();
+    let expected = f64::from(font.advance(gid).unwrap()) / f64::from(font.units_per_em());
+    let measured = live.width_of("B");
+    assert!(
+        (measured - expected).abs() < 0.002,
+        "« B » mesure {measured} dans l'aperçu, {expected} dans {}",
+        family.name
+    );
+}
+
+/// Une couleur choisie dans le nuancier s'écrit **pour de bon** dans le
+/// paragraphe — et lui seul : le texte qui suit garde son encre, que le flux
+/// rétablit derrière le bloc.
+#[test]
+fn une_couleur_choisie_secrit_et_ne_deborde_pas() {
+    let doc = Document::load(corpus("reels/chrome-skia-2pages-texte-tableau-svg.pdf")).unwrap();
+    let (_, before, opened) = a_paragraph(&doc).expect("un paragraphe");
+    let red = |c: [f32; 3]| c[0] > 0.7 && c[1] < 0.3 && c[2] < 0.3;
+    let count_red = |text: &PageText| {
+        text.lines
+            .iter()
+            .flat_map(|l| &l.words)
+            .flat_map(|w| &w.glyphs)
+            .filter(|g| red(g.color))
+            .count()
+    };
+    assert_eq!(count_red(&before), 0, "la page n'a pas de texte rouge");
+    let mut frame = opened.frame.clone();
+    frame.ink = Some([0.8, 0.1, 0.1]);
+    let pages = collect_pages(&doc).unwrap();
+    set_paragraph_text(&doc, &pages[0], &frame, &opened.drawn, &opened.text).unwrap();
+
+    let pages = collect_pages(&doc).unwrap();
+    let after = extract_page_text(&doc, &pages[0]).unwrap();
+    let letters = opened.text.chars().filter(|c| !c.is_whitespace()).count();
+    let reds = count_red(&after);
+    assert!(reds > 0, "le paragraphe devait passer au rouge");
+    assert!(
+        reds <= letters,
+        "{reds} glyphes rouges pour un paragraphe de {letters} lettres : la couleur déborde"
+    );
+}

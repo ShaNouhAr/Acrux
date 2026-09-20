@@ -206,6 +206,9 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   `fontembed` (police système choisie pour un texte donné, réduite à ses glyphes par
   `acrux_fonts::subset` et écrite en `/Type0` `Identity-H` avec `/ToUnicode` : c'est ce qui permet
   d'écrire ailleurs qu'en WinAnsiEncoding tout ce que **nous** ajoutons au document),
+  `sysfonts` (catalogue des **polices installées** : familles lues dans la table `name`, quatre
+  dessins par famille ; c'est la liste des polices de la barre « Modifier le PDF », et
+  `fontembed::embed_family` incorpore la famille choisie),
   `create` (**création de documents** : `create/paper` porte les formats — série A, lettre, légal,
   tabloïd, enveloppes, taille libre — l'orientation et les marges ; `create/builder` est la
   charpente commune (document neuf bâti sur un squelette minimal dont l'objet 1 devient le

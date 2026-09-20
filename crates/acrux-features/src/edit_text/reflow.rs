@@ -96,6 +96,12 @@ pub struct ParagraphFrame {
     pub standard: Option<String>,
     /// Couleur d'un bloc **nouveau** ; un paragraphe existant garde la sienne.
     pub color: [f64; 3],
+    /// Couleur **imposée** au bloc entier, choisie dans le nuancier.
+    ///
+    /// Vide, un paragraphe existant garde son encre — c'est le cas ordinaire.
+    /// Renseignée, le bloc est réécrit avec elle, et l'encre d'avant est
+    /// rétablie derrière lui pour la suite du flux.
+    pub ink: Option<[f64; 3]>,
     /// Police imposée au bloc entier : famille, graisse, italique.
     ///
     /// Vide, le bloc garde ses polices d'origine — c'est le cas ordinaire.
@@ -697,6 +703,7 @@ pub fn new_text_frame(
         font: Name::new("Helv"),
         standard: Some("Helvetica".into()),
         color,
+        ink: None,
         face: None,
         rotation: 0.0,
     }
@@ -1251,6 +1258,7 @@ fn frame_of(
             font,
             standard: None,
             color: unit_color(para, text),
+            ink: None,
             face: None,
             rotation,
         };
@@ -1286,6 +1294,7 @@ fn frame_of(
         font,
         standard: None,
         color: unit_color(para, text),
+        ink: None,
         face: None,
         rotation: 0.0,
     }
@@ -2213,7 +2222,12 @@ fn write_to(
         true
     } else {
         {
-            let changed = (size_text - t.size_text).abs() > 1e-9 || prepared.resource != t.font;
+            // Une encre choisie dans le nuancier s'écrit devant le bloc ;
+            // celle d'avant est rétablie derrière lui, comme la police.
+            let ink = frame.and_then(|f| f.ink);
+            let changed = (size_text - t.size_text).abs() > 1e-9
+                || prepared.resource != t.font
+                || ink.is_some();
             if changed {
                 let _ = write!(
                     out_str(&mut out),
@@ -2221,6 +2235,9 @@ fn write_to(
                     prepared.resource.as_str(),
                     fmt(size_text)
                 );
+            }
+            if let Some([r, g, b]) = ink {
+                let _ = write!(out_str(&mut out), "{} {} {} rg ", fmt(r), fmt(g), fmt(b));
             }
             for line in &laid {
                 let placed = line_matrix(t, frame, line);

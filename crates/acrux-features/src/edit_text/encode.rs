@@ -146,6 +146,15 @@ fn prepare_with(
     if let Some(s) = style {
         if s.font.is_some() || s.bold == Some(true) || s.italic == Some(true) {
             let family = s.font.clone().unwrap_or_else(|| font.base_font.clone());
+            // Une famille installée sur la machine s'incorpore **pour de
+            // bon** : c'est son vrai dessin qui entre dans le document, comme
+            // dans un traitement de texte. Les quatorze polices standard ne
+            // servent plus que de repli.
+            let bold = s.bold.unwrap_or(false);
+            let italic = s.italic.unwrap_or(false);
+            if let Ok(prepared) = system(doc, page, bare_family(&family), bold, italic, text) {
+                return Ok(prepared);
+            }
             return standard(
                 doc,
                 page,
@@ -202,6 +211,48 @@ fn prepare_with(
             Ok(prepared)
         }
     }
+}
+
+/// Le nom de famille seul : sans préfixe de sous-ensemble, sans les mots de
+/// style que [`super::reflow::FaceChoice::named`] y a ajoutés.
+fn bare_family(name: &str) -> &str {
+    let mut bare = strip_subset_prefix(name).trim();
+    for suffix in [" Bold Italic", " Bold", " Italic"] {
+        if bare.len() > suffix.len()
+            && bare[bare.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
+        {
+            bare = bare[..bare.len() - suffix.len()].trim_end();
+            break;
+        }
+    }
+    bare
+}
+
+/// Prépare l'écriture avec une police **du système**, incorporée en
+/// sous-ensemble dans le document.
+fn system(
+    doc: &Document,
+    page: &Page,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    text: &str,
+) -> Result<Prepared> {
+    let embedded = crate::fontembed::embed_family(doc, text, family, bold, italic)?;
+    let dict = doc
+        .get(embedded.reference)?
+        .as_dict()
+        .cloned()
+        .ok_or_else(|| acrux_core::Error::Corrupt("police incorporée illisible".into()))?;
+    let resource = super::add_font_reference(doc, page, embedded.reference)?;
+    let font = LoadedFont::load(doc, &dict)?;
+    let table = reverse_table(&font);
+    Ok(Prepared {
+        resource,
+        font,
+        warnings: Vec::new(),
+        table,
+    })
 }
 
 /// Lettres d'un caractère composé, quand une police ne le connaît pas.

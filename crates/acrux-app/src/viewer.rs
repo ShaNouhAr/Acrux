@@ -6458,7 +6458,10 @@ impl App for Viewer {
                 x,
                 y,
             } => {
-                if self.three_d_wheel(x, y, f64::from(delta), window) {
+                if self.edit_popup_wheel(f64::from(delta)) {
+                    // La liste des polices déroulée a pris la molette.
+                    window.request_redraw();
+                } else if self.three_d_wheel(x, y, f64::from(delta), window) {
                     // Le modèle 3D a pris la molette : on s'approche de lui,
                     // la page ne défile pas.
                 } else if self.showing_home() {
@@ -6505,11 +6508,18 @@ impl App for Viewer {
                     }
                 }
             }
-            Event::Key(Key::Escape, _)
-                if self.prompt.is_none() && self.palette.is_none() && self.edit_menu_close() =>
-            {
-                window.request_redraw();
-            }
+            // Un sélecteur de la barre « Modifier » déroulé prend le clavier :
+            // flèches et Entrée dans la liste des polices, frappe dans sa
+            // recherche ou dans le code d'une couleur, Échap pour refermer.
+            Event::Key(key, _)
+                if self.prompt.is_none()
+                    && self.palette.is_none()
+                    && self.edit_popup_key(key, window) => {}
+            Event::Char(c, m)
+                if self.prompt.is_none()
+                    && self.palette.is_none()
+                    && !m.ctrl
+                    && self.edit_popup_char(c, window) => {}
             Event::Key(Key::Escape, _)
                 if self.prompt.is_none() && self.palette.is_none() && self.close_3d() =>
             {
@@ -6943,6 +6953,12 @@ impl App for Viewer {
                 y,
                 ..
             } => self.drag_last = Some((x - self.view_left() as i32, y - self.view_top() as i32)),
+            Event::MouseUp { .. } if self.edit_menu_open() => {
+                self.edit_popup_up();
+                window.request_redraw();
+            }
+            Event::MouseMove { x, y, dragging } if self.edit_popup_move(x, y, dragging, window) => {
+            }
             Event::MouseUp { .. } if self.objects.is_some() => {
                 self.objects_mouse_up();
                 window.request_redraw();
@@ -7020,7 +7036,7 @@ impl App for Viewer {
                 let bar = Toolbar::height(&self.theme, self.dpi_scale as f32);
                 let mut hover_changed = self.toolbar.mouse_move(x, y);
                 if let Some(mode) = &mut self.edit {
-                    hover_changed |= mode.bar.mouse_move(x, y);
+                    hover_changed |= mode.bar.mouse_move(x, y, dragging).is_some();
                 }
                 if self.annot_tool.is_some() {
                     hover_changed |= self.mode_bar.mouse_move(x, y);
@@ -7170,6 +7186,15 @@ impl App for Viewer {
                 w.wake();
             }
             window.request_redraw();
+        }
+        // La liste des polices dessine ses noms quelques-uns par image.
+        if self.edit_bar_pending() {
+            if self.waker.is_none() {
+                self.waker = Some(window.waker());
+            }
+            if let Some(w) = &self.waker {
+                w.wake();
+            }
         }
         if self.step_search() {
             if self.waker.is_none() {

@@ -25,9 +25,12 @@
     clippy::many_single_char_names
 )]
 
-use crate::platform::Frame;
-use crate::ui::controls::{self, Segment, SegmentItem, SwatchState};
+use acrux_graphics::Rasterizer;
+
+use crate::platform::{Frame, Key};
+use crate::ui::controls::{self, Segment, SegmentItem};
 use crate::ui::paint::round_rect;
+use crate::ui::pickers::{ColorPicker, FontPicker, Outcome};
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
 
@@ -50,13 +53,19 @@ pub enum BarAction {
     Smaller,
     /// Augmenter le corps.
     Larger,
-    /// Choisir une couleur de la palette.
-    Color(usize),
+    /// Ouvrir ou refermer le nuancier.
+    Colors,
+    /// Appliquer une couleur. `true` : le choix est fait, elle rejoint les
+    /// récentes ; `false` : on glisse encore dans le nuancier.
+    Ink([f64; 3], bool),
     /// Ouvrir ou refermer la liste des polices.
     Families,
-    /// Choisir une police : un rang dans [`FAMILIES`], ou rien pour laisser
-    /// au bloc la sienne.
+    /// Choisir une police : un rang dans le catalogue du système
+    /// ([`acrux_features::sysfonts::families`]), ou rien pour laisser au bloc
+    /// la sienne.
     Family(Option<usize>),
+    /// Un sélecteur a bougé ou s'est refermé : il n'y a qu'à repeindre.
+    Refresh,
     /// Gras.
     Bold,
     /// Italique.
@@ -71,24 +80,8 @@ pub enum BarAction {
     Close,
 }
 
-/// Familles proposées : celles qu'un document emploie neuf fois sur dix, et
-/// que toute machine sait dessiner.
-pub const FAMILIES: [&str; 4] = ["Helvetica", "Times New Roman", "Courier New", "Verdana"];
-
 /// Alignements, dans l'ordre des boutons.
 pub const ALIGNMENTS: [&str; 4] = ["gauche", "centré", "droite", "justifié"];
-
-/// Couleurs proposées pour le texte ajouté : noir, gris, bleu, rouge, vert.
-///
-/// Peu de choix, parce qu'un document se remplit de noir et que le reste
-/// sert à corriger ou à signaler.
-pub const COLORS: [[f64; 3]; 5] = [
-    [0.0, 0.0, 0.0],
-    [0.35, 0.35, 0.38],
-    [0.08, 0.28, 0.72],
-    [0.78, 0.1, 0.12],
-    [0.1, 0.5, 0.2],
-];
 
 /// Corps proposés, en points.
 const SIZES: [f64; 12] = [
@@ -300,24 +293,13 @@ impl Buffer {
     }
 }
 
-/// Indice de la couleur la plus proche dans [`COLORS`], pour reprendre une
-/// encre choisie ailleurs.
-#[must_use]
-pub fn color_index(color: [f64; 3]) -> usize {
-    COLORS
-        .iter()
-        .enumerate()
-        .min_by(|(_, a), (_, b)| {
-            let d = |c: &[f64; 3]| {
-                (c[0] - color[0]).powi(2) + (c[1] - color[1]).powi(2) + (c[2] - color[2]).powi(2)
-            };
-            d(a).total_cmp(&d(b))
-        })
-        .map_or(0, |(i, _)| i)
+/// Le sélecteur déroulé sous la barre : un seul à la fois.
+enum Popup {
+    Fonts(Box<FontPicker>),
+    Colors(Box<ColorPicker>),
 }
 
 /// Barre du mode, sous la barre d'outils.
-#[derive(Debug)]
 // Gras, italique, corps imposé, couleur imposée, bloc ouvert : cinq
 // interrupteurs indépendants, qu'un regroupement artificiel n'éclaircirait
 // pas.
@@ -327,12 +309,12 @@ pub struct EditBar {
     pub tool: EditTool,
     /// Corps du texte ajouté, en points.
     pub size: f64,
-    /// Couleur du texte ajouté (indice dans [`COLORS`]).
-    pub color: usize,
+    /// Couleur du texte ajouté, ou du bloc ouvert.
+    pub color: [f64; 3],
     /// Corps du paragraphe en cours, à afficher à la place du défaut.
     pub active_size: Option<f64>,
-    /// Police du bloc en cours : rang dans [`FAMILIES`], ou rien quand le
-    /// bloc garde la sienne.
+    /// Police du bloc en cours : rang dans le catalogue du système, ou rien
+    /// quand le bloc garde la sienne.
     pub family: Option<usize>,
     /// Gras du bloc en cours.
     pub bold: bool,
@@ -353,15 +335,21 @@ pub struct EditBar {
     hits: Vec<(i32, i32, i32, i32, BarAction)>,
     /// Zone survolée, rang dans `hits`.
     hover: Option<usize>,
-    /// La liste des polices est déroulée.
-    menu: bool,
-    /// Le bouton de police, tel qu'il a été dessiné : la liste s'accroche
-    /// dessous.
-    menu_anchor: (i32, i32, i32, i32),
-    /// Lignes de la liste, remplies au dessin.
-    menu_hits: Vec<(i32, i32, i32, i32, Option<usize>)>,
-    /// Ligne survolée, rang dans `menu_hits`.
-    menu_hover: Option<usize>,
+    /// Le sélecteur déroulé : liste des polices ou nuancier.
+    popup: Option<Popup>,
+    /// Les boutons de police et de couleur, tels qu'ils ont été dessinés :
+    /// leur sélecteur s'accroche dessous.
+    font_anchor: (i32, i32, i32, i32),
+    color_anchor: (i32, i32, i32, i32),
+}
+
+impl std::fmt::Debug for EditBar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EditBar")
+            .field("tool", &self.tool)
+            .field("editing", &self.editing)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for EditBar {
@@ -369,7 +357,7 @@ impl Default for EditBar {
         Self {
             tool: EditTool::Select,
             size: 12.0,
-            color: 0,
+            color: [0.0, 0.0, 0.0],
             active_size: None,
             family: None,
             bold: false,
@@ -381,10 +369,9 @@ impl Default for EditBar {
             color_set: false,
             hits: Vec::new(),
             hover: None,
-            menu: false,
-            menu_anchor: (0, 0, 0, 0),
-            menu_hits: Vec::new(),
-            menu_hover: None,
+            popup: None,
+            font_anchor: (0, 0, 0, 0),
+            color_anchor: (0, 0, 0, 0),
         }
     }
 }
@@ -405,16 +392,20 @@ impl EditBar {
         (44.0 * dpi) as i32
     }
 
-    /// Déplacement de la souris ; vrai si l'aspect a changé.
-    pub fn mouse_move(&mut self, x: i32, y: i32) -> bool {
-        if self.menu {
-            let over = self
-                .menu_hits
-                .iter()
-                .position(|(bx, by, bw, bh, _)| x >= *bx && x < bx + bw && y >= *by && y < by + bh);
-            let changed = over != self.menu_hover;
-            self.menu_hover = over;
-            return changed;
+    /// Déplacement de la souris. Rend ce qu'il faut faire : repeindre, ou
+    /// appliquer la couleur qu'on est en train de glisser dans le nuancier.
+    pub fn mouse_move(&mut self, x: i32, y: i32, dragging: bool) -> Option<BarAction> {
+        match &mut self.popup {
+            Some(Popup::Fonts(list)) => {
+                return list.mouse_move(x, y).then_some(BarAction::Refresh);
+            }
+            Some(Popup::Colors(colors)) => {
+                return Some(match colors.mouse_move(x, y, dragging) {
+                    Outcome::Live(rgb) => BarAction::Ink(rgb, false),
+                    _ => BarAction::Refresh,
+                });
+            }
+            None => {}
         }
         let over = self
             .hits
@@ -422,58 +413,134 @@ impl EditBar {
             .position(|(bx, by, bw, bh, _)| x >= *bx && x < bx + bw && y >= *by && y < by + bh);
         let changed = over != self.hover;
         self.hover = over;
-        changed
+        changed.then_some(BarAction::Refresh)
     }
 
-    /// Clic dans la barre — ou n'importe où quand la liste des polices est
-    /// déroulée : une ligne choisit, le reste referme.
-    #[must_use]
-    pub fn mouse_down(&self, x: i32, y: i32) -> Option<BarAction> {
-        if self.menu {
-            return Some(
-                self.menu_hits
+    /// Clic dans la barre — ou n'importe où quand un sélecteur est déroulé :
+    /// il prend alors tous les clics, et un clic dehors le referme.
+    pub fn mouse_down(&mut self, x: i32, y: i32) -> Option<BarAction> {
+        let action = match &mut self.popup {
+            Some(Popup::Fonts(list)) => match list.mouse_down(x, y) {
+                Outcome::Pick(choice) => BarAction::Family(choice),
+                Outcome::Close => BarAction::Families,
+                _ => BarAction::Refresh,
+            },
+            Some(Popup::Colors(colors)) => match colors.mouse_down(x, y) {
+                Outcome::Pick(rgb) => BarAction::Ink(rgb, true),
+                Outcome::Live(rgb) => BarAction::Ink(rgb, false),
+                Outcome::Close => BarAction::Colors,
+                Outcome::Stay => BarAction::Refresh,
+            },
+            None => {
+                return self
+                    .hits
                     .iter()
                     .find(|(bx, by, bw, bh, _)| x >= *bx && x < bx + bw && y >= *by && y < by + bh)
-                    .map_or(BarAction::Families, |h| BarAction::Family(h.4)),
-            );
-        }
-        self.hits
-            .iter()
-            .find(|(bx, by, bw, bh, _)| x >= *bx && x < bx + bw && y >= *by && y < by + bh)
-            .map(|h| h.4)
+                    .map(|h| h.4);
+            }
+        };
+        Some(action)
     }
 
-    /// Vrai si la liste des polices est déroulée : elle prend alors tous les
-    /// clics.
+    /// Bouton relâché : un glissement dans le nuancier s'arrête. Rend la
+    /// couleur à retenir, s'il y en avait un.
+    pub fn mouse_up(&mut self) {
+        if let Some(Popup::Colors(colors)) = &mut self.popup {
+            colors.mouse_up();
+        }
+    }
+
+    /// Touche, quand un sélecteur est déroulé : il la prend.
+    pub fn key(&mut self, key: Key) -> Option<BarAction> {
+        Some(match self.popup.as_mut()? {
+            Popup::Fonts(list) => match list.key(key) {
+                Outcome::Pick(choice) => BarAction::Family(choice),
+                Outcome::Close => BarAction::Families,
+                _ => BarAction::Refresh,
+            },
+            Popup::Colors(colors) => match colors.key(key) {
+                Outcome::Pick(rgb) => BarAction::Ink(rgb, true),
+                Outcome::Live(rgb) => BarAction::Ink(rgb, false),
+                Outcome::Close => BarAction::Colors,
+                Outcome::Stay => BarAction::Refresh,
+            },
+        })
+    }
+
+    /// Caractère tapé, quand un sélecteur est déroulé : la recherche d'une
+    /// police, ou le code d'une couleur.
+    pub fn char(&mut self, c: char) -> Option<BarAction> {
+        Some(match self.popup.as_mut()? {
+            Popup::Fonts(list) => {
+                list.char(c);
+                BarAction::Refresh
+            }
+            Popup::Colors(colors) => match colors.char(c) {
+                Outcome::Live(rgb) => BarAction::Ink(rgb, false),
+                _ => BarAction::Refresh,
+            },
+        })
+    }
+
+    /// Molette ; vrai si un sélecteur l'a prise.
+    pub fn wheel(&mut self, delta: f64) -> bool {
+        match &mut self.popup {
+            Some(Popup::Fonts(list)) => {
+                list.wheel(delta);
+                true
+            }
+            Some(Popup::Colors(_)) => true,
+            None => false,
+        }
+    }
+
+    /// Vrai si un sélecteur est déroulé : il prend alors clics et touches.
     #[must_use]
     pub fn menu_open(&self) -> bool {
-        self.menu
+        self.popup.is_some()
+    }
+
+    /// Vrai si la liste des polices a encore des noms à dessiner : la fenêtre
+    /// doit se repeindre.
+    #[must_use]
+    pub fn pending(&self) -> bool {
+        matches!(&self.popup, Some(Popup::Fonts(list)) if list.pending())
     }
 
     /// Déroule ou referme la liste des polices.
     pub fn toggle_menu(&mut self) {
-        self.menu = !self.menu;
-        self.menu_hover = None;
+        self.popup = match self.popup {
+            Some(Popup::Fonts(_)) => None,
+            _ => Some(Popup::Fonts(Box::new(FontPicker::new(self.family)))),
+        };
     }
 
-    /// Referme la liste des polices ; vrai si elle était ouverte.
+    /// Déroule ou referme le nuancier.
+    pub fn toggle_colors(&mut self) {
+        self.popup = match self.popup {
+            Some(Popup::Colors(_)) => None,
+            _ => Some(Popup::Colors(Box::new(ColorPicker::new(self.color)))),
+        };
+    }
+
+    /// Referme le sélecteur ; vrai s'il y en avait un.
     pub fn close_menu(&mut self) -> bool {
-        let was = self.menu;
-        self.menu = false;
-        was
+        self.popup.take().is_some()
     }
 
     /// Couleur du texte ajouté.
     #[must_use]
     pub fn rgb(&self) -> [f64; 3] {
-        COLORS[self.color.min(COLORS.len() - 1)]
+        self.color
     }
 
     /// Dessine la barre sur toute la largeur, à l'ordonnée `y`.
+    #[allow(clippy::too_many_arguments)] // le cadre, les deux moteurs de dessin, le thème et la place
     pub fn paint(
         &mut self,
         frame: &mut Frame<'_>,
         text: &mut TextRenderer,
+        raster: &mut Rasterizer,
         theme: &Theme,
         dpi: f32,
         y: i32,
@@ -567,31 +634,42 @@ impl EditBar {
             };
             x = next + s(12.0);
 
-            // Couleurs du texte ajouté : des pastilles rondes, celle qui est
-            // choisie cerclée d'accent.
-            let swatch = s(18.0);
-            if x + (swatch + s(6.0)) * COLORS.len() as i32 > limit {
+            // La couleur : une pastille de l'encre en cours, qui déroule le
+            // nuancier.
+            let cw = s(52.0);
+            if x + cw > limit {
                 break 'groups;
             }
-            let sy = top + (ctl - swatch) / 2;
-            for (i, c) in COLORS.iter().enumerate() {
-                let rgb = (
-                    (c[0] * 255.0) as u8,
-                    (c[1] * 255.0) as u8,
-                    (c[2] * 255.0) as u8,
-                );
-                let index = self.hits.len();
-                let state = if i == self.color {
-                    SwatchState::Chosen
-                } else if self.hover == Some(index) {
-                    SwatchState::Hovered
-                } else {
-                    SwatchState::Plain
-                };
-                let (hx, _, hw, _) = controls::swatch(frame, x, sy, swatch, dpi, rgb, state, theme);
-                self.hits.push((hx, top, hw, ctl, BarAction::Color(i)));
-                x += swatch + s(6.0);
-            }
+            let index = self.hits.len();
+            let open = matches!(self.popup, Some(Popup::Colors(_)));
+            let face = if open || self.hover == Some(index) {
+                theme.separator
+            } else {
+                theme.hover
+            };
+            round_rect(frame, x, top, cw, ctl, radius, face);
+            self.color_anchor = (x, top, cw, ctl);
+            let chip = s(18.0);
+            let ink = (
+                (self.color[0].clamp(0.0, 1.0) * 255.0).round() as u8,
+                (self.color[1].clamp(0.0, 1.0) * 255.0).round() as u8,
+                (self.color[2].clamp(0.0, 1.0) * 255.0).round() as u8,
+            );
+            let cy = top + (ctl - chip) / 2;
+            round_rect(frame, x + s(8.0), cy, chip, chip, chip as f32 / 2.0, ink);
+            crate::ui::paint::round_rect_outline(
+                frame,
+                x + s(8.0),
+                cy,
+                chip,
+                chip,
+                chip as f32 / 2.0,
+                dpi.max(1.0),
+                theme.separator,
+            );
+            chevron(frame, x + cw - s(14.0), top + ctl / 2, dpi, theme.text_dim);
+            self.hits.push((x, top, cw, ctl, BarAction::Colors));
+            x += cw + s(6.0);
 
             // Mise en forme du bloc ouvert : police, graisse, alignement,
             // interligne. Ce sont les réglages d'Acrobat, et ils n'ont de sens
@@ -599,39 +677,34 @@ impl EditBar {
             if self.editing {
                 x += s(6.0);
 
-                // La police : un bouton-menu qui fait défiler les familles.
+                // La police : un bouton-menu qui déroule la liste des polices
+                // installées. Sa largeur est fixe : sans cela, changer de
+                // police déplacerait tous les boutons suivants sous le pointeur.
                 let family = self
                     .family
-                    .and_then(|i| FAMILIES.get(i))
-                    .copied()
-                    .unwrap_or("Police du texte");
-                // Largeur figée sur le plus long des noms : sans cela, changer de
-                // police déplacerait tous les boutons suivants sous le pointeur.
-                let widest = FAMILIES
-                    .iter()
-                    .chain(std::iter::once(&"Police du texte"))
-                    .map(|f| text.measure(size, f) as i32)
-                    .max()
-                    .unwrap_or(0);
-                let fw_label = widest + s(24.0);
+                    .and_then(|i| acrux_features::sysfonts::families().get(i))
+                    .map_or("Police du texte", |f| f.name.as_str());
+                let fw_label = s(176.0);
                 if x + fw_label > limit {
                     break 'groups;
                 }
                 let index = self.hits.len();
-                let face = if self.menu || self.hover == Some(index) {
-                    theme.separator
-                } else {
-                    theme.hover
-                };
+                let face =
+                    if matches!(self.popup, Some(Popup::Fonts(_))) || self.hover == Some(index) {
+                        theme.separator
+                    } else {
+                        theme.hover
+                    };
                 round_rect(frame, x, top, fw_label, ctl, radius, face);
-                self.menu_anchor = (x, top, fw_label, ctl);
-                text.draw(
+                self.font_anchor = (x, top, fw_label, ctl);
+                text.draw_clipped(
                     frame,
                     (x + s(10.0)) as f32,
                     baseline,
                     size,
                     family,
                     theme.text,
+                    (fw_label - s(34.0)) as f32,
                 );
                 chevron(
                     frame,
@@ -724,92 +797,19 @@ impl EditBar {
             self.hits.push((bx, top, w, ctl, BarAction::Close));
         }
 
-        self.menu_hits.clear();
-        if self.editing && self.menu {
-            self.paint_menu(frame, text, theme, dpi);
-        } else {
-            self.menu = false;
+        // Le sélecteur déroulé, par-dessus la page. Il n'a de sens que pour
+        // le bouton qui l'ouvre : la liste des polices se referme avec le bloc.
+        if !self.editing && matches!(self.popup, Some(Popup::Fonts(_))) {
+            self.popup = None;
         }
-    }
-
-    /// La liste des polices, accrochée sous son bouton : une carte, une ligne
-    /// par police, la police du bloc marquée, la ligne survolée relevée.
-    fn paint_menu(
-        &mut self,
-        frame: &mut Frame<'_>,
-        text: &mut TextRenderer,
-        theme: &Theme,
-        dpi: f32,
-    ) {
-        let s = |v: f32| (v * dpi).round() as i32;
-        let size = theme.font_size * dpi;
-        let (ax, ay, aw, ah) = self.menu_anchor;
-        let row = s(32.0);
-        let pad = s(6.0);
-        let entries: Vec<(&str, Option<usize>)> = std::iter::once(("Police du texte", None))
-            .chain(FAMILIES.iter().enumerate().map(|(i, f)| (*f, Some(i))))
-            .collect();
-        let widest = entries
-            .iter()
-            .map(|(label, _)| text.measure(size, label) as i32)
-            .max()
-            .unwrap_or(0);
-        let width = (widest + s(56.0)).max(aw);
-        let height = pad * 2 + row * entries.len() as i32;
-        let x = ax.min(frame.width as i32 - width - s(8.0)).max(s(8.0));
-        let y = ay + ah + s(4.0);
-        let radius = 10.0 * dpi;
-        crate::ui::paint::shadow(frame, x, y + s(6.0), width, height, radius, 22.0 * dpi, 0.4);
-        round_rect(frame, x, y, width, height, radius, theme.bar);
-        crate::ui::paint::round_rect_outline(
-            frame,
-            x,
-            y,
-            width,
-            height,
-            radius,
-            dpi.max(1.0),
-            theme.separator,
-        );
-        let mut ry = y + pad;
-        for (index, (label, choice)) in entries.iter().enumerate() {
-            let current = self.family == *choice;
-            if self.menu_hover == Some(index) {
-                round_rect(
-                    frame,
-                    x + pad,
-                    ry,
-                    width - 2 * pad,
-                    row,
-                    7.0 * dpi,
-                    theme.hover,
-                );
+        match &mut self.popup {
+            Some(Popup::Fonts(list)) => {
+                list.paint(frame, text, raster, theme, dpi, self.font_anchor);
             }
-            // La police du bloc est marquée d'un point d'accent.
-            if current {
-                let dot = s(7.0);
-                round_rect(
-                    frame,
-                    x + s(16.0),
-                    ry + (row - dot) / 2,
-                    dot,
-                    dot,
-                    dot as f32 / 2.0,
-                    theme.accent,
-                );
+            Some(Popup::Colors(colors)) => {
+                colors.paint(frame, text, theme, dpi, self.color_anchor, self.color);
             }
-            let ink = if current { theme.text } else { theme.text_dim };
-            text.draw(
-                frame,
-                (x + s(34.0)) as f32,
-                (ry + row / 2) as f32 + text.ascent(size) / 2.0,
-                size,
-                label,
-                ink,
-            );
-            self.menu_hits
-                .push((x + pad, ry, width - 2 * pad, row, *choice));
-            ry += row;
+            None => {}
         }
     }
 

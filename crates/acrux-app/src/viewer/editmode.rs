@@ -195,6 +195,17 @@ impl Drop for EditMode {
     }
 }
 
+/// Lit le catalogue des polices du système en tâche de fond : quelques
+/// centaines de fichiers à ouvrir, qu'on ne veut pas payer au premier clic
+/// sur la liste.
+fn warm_fonts() {
+    let _ = std::thread::Builder::new()
+        .name("polices".into())
+        .spawn(|| {
+            let _ = acrux_features::sysfonts::families();
+        });
+}
+
 impl Viewer {
     /// Vrai quand le mode est actif.
     pub(super) fn edit_on(&self) -> bool {
@@ -326,6 +337,7 @@ impl Viewer {
         self.sign_panel = None;
         self.objects = None;
         self.selection = None;
+        warm_fonts();
         let ticking = Arc::new(AtomicBool::new(true));
         let waker = window.waker();
         let flag = Arc::clone(&ticking);
@@ -381,6 +393,7 @@ impl Viewer {
         window: &mut dyn WindowHandle,
     ) {
         if self.edit.is_none() {
+            warm_fonts();
             let ticking = Arc::new(AtomicBool::new(true));
             let waker = window.waker();
             let flag = Arc::clone(&ticking);
@@ -407,7 +420,7 @@ impl Viewer {
         }
         if let Some(mode) = &mut self.edit {
             mode.bar.color_set = true;
-            mode.bar.color = crate::ui::editpdf::color_index(color);
+            mode.bar.color = color;
         }
         self.open_new_box(page, pt, window);
     }
@@ -436,16 +449,87 @@ impl Viewer {
             .map(|a| a.frame.size);
         if let (Some(mode), Some(text)) = (self.edit.as_mut(), self.text.as_mut()) {
             mode.bar.active_size = active_size;
-            mode.bar.paint(frame, text, &theme, dpi, y);
+            mode.bar
+                .paint(frame, text, &mut self.raster, &theme, dpi, y);
         }
     }
 
     /// Clic dans la barre du mode. Rend vrai s'il la concernait.
     pub(super) fn edit_bar_click(&mut self, x: i32, y: i32, window: &mut dyn WindowHandle) -> bool {
-        let Some(action) = self.edit.as_ref().and_then(|e| e.bar.mouse_down(x, y)) else {
+        let Some(action) = self.edit.as_mut().and_then(|e| e.bar.mouse_down(x, y)) else {
             return false;
         };
+        self.edit_bar_do(action, window);
+        true
+    }
+
+    /// Touche, quand un sélecteur de la barre est déroulé : il la prend.
+    pub(super) fn edit_popup_key(&mut self, key: Key, window: &mut dyn WindowHandle) -> bool {
+        let Some(action) = self.edit.as_mut().and_then(|e| e.bar.key(key)) else {
+            return false;
+        };
+        self.edit_bar_do(action, window);
+        true
+    }
+
+    /// Caractère tapé, quand un sélecteur de la barre est déroulé.
+    pub(super) fn edit_popup_char(&mut self, c: char, window: &mut dyn WindowHandle) -> bool {
+        let Some(action) = self.edit.as_mut().and_then(|e| e.bar.char(c)) else {
+            return false;
+        };
+        self.edit_bar_do(action, window);
+        true
+    }
+
+    /// Molette ; vrai si un sélecteur de la barre l'a prise.
+    pub(super) fn edit_popup_wheel(&mut self, delta: f64) -> bool {
+        self.edit.as_mut().is_some_and(|e| e.bar.wheel(delta))
+    }
+
+    /// Déplacement de la souris, quand un sélecteur est déroulé : survol, ou
+    /// glissement dans le nuancier — la couleur suit alors en direct.
+    pub(super) fn edit_popup_move(
+        &mut self,
+        x: i32,
+        y: i32,
+        dragging: bool,
+        window: &mut dyn WindowHandle,
+    ) -> bool {
+        if !self.edit_menu_open() {
+            return false;
+        }
+        if let Some(action) = self
+            .edit
+            .as_mut()
+            .and_then(|e| e.bar.mouse_move(x, y, dragging))
+        {
+            self.edit_bar_do(action, window);
+        }
+        true
+    }
+
+    /// Bouton relâché : le glissement dans le nuancier est fini.
+    pub(super) fn edit_popup_up(&mut self) {
+        if let Some(mode) = &mut self.edit {
+            mode.bar.mouse_up();
+        }
+    }
+
+    /// Vrai si la liste des polices a encore des noms à dessiner.
+    pub(super) fn edit_bar_pending(&self) -> bool {
+        self.edit.as_ref().is_some_and(|e| e.bar.pending())
+    }
+
+    /// Exécute ce que la barre du mode demande.
+    fn edit_bar_do(&mut self, action: BarAction, window: &mut dyn WindowHandle) {
         match action {
+            BarAction::Refresh => {}
+            BarAction::Colors => {
+                if let Some(mode) = &mut self.edit {
+                    mode.bar.toggle_colors();
+                }
+            }
+            BarAction::Ink(rgb, chosen) => self.set_ink(rgb, chosen),
             BarAction::Families => {
                 if let Some(mode) = &mut self.edit {
                     mode.bar.toggle_menu();
@@ -464,19 +548,6 @@ impl Viewer {
                 }
                 if let Some(mode) = &mut self.edit {
                     mode.bar.tool = tool;
-                }
-            }
-            BarAction::Color(i) => {
-                if let Some(mode) = &mut self.edit {
-                    mode.bar.color = i;
-                    mode.bar.color_set = true;
-                    // Une zone neuve encore vide prend la couleur choisie.
-                    let rgb = mode.bar.rgb();
-                    if let Some(a) = &mut mode.active {
-                        if a.original.is_empty() && a.drawn.is_empty() {
-                            a.frame.color = rgb;
-                        }
-                    }
                 }
             }
             BarAction::Smaller | BarAction::Larger => {
@@ -502,7 +573,36 @@ impl Viewer {
             }
         }
         window.request_redraw();
-        true
+    }
+
+    /// Applique une couleur : au bloc ouvert, tout entier et aussitôt visible,
+    /// et au texte qu'on ajoutera ensuite. `chosen` : le choix est fait, le
+    /// nuancier se referme et la couleur rejoint les récentes.
+    fn set_ink(&mut self, rgb: [f64; 3], chosen: bool) {
+        let Some(mode) = &mut self.edit else { return };
+        mode.bar.color = rgb;
+        mode.bar.color_set = true;
+        if chosen {
+            mode.bar.close_menu();
+            crate::ui::pickers::remember_color(rgb);
+        }
+        let Some(a) = &mut mode.active else { return };
+        a.frame.color = rgb;
+        a.frame.ink = Some(rgb);
+        #[allow(clippy::cast_possible_truncation)]
+        let ink = [rgb[0] as f32, rgb[1] as f32, rgb[2] as f32];
+        // La couleur vaut pour tout le bloc ; ses styles gardent le reste —
+        // un mot gras reste gras.
+        let fill = format!("{:.4} {:.4} {:.4} rg", rgb[0], rgb[1], rgb[2]).into_bytes();
+        for run in &mut a.styles.runs {
+            run.color = ink;
+            run.fill.clone_from(&fill);
+        }
+        if let Some(live) = &mut a.live {
+            live.set_color(ink);
+        }
+        a.dirty = true;
+        self.relay_active();
     }
 
     /// Matrice espace de page → coordonnées de la vue, pour une page.
@@ -1285,6 +1385,7 @@ impl Viewer {
                 (false, false) => line.family.clone(),
             }),
             color: line.color,
+            ink: None,
             face: None,
             // Le texte lu dans une image est posé droit : on ne sait pas
             // encore relever l'inclinaison d'un scan de travers.
@@ -1857,12 +1958,15 @@ impl Viewer {
                 1.2
             };
             let face = a.frame.face.clone();
-            (align, leading, face, a.frame.size)
+            (align, leading, face, a.frame.size, a.frame.color)
         });
         if let Some(mode) = &mut self.edit {
-            if let Some((align, leading, face, size)) = state {
+            if let Some((align, leading, face, size, color)) = state {
                 {
                     mode.bar.editing = true;
+                    // La pastille montre l'encre du bloc ; un bloc neuf, lui,
+                    // a déjà pris celle de la barre.
+                    mode.bar.color = color;
                     mode.bar.align = align;
                     mode.bar.leading = leading;
                     mode.bar.active_size = Some(size);
@@ -1870,7 +1974,9 @@ impl Viewer {
                     mode.bar.italic = face.as_ref().is_some_and(|f| f.italic);
                     mode.bar.family = face.as_ref().and_then(|f| {
                         f.family.as_ref().and_then(|name| {
-                            crate::ui::editpdf::FAMILIES.iter().position(|c| c == name)
+                            acrux_features::sysfonts::families()
+                                .iter()
+                                .position(|c| c.name.eq_ignore_ascii_case(name))
                         })
                     });
                 }
@@ -1884,7 +1990,7 @@ impl Viewer {
         }
     }
 
-    /// Police suivante de la liste, appliquée au bloc ouvert.
+    /// Police choisie dans la liste, appliquée au bloc ouvert.
     ///
     /// Comme dans Acrobat : la police change pour **tout** le bloc, et se
     /// voit aussitôt.
@@ -1893,17 +1999,15 @@ impl Viewer {
             mode.bar.family = choice;
             mode.bar.close_menu();
         }
+        if let Some(family) = choice.and_then(|i| acrux_features::sysfonts::families().get(i)) {
+            crate::ui::pickers::remember_font(&family.name);
+        }
         self.apply_face();
     }
 
-    /// Vrai si la liste des polices est déroulée : elle prend les clics.
+    /// Vrai si un sélecteur de la barre est déroulé : il prend les clics.
     pub(super) fn edit_menu_open(&self) -> bool {
         self.edit.as_ref().is_some_and(|e| e.bar.menu_open())
-    }
-
-    /// Referme la liste des polices ; vrai si elle était ouverte.
-    pub(super) fn edit_menu_close(&mut self) -> bool {
-        self.edit.as_mut().is_some_and(|e| e.bar.close_menu())
     }
 
     /// Bascule la graisse ou l'italique du bloc ouvert.
@@ -1927,8 +2031,8 @@ impl Viewer {
                 family: e
                     .bar
                     .family
-                    .and_then(|i| crate::ui::editpdf::FAMILIES.get(i))
-                    .map(|f| (*f).to_string()),
+                    .and_then(|i| acrux_features::sysfonts::families().get(i))
+                    .map(|f| f.name.clone()),
                 bold: e.bar.bold,
                 italic: e.bar.italic,
             });
