@@ -138,6 +138,18 @@ pub enum Item {
     },
     /// Marque : coche, croix, rond, trait, point.
     Mark(Mark),
+    /// Texte réparti dans un **peigne** — les cases alignées d'un IBAN, d'un
+    /// BIC, d'une date : un caractère par case, centré dans la sienne.
+    ///
+    /// Le rectangle de pose doit être la réunion des cases
+    /// ([`boxes::Comb::bounds`]) : les caractères se placent par rapport à
+    /// lui.
+    Comb {
+        /// Le texte ; ce qui dépasse le nombre de cases est ignoré.
+        text: String,
+        /// Les cases, de gauche à droite, en coordonnées de page.
+        cells: Vec<Rect>,
+    },
 }
 
 impl Item {
@@ -150,6 +162,7 @@ impl Item {
             Item::Image { .. } => "image",
             Item::Text { .. } => "text",
             Item::Mark(_) => "mark",
+            Item::Comb { .. } => "comb",
         }
     }
 
@@ -518,6 +531,78 @@ fn build(doc: &Document, options: &Options) -> Result<Form> {
         Item::Image { data, cutout } => cutout::form(doc, data, cutout.as_ref(), options.color),
         Item::Text { text } => Ok(text_form(doc, text, options.color)),
         Item::Mark(mark) => Ok(marks::form(*mark, options.color)),
+        Item::Comb { text, cells } => Ok(comb_form(text, cells, options.color)),
+    }
+}
+
+/// Texte d'un peigne : chaque caractère centré dans sa case, en Helvetica.
+///
+/// Le repère est celui de la réunion des cases, en points : posé dans ce
+/// même rectangle, le dessin n'est ni étiré ni déplacé. Le corps suit la
+/// hauteur des cases, et se réduit si un caractère large — un « W » dans une
+/// case étroite — ne tenait pas.
+fn comb_form(text: &str, cells: &[Rect], color: Rgb) -> Form {
+    let standard = StandardFont::Helvetica;
+    let bounds = boxes::bounds_of(cells);
+    let height = cells.iter().map(Rect::height).fold(f64::MAX, f64::min);
+    let narrowest = cells.iter().map(Rect::width).fold(f64::MAX, f64::min);
+    let chars: Vec<char> = text
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .map(|c| if fits_winansi(&c.to_string()) { c } else { '?' })
+        .take(cells.len())
+        .collect();
+    let mut size = (height * 0.74).max(1.0);
+    let widest = chars
+        .iter()
+        .map(|c| standard.text_width(&c.to_string(), 1.0))
+        .fold(0.0, f64::max);
+    if widest * size > narrowest * 0.86 {
+        size = narrowest * 0.86 / widest;
+    }
+    // Hauteur d'une capitale d'Helvetica : 718 millièmes du corps.
+    let cap = 0.718 * size;
+    let mut content = format!(
+        "{} {} {} rg\nBT /AkText {} Tf\n",
+        fmt(color[0]),
+        fmt(color[1]),
+        fmt(color[2]),
+        fmt(size)
+    );
+    for (c, cell) in chars.iter().zip(cells) {
+        let glyph = c.to_string();
+        let width = standard.text_width(&glyph, size);
+        let x = cell.x0 - bounds.x0 + (cell.width() - width) / 2.0;
+        let y = cell.y0 - bounds.y0 + (cell.height() - cap) / 2.0;
+        let _ = writeln!(
+            content,
+            "1 0 0 1 {} {} Tm {} Tj",
+            fmt(x),
+            fmt(y),
+            pdf_literal(&encode_win_ansi(&glyph).bytes)
+        );
+    }
+    content.push_str("ET\n");
+    let mut font_dict = Dict::new();
+    font_dict.insert(Name::new("Type"), Object::Name(Name::new("Font")));
+    font_dict.insert(Name::new("Subtype"), Object::Name(Name::new("Type1")));
+    font_dict.insert(
+        Name::new("BaseFont"),
+        Object::Name(Name::new(standard.base_font())),
+    );
+    font_dict.insert(
+        Name::new("Encoding"),
+        Object::Name(Name::new("WinAnsiEncoding")),
+    );
+    let mut fonts = Dict::new();
+    fonts.insert(Name::new("AkText"), Object::Dict(font_dict));
+    let mut resources = Dict::new();
+    resources.insert(Name::new("Font"), Object::Dict(fonts));
+    Form {
+        content,
+        width: bounds.width().max(1.0),
+        height: bounds.height().max(1.0),
+        resources,
     }
 }
 
@@ -729,7 +814,7 @@ fn annotate(
     if let Some(author) = &options.author {
         d.insert(Name::new("T"), Object::String(encode_text(author)));
     }
-    if let Item::Typed { text } | Item::Text { text } = &options.item {
+    if let Item::Typed { text } | Item::Text { text } | Item::Comb { text, .. } = &options.item {
         d.insert(Name::new("Contents"), Object::String(encode_text(text)));
     }
     if matches!(options.item, Item::Text { .. }) {

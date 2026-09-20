@@ -38,7 +38,17 @@ pub const MAX_SIDE: f64 = 40.0;
 /// Caractères qui dessinent une case vide.
 const BOX_CHARS: [char; 8] = ['☐', '□', '▢', '◻', '❏', '❐', '❑', '❒'];
 
-/// Vrai si le rectangle a la taille et la forme d'une case.
+/// Vrai si le rectangle a la taille d'une **cellule** : une case, carrée ou
+/// non. Les cellules d'un peigne — un IBAN — sont souvent deux fois plus
+/// larges que hautes ; seule une case à cocher doit être carrée
+/// ([`box_shaped`]), et c'est [`sort_out`] qui l'exige.
+fn cell_shaped(r: &Rect) -> bool {
+    let (w, h) = (r.width(), r.height());
+    let side = MIN_SIDE..=MAX_SIDE;
+    side.contains(&w) && side.contains(&h) && (w / h) > 0.6 && (w / h) < 2.4
+}
+
+/// Vrai si le rectangle a la taille et la forme d'une case à cocher.
 fn box_shaped(r: &Rect) -> bool {
     let (w, h) = (r.width(), r.height());
     let side = MIN_SIDE..=MAX_SIDE;
@@ -87,7 +97,130 @@ fn outlined(bytes: &[u8]) -> bool {
     false
 }
 
-/// Les cases à cocher dessinées d'une page, en espace de page.
+/// Un **peigne** : des cases alignées et serrées, une par caractère — un
+/// IBAN, un BIC, une date. On n'y coche rien : on y écrit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Comb {
+    /// Les cases, de gauche à droite.
+    pub cells: Vec<Rect>,
+}
+
+impl Comb {
+    /// Le rectangle qui réunit les cases.
+    #[must_use]
+    pub fn bounds(&self) -> Rect {
+        bounds_of(&self.cells)
+    }
+}
+
+/// Le rectangle qui réunit des cases.
+#[must_use]
+pub fn bounds_of(cells: &[Rect]) -> Rect {
+    let mut cells = cells.iter();
+    let Some(first) = cells.next() else {
+        return Rect::new(0.0, 0.0, 0.0, 0.0);
+    };
+    cells.fold(*first, |b, c| {
+        Rect::new(
+            b.x0.min(c.x0),
+            b.y0.min(c.y0),
+            b.x1.max(c.x1),
+            b.y1.max(c.y1),
+        )
+    })
+}
+
+/// Ce qu'une page offre à remplir : des cases à cocher, et des peignes.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Found {
+    /// Les cases isolées : on les coche.
+    pub checks: Vec<Rect>,
+    /// Les peignes : on y écrit, un caractère par case.
+    pub combs: Vec<Comb>,
+}
+
+impl Found {
+    /// La case à cocher sous un point.
+    #[must_use]
+    pub fn check_at(&self, x: f64, y: f64) -> Option<Rect> {
+        at(&self.checks, x, y)
+    }
+
+    /// Le peigne sous un point.
+    #[must_use]
+    pub fn comb_at(&self, x: f64, y: f64) -> Option<&Comb> {
+        self.combs.iter().find(|c| {
+            let b = c.bounds();
+            x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1
+        })
+    }
+}
+
+/// Nombre de cases à partir duquel une rangée est un peigne. Deux cases
+/// voisines — « oui », « non » — restent des cases à cocher.
+const COMB_MIN: usize = 3;
+
+/// Range les cases en cases à cocher et en peignes.
+///
+/// Un peigne est une rangée d'au moins [`COMB_MIN`] cases de même hauteur,
+/// posées sur la même ligne, et **serrées** : l'écart entre deux voisines ne
+/// dépasse pas les trois quarts d'une case. Une date « JJ MM AAAA », dont
+/// les groupes sont à peine détachés, fait ainsi un seul peigne de huit.
+#[must_use]
+pub fn sort_out(boxes: Vec<Rect>) -> Found {
+    let mut rows: Vec<Vec<Rect>> = Vec::new();
+    let mut sorted = boxes;
+    sorted.sort_by(|a, b| b.y1.total_cmp(&a.y1).then(a.x0.total_cmp(&b.x0)));
+    for cell in sorted {
+        let row = rows.iter_mut().find(|row| {
+            row.first()
+                .is_some_and(|r| (r.y0 - cell.y0).abs() <= 1.5 && (r.y1 - cell.y1).abs() <= 1.5)
+        });
+        match row {
+            Some(row) => row.push(cell),
+            None => rows.push(vec![cell]),
+        }
+    }
+    let mut found = Found::default();
+    for mut row in rows {
+        row.sort_by(|a, b| a.x0.total_cmp(&b.x0));
+        // La rangée se coupe là où l'écart est trop grand.
+        let mut run: Vec<Rect> = Vec::new();
+        let close = |run: &mut Vec<Rect>, found: &mut Found| {
+            if run.len() >= COMB_MIN {
+                found.combs.push(Comb {
+                    cells: std::mem::take(run),
+                });
+            } else {
+                // Une case à cocher est carrée ; une cellule large et seule
+                // n'est qu'un cadre.
+                found.checks.extend(run.drain(..).filter(box_shaped));
+            }
+        };
+        for cell in row {
+            let apart = run
+                .last()
+                .is_some_and(|last| cell.x0 - last.x1 > 0.75 * last.width().min(cell.width()));
+            if apart {
+                close(&mut run, &mut found);
+            }
+            run.push(cell);
+        }
+        close(&mut run, &mut found);
+    }
+    found
+}
+
+/// Les cases à cocher et les peignes dessinés d'une page.
+///
+/// # Errors
+/// Flux de contenu illisible.
+pub fn scan(doc: &Document, page: &Page) -> Result<Found> {
+    Ok(sort_out(find(doc, page)?))
+}
+
+/// Toutes les cases dessinées d'une page, en espace de page — cases à cocher
+/// et cellules de peigne confondues ; [`scan`] les départage.
 ///
 /// # Errors
 /// Flux de contenu illisible.
@@ -95,7 +228,7 @@ pub fn find(doc: &Document, page: &Page) -> Result<Vec<Rect>> {
     let content = acrux_render::page::page_content(doc, page);
     let mut found: Vec<Rect> = edit_objects::list(doc, page)?
         .into_iter()
-        .filter(|o| o.kind == Kind::Path && box_shaped(&o.bbox))
+        .filter(|o| o.kind == Kind::Path && cell_shaped(&o.bbox))
         .filter(|o| content.get(o.range.0..o.range.1).is_some_and(outlined))
         .map(|o| o.bbox)
         .collect();
@@ -169,7 +302,7 @@ fn ruled_squares(rules: &[Rect]) -> Vec<Rect> {
             bars.sort_by(f64::total_cmp);
             for pair in bars.windows(2) {
                 let candidate = Rect::new(lx, pair[0], rx, pair[1]);
-                if box_shaped(&candidate) {
+                if cell_shaped(&candidate) {
                     squares.push(candidate);
                 }
             }
@@ -204,7 +337,9 @@ mod tests {
     fn les_deux_cases_du_formulaire_sont_trouvees_et_elles_seules() {
         let doc = Document::load(corpus("reels/chrome-skia-formulaire-lignes-cases.pdf")).unwrap();
         let pages = collect_pages(&doc).unwrap();
-        let boxes = find(&doc, &pages[0]).unwrap();
+        let found = scan(&doc, &pages[0]).unwrap();
+        assert!(found.combs.is_empty(), "{:?}", found.combs);
+        let boxes = found.checks;
         assert_eq!(boxes.len(), 2, "cases trouvées : {boxes:?}");
         for b in &boxes {
             assert!((b.width() - 15.0).abs() < 1.0 && (b.height() - 15.0).abs() < 1.0);
@@ -226,10 +361,36 @@ mod tests {
             let doc = Document::load(corpus(name)).unwrap();
             let pages = collect_pages(&doc).unwrap();
             for page in &pages {
-                let boxes = find(&doc, page).unwrap();
-                assert!(boxes.is_empty(), "{name} : {boxes:?}");
+                let found = scan(&doc, page).unwrap();
+                assert!(found.checks.is_empty(), "{name} : {:?}", found.checks);
+                assert!(found.combs.is_empty(), "{name} : {:?}", found.combs);
             }
         }
+    }
+
+    /// Une rangée serrée de cases est un peigne — on y écrit ; deux cases
+    /// voisines restent des cases à cocher ; une date en trois groupes à
+    /// peine détachés ne fait qu'un peigne.
+    #[test]
+    fn une_rangee_serree_est_un_peigne() {
+        let cell = |x: f64, y: f64| Rect::new(x, y, x + 18.0, y + 16.0);
+        let mut boxes: Vec<Rect> = [99.0, 117.0, 144.0, 162.0, 186.6, 205.4, 224.2, 243.0]
+            .iter()
+            .map(|x| cell(*x, 112.0))
+            .collect();
+        boxes.push(cell(259.0, 573.0));
+        boxes.push(cell(368.0, 573.7));
+        let found = sort_out(boxes);
+        assert_eq!(found.combs.len(), 1);
+        assert_eq!(found.combs[0].cells.len(), 8);
+        assert_eq!(found.checks.len(), 2, "{:?}", found.checks);
+        assert!(found.comb_at(150.0, 120.0).is_some());
+        assert!(found.comb_at(265.0, 580.0).is_none());
+        assert!(found.check_at(265.0, 580.0).is_some());
+        assert!(
+            found.check_at(150.0, 120.0).is_none(),
+            "une cellule ne se coche pas"
+        );
     }
 
     /// Une case tracée trait par trait — quatre filets — est une case ; trois

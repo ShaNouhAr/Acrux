@@ -425,7 +425,7 @@ struct Loaded {
     models: Vec<acrux_features::three_d::Model>,
     /// Cases à cocher **dessinées** de chaque page déjà regardée (voir
     /// [`acrux_features::fillsign::boxes`]), oubliées à chaque modification.
-    boxes: HashMap<usize, Vec<Rect>>,
+    boxes: HashMap<usize, acrux_features::fillsign::boxes::Found>,
     /// Étiquette de chaque page (`/PageLabels`). Vide quand le document s'en
     /// tient à la numérotation décimale : c'est ce qui distingue « iii sur
     /// 240 » de « 3 sur 240 » dans la barre d'outils et la barre d'état.
@@ -477,6 +477,8 @@ enum PromptKind {
     Field { name: String, kind: FieldType },
     /// Commentaire à joindre à un surlignage déjà découpé en zones.
     Highlight { zones: Vec<(usize, Rect)> },
+    /// Texte à répartir dans un peigne de cases (IBAN, BIC, date) de `page`.
+    Comb { page: usize, cells: Vec<Rect> },
     /// Texte de remplissage à poser sur `page`, dans `rect`.
     /// Nouveau texte pour une plage de glyphes d'une ligne.
     EditText {
@@ -2137,6 +2139,21 @@ impl Viewer {
                         let zones = zones.clone();
                         self.prompt = None;
                         self.add_highlights(&zones, Some(&value));
+                    }
+                    PromptKind::Comb { page, cells } => {
+                        let (page, cells) = (*page, cells.clone());
+                        self.prompt = None;
+                        if !value.trim().is_empty() {
+                            let rect = acrux_features::fillsign::boxes::bounds_of(&cells);
+                            self.apply_fillsign(
+                                page,
+                                rect,
+                                acrux_features::fillsign::Item::Comb { text: value, cells },
+                            );
+                            // Le texte posé n'est pas pris en main : on passe
+                            // au peigne suivant.
+                            self.placed = None;
+                        }
                     }
                     PromptKind::EditText {
                         page,
@@ -5525,6 +5542,19 @@ impl Viewer {
         let Some((page, point)) = self.page_at(x, y) else {
             return false;
         };
+        if let Some(cells) = self.comb_at(item, page, point) {
+            // Un peigne : on demande le texte, qui se répartira dans les
+            // cases, un caractère par case.
+            let count = cells.len();
+            self.prompt = Some(Prompt {
+                title: "Remplir les cases".into(),
+                label: format!("Texte à répartir dans les {count} cases :"),
+                input: TextInput::new("un caractère par case"),
+                error: None,
+                kind: PromptKind::Comb { page, cells },
+            });
+            return true;
+        }
         if item == SignItem::Move {
             // Le mode déplacement ne pose rien : le clic sert à choisir —
             // sauf dans une case à cocher dessinée, qu'il coche. C'est le
@@ -5608,19 +5638,35 @@ impl Viewer {
         true
     }
 
-    /// La case à cocher **dessinée** sous un point de la page, s'il y en a
-    /// une. Les cases d'une page se cherchent une fois, puis se retiennent.
-    fn drawn_box_at(&mut self, page: usize, point: Point) -> Option<Rect> {
+    /// Ce que la page offre à remplir — cases à cocher et peignes dessinés.
+    /// L'inventaire d'une page se fait une fois, puis se retient.
+    fn drawn_boxes(&mut self, page: usize) -> Option<&acrux_features::fillsign::boxes::Found> {
         let l = self.loaded.as_mut()?;
         if !l.boxes.contains_key(&page) {
             let found = l
                 .pages
                 .get(page)
-                .and_then(|p| acrux_features::fillsign::boxes::find(&l.doc, p).ok())
+                .and_then(|p| acrux_features::fillsign::boxes::scan(&l.doc, p).ok())
                 .unwrap_or_default();
             l.boxes.insert(page, found);
         }
-        acrux_features::fillsign::boxes::at(l.boxes.get(&page)?, point.x, point.y)
+        l.boxes.get(&page)
+    }
+
+    /// La case à cocher **dessinée** sous un point de la page.
+    fn drawn_box_at(&mut self, page: usize, point: Point) -> Option<Rect> {
+        self.drawn_boxes(page)?.check_at(point.x, point.y)
+    }
+
+    /// Le peigne dessiné sous un point de la page, pour qui a la main nue ou
+    /// l'outil texte : c'est là qu'on écrit un IBAN, un BIC, une date.
+    fn comb_at(&mut self, item: SignItem, page: usize, point: Point) -> Option<Vec<Rect>> {
+        if !matches!(item, SignItem::Move | SignItem::Text) {
+            return None;
+        }
+        self.drawn_boxes(page)?
+            .comb_at(point.x, point.y)
+            .map(|c| c.cells.clone())
     }
 
     /// Où poser une marque cliquée dans une case dessinée : **dans** la case,
@@ -5728,7 +5774,7 @@ impl Viewer {
         let Some(item) = self.sign_panel.as_ref().and_then(|p| p.item) else {
             return;
         };
-        if self.capture.is_some() || item == SignItem::Draw || item == SignItem::Text {
+        if self.capture.is_some() || item == SignItem::Draw {
             return;
         }
         let Some((mx, my)) = self.last_mouse else {
@@ -5737,6 +5783,32 @@ impl Viewer {
         let Some((page, point)) = self.page_at(mx, my) else {
             return;
         };
+        // Au-dessus d'un peigne, c'est lui qui s'encadre : un clic y écrira.
+        if let Some(cells) = self.comb_at(item, page, point) {
+            let bounds = acrux_features::fillsign::boxes::bounds_of(&cells);
+            let layout = self.layout();
+            if let Some(m) = self.page_to_view(&layout, page) {
+                let a = m.apply(Point::new(bounds.x0, bounds.y1));
+                let b = m.apply(Point::new(bounds.x1, bounds.y0));
+                let ring = (2.0 * self.dpi_scale).round();
+                #[allow(clippy::cast_possible_truncation)]
+                crate::ui::paint::round_rect_outline(
+                    frame,
+                    (a.x.min(b.x) - ring) as i32,
+                    (a.y.min(b.y) - ring) as i32,
+                    ((a.x - b.x).abs() + 2.0 * ring) as i32,
+                    ((a.y - b.y).abs() + 2.0 * ring) as i32,
+                    3.0 * self.dpi_scale as f32,
+                    ring as f32,
+                    self.theme.accent,
+                );
+            }
+            return;
+        }
+        // L'outil texte n'a pas d'autre aperçu que son curseur.
+        if item == SignItem::Text {
+            return;
+        }
         // La main nue ne montre rien — sauf au-dessus d'une case dessinée,
         // où elle propose la coche qu'un clic poserait.
         if item == SignItem::Move && self.snap_box(item, page, point).is_none() {

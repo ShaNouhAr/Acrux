@@ -9,6 +9,16 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 
 ## 0.22.0 — non publiée
 
+- **Les peignes se remplissent** — BIC, IBAN, date : ces rangées de cases
+  alignées, une par caractère. Dans « Remplir et signer » (et là seulement),
+  la main nue ou l'outil texte au-dessus d'un peigne, il s'encadre d'un bout à
+  l'autre ; un clic demande le texte, qui se répartit **un caractère par case,
+  centré dans la sienne**. C'est le mode « peigne » d'Acrobat, sans la poignée
+  d'espacement à régler : les cases sont détectées (`fillsign::boxes::scan`,
+  `Item::Comb`). Une rangée d'au moins trois cases serrées est un peigne — on
+  n'y coche plus rien par mégarde — ; ses cellules peuvent être rectangulaires,
+  seule une case à cocher doit être carrée. Le tout reste une annotation :
+  déplaçable, supprimable, aplatissable.
 - **Cocher sans rien choisir**, comme dans Acrobat : « Remplir et signer »
   ouvert, la main nue (« Déplacer »), une case dessinée s'encadre au survol
   avec la coche qu'un clic y poserait — et le clic la pose. Plus besoin d'aller
