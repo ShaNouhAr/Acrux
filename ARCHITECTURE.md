@@ -366,6 +366,10 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   les confie au système (`CreateIconIndirect` sous Windows).
 - `ui/modebar` : barre fine d'un outil d'annotation en cours — son nom, sa consigne, « Terminer ».
   Un outil qui change ce que fait un clic sur la page doit le dire.
+- Un **geste** (déplacement, redimensionnement) ne rend la page que deux fois : au début, le bloc
+  est photographié sur la page rendue puis effacé ; la photo suit le pointeur ; à la fin, le bloc
+  est réécrit à sa nouvelle place. Rendre la page à chaque pas la ferait clignoter, et le fil de
+  rendu, qui a un temps de retard, verrait ses images écartées (`live_edit`).
 - Le **déplacement d'un bloc de texte** passe par `edit_text::move_paragraph` : la boîte de départ
   sert à retrouver le bloc, celle d'arrivée à l'écrire. Le texte s'y recompose, donc élargir la
   boîte reflue les lignes au lieu d'étirer les lettres. Le mode « Modifier le PDF » réutilise pour

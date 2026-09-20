@@ -7,6 +7,20 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
+## 0.16.0 — 20 septembre 2026
+
+### La page ne clignote plus quand on déplace
+
+- Un bloc déplacé était **réécrit puis la page rendue à chaque pas** : c'est
+  cette suite de rendus qui faisait clignoter. Désormais la page n'est rendue
+  que **deux fois par geste** — une au début, une à la fin.
+- Entre les deux, c'est une **photo du bloc**, prise sur la page rendue, qui
+  suit le pointeur. Le bloc est effacé de la page le temps du geste, donc on
+  ne le voit pas en double, et l'aperçu reste exact au pixel près.
+- Les images que le fil de rendu renvoie pour la page en cours de
+  déplacement sont **écartées** : venant d'un état dépassé, elles ramenaient
+  le bloc en arrière l'espace d'une image.
+
 ## 0.15.0 — 20 septembre 2026
 
 ### On voit ce qu'on déplace

@@ -701,6 +701,13 @@ pub struct Viewer {
     /// Une signature est « prise » dans le panneau : la lâcher sur la page
     /// la pose là. C'est l'autre geste attendu, à côté du choix puis du clic.
     carrying: bool,
+    /// Page en cours de modification **en direct** (un déplacement).
+    ///
+    /// Pendant un geste, la page est rendue ici même, à chaque étape. Le fil
+    /// de rendu, lui, travaille sur une copie qui a un temps de retard : ses
+    /// images montreraient l'élément à sa position précédente, et la page
+    /// clignoterait entre les deux. On les écarte donc le temps du geste.
+    live_edit: Option<usize>,
     /// Fenêtre de capture d'une signature, ouverte par-dessus tout.
     capture: Option<Capture>,
     /// Signature enregistrée, conservée entre deux sessions.
@@ -848,6 +855,7 @@ impl Viewer {
             inking: None,
             placed: None,
             carrying: false,
+            live_edit: None,
             capture: None,
             signatures,
             initials,
@@ -5213,6 +5221,7 @@ impl Viewer {
         }
         // L'original s'efface le temps du geste : c'est l'aperçu qui suit le
         // pointeur, et l'on ne voit pas l'élément en double.
+        self.live_edit = self.placed.as_ref().map(|p| p.page);
         self.show_placed(false);
         true
     }
@@ -5293,6 +5302,7 @@ impl Viewer {
         // Remontré d'abord : l'opération qui suit part d'un état propre, et
         // l'annulation retrouve un élément visible.
         self.show_placed(true);
+        self.live_edit = None;
         if !moved {
             return true;
         }
@@ -5599,8 +5609,14 @@ impl Viewer {
             return false;
         };
         let mut any = false;
+        let live = self.live_edit;
         for r in worker.poll() {
             self.last_render_ms = r.ms;
+            // Image d'une page qu'on est en train de bouger : elle vient
+            // d'un état dépassé, la garder ferait clignoter la page.
+            if live == Some(r.page) {
+                continue;
+            }
             l.cache.insert((r.page, r.scale_key), r.bitmap);
             any = true;
         }

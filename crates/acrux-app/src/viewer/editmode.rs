@@ -79,9 +79,19 @@ pub(super) struct Picked {
     pub origin: Option<ParagraphFrame>,
     /// Place de l'opération dans l'historique : une seule par geste.
     pub history: Option<usize>,
-    /// Dernière écriture : le bloc suit le pointeur, mais pas plus vite que
-    /// la page ne se rend.
-    pub last_write: Instant,
+    /// Image du bloc prise au début du geste : c'est **elle** qui suit le
+    /// pointeur. Rendre la page à chaque pas la ferait clignoter.
+    pub snapshot: Option<Snapshot>,
+}
+
+/// Image d'un bloc, prise sur la page rendue.
+pub(super) struct Snapshot {
+    /// Pixels RGBA prémultipliés, ligne 0 en haut.
+    pub pixels: Vec<u8>,
+    /// Largeur en pixels.
+    pub width: u32,
+    /// Hauteur en pixels.
+    pub height: u32,
 }
 
 /// Déplacement ou redimensionnement en cours.
@@ -429,7 +439,30 @@ impl Viewer {
                 }
             }
         }
-        // 2. Le bloc sélectionné : boîte, poignées, repères d'alignement.
+        // 2. Pendant un geste, la photo du bloc suit le pointeur. C'est ce
+        //    qui remplace le re-rendu de la page à chaque pas : la page est
+        //    rendue deux fois en tout, au début et à la fin.
+        if let Some((page, rect, shot)) = self.edit.as_ref().and_then(|e| {
+            let p = e.picked.as_ref()?;
+            let drag = p.drag?;
+            let shot = p.snapshot.as_ref()?;
+            Some((p.page, drag.result, shot))
+        }) {
+            if let Some(view) = self.page_rect_to_view(page, rect) {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                blit_scaled(
+                    frame,
+                    view.x.round() as i32,
+                    view.y.round() as i32,
+                    view.w.round().max(1.0) as u32,
+                    view.h.round().max(1.0) as u32,
+                    &shot.pixels,
+                    shot.width,
+                    shot.height,
+                );
+            }
+        }
+        // 3. Le bloc sélectionné : boîte, poignées, repères d'alignement.
         if let Some((page, rect, handle, guides)) =
             self.edit.as_ref().and_then(|e| e.picked.as_ref()).map(|p| {
                 (
@@ -465,7 +498,7 @@ impl Viewer {
                 }
             }
         }
-        // 3. Le bloc en cours : filet fin, sélection, curseur.
+        // 4. Le bloc en cours : filet fin, sélection, curseur.
         let Some(page) = active_page else { return };
         let Some(m) = self.page_to_view(&layout, page) else {
             return;
@@ -651,7 +684,7 @@ impl Viewer {
                 hover: None,
                 origin: None,
                 history: None,
-                last_write: Instant::now(),
+                snapshot: None,
             });
         }
         self.set_notice(
@@ -732,7 +765,13 @@ impl Viewer {
         });
         picked.origin = Some(picked.frame.clone());
         picked.history = None;
-        picked.last_write = Instant::now();
+        // Le fil de rendu a un temps de retard sur un geste : ses images de
+        // cette page sont écartées jusqu'au relâchement.
+        self.live_edit = Some(page);
+        // Une photo du bloc, puis on l'efface de la page : la photo suit le
+        // pointeur, et la page n'est rendue qu'aux deux bouts du geste.
+        self.take_snapshot();
+        self.erase_block();
         true
     }
 
@@ -786,40 +825,83 @@ impl Viewer {
             let y0 = drag.result.y0.clamp(crop.y0, (crop.y1 - h).max(crop.y0));
             drag.result = Rect::new(x0, y0, x0 + w, y0 + h);
         }
-        // Le bloc suit le pointeur : on l'écrit vraiment, au plus une fois
-        // toutes les 70 ms. Voir la boîte bouger seule ne dit pas où en est le
-        // texte, et attendre le relâchement pour le découvrir non plus.
-        if picked.last_write.elapsed() >= Duration::from_millis(70) {
-            self.write_drag();
-        }
     }
 
-    /// Écrit le bloc à la place où le geste l'a amené.
-    fn write_drag(&mut self) {
-        let Some((page, from, to, expected, text)) = self
+    /// Photographie le bloc sur la page telle qu'elle est rendue.
+    fn take_snapshot(&mut self) {
+        let Some((page, bbox)) = self
             .edit
-            .as_mut()
-            .and_then(|e| e.picked.as_mut())
-            .and_then(|p| {
-                let drag = p.drag?;
-                let origin = p.origin.clone().unwrap_or_else(|| p.frame.clone());
-                let mut to = origin.clone();
-                to.x0 += drag.result.x0 - drag.start.x0;
-                to.baseline += drag.result.y1 - drag.start.y1;
-                to.width = (origin.width + drag.result.width() - drag.start.width()).max(to.size);
-                let bouge = (to.x0 - p.frame.x0).abs() > 0.3
-                    || (to.baseline - p.frame.baseline).abs() > 0.3
-                    || (to.width - p.frame.width).abs() > 0.3;
-                if !bouge {
-                    return None;
-                }
-                p.last_write = Instant::now();
-                Some((p.page, p.frame.clone(), to, p.drawn.clone(), p.text.clone()))
-            })
+            .as_ref()
+            .and_then(|e| e.picked.as_ref())
+            .map(|p| (p.page, p.bbox))
         else {
             return;
         };
-        self.apply_move(page, &from, &to, &expected, &text);
+        let scale = self.scale();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let key = (scale * 1000.0).round() as u32;
+        let Some(l) = self.loaded.as_ref() else {
+            return;
+        };
+        let Some(bitmap) = l.cache.get(&(page, key)) else {
+            return;
+        };
+        let Some(page_ref) = l.pages.get(page) else {
+            return;
+        };
+        // Boîte du bloc en pixels de l'image de la page.
+        let (pw, ph) = (bitmap.width(), bitmap.height());
+        let m = base_matrix(
+            &page_ref.crop_box(&l.doc),
+            scale,
+            page_ref.rotate(&l.doc),
+            pw,
+            ph,
+        );
+        let dev = m.transform_rect(&bbox);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let (x0, y0) = (
+            dev.x0.floor().max(0.0) as u32,
+            dev.y0.floor().max(0.0) as u32,
+        );
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let (x1, y1) = (
+            (dev.x1.ceil().max(0.0) as u32).min(pw),
+            (dev.y1.ceil().max(0.0) as u32).min(ph),
+        );
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let (w, h) = (x1 - x0, y1 - y0);
+        let data = bitmap.data();
+        let mut pixels = Vec::with_capacity((w * h * 4) as usize);
+        for row in y0..y1 {
+            let start = ((row * pw + x0) * 4) as usize;
+            let end = start + (w * 4) as usize;
+            if end <= data.len() {
+                pixels.extend_from_slice(&data[start..end]);
+            }
+        }
+        if let Some(picked) = self.edit.as_mut().and_then(|e| e.picked.as_mut()) {
+            picked.snapshot = Some(Snapshot {
+                pixels,
+                width: w,
+                height: h,
+            });
+        }
+    }
+
+    /// Efface le bloc de la page le temps du geste (son ancre reste).
+    fn erase_block(&mut self) {
+        let Some((page, frame, drawn)) = self
+            .edit
+            .as_ref()
+            .and_then(|e| e.picked.as_ref())
+            .map(|p| (p.page, p.frame.clone(), p.drawn.clone()))
+        else {
+            return;
+        };
+        self.write_block(page, &frame, &frame, &drawn, "");
     }
 
     /// Repères d'alignement : bords des autres blocs de la page qui tombent
@@ -1102,21 +1184,93 @@ impl Viewer {
         );
         let to = self.clamped_frame(page, to);
         let to = self.clamped_frame(page, to);
-        self.apply_move(page, &from, &to, &expected, &text);
+        self.live_edit = None;
+        if let Some(picked) = self.edit.as_mut().and_then(|e| e.picked.as_mut()) {
+            picked.snapshot = None;
+        }
+        // Le bloc a été effacé au début du geste : la page ne porte plus
+        // rien à cet endroit, et c'est donc un bloc neuf qu'on écrit à
+        // l'arrivée. L'historique, lui, décrit le geste entier : du texte
+        // d'origine, dans sa boîte d'origine, à la boîte d'arrivée.
+        self.apply_move(page, &from, &to, "", &expected, &text);
     }
 
-    /// Écrit le bloc déplacé dans le document, et l'inscrit à l'historique.
-    fn apply_move(
+    /// Écrit le bloc dans une boîte, rend la page, et ne touche ni à
+    /// l'historique ni au fil de rendu.
+    ///
+    /// Sert aux deux bouts d'un geste : effacer le bloc au début, le remettre
+    /// à sa nouvelle place à la fin.
+    fn write_block(
         &mut self,
         page: usize,
         from: &ParagraphFrame,
         to: &ParagraphFrame,
         expected: &str,
         text: &str,
+    ) -> bool {
+        let scale = self.scale();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let key_scale = (scale * 1000.0).round() as u32;
+        let Some(l) = self.loaded.as_mut() else {
+            return false;
+        };
+        let Some(page_ref) = l.pages.get(page).cloned() else {
+            return false;
+        };
+        if let Err(e) = move_paragraph(&l.doc, &page_ref, from, to, expected, text) {
+            self.set_notice(format!("déplacement impossible : {e}"));
+            return false;
+        }
+        if let Ok(pages) = collect_pages(&l.doc) {
+            l.pages = pages;
+            l.page_index = PageIndex::new(&l.pages);
+        }
+        l.texts.remove(&page);
+        l.cache.retain(|(p, _), _| *p != page);
+        if let Some(p) = l.pages.get(page) {
+            let options = RenderOptions {
+                annotations: true,
+                time_budget: Some(Duration::from_secs(5)),
+                background: Some(Color::WHITE),
+                ..RenderOptions::default()
+            };
+            let bitmap = render_page(&l.doc, p, scale, &options).bitmap;
+            l.cache.insert((page, key_scale), bitmap);
+        }
+        if let Some(mode) = &mut self.edit {
+            mode.units.remove(&page);
+            mode.hover = None;
+        }
+        true
+    }
+
+    /// Écrit le bloc déplacé dans le document, et l'inscrit à l'historique.
+    #[allow(clippy::too_many_arguments)] // la page, deux boîtes, deux textes
+    /// `expected` est ce que porte la page **maintenant** (rien, quand le
+    /// bloc a été effacé pour le geste) ; `was` ce qu'elle portait avant le
+    /// geste, et c'est lui qui va dans l'historique, puisqu'une annulation
+    /// rejoue depuis le fichier d'origine.
+    fn apply_move(
+        &mut self,
+        page: usize,
+        from: &ParagraphFrame,
+        to: &ParagraphFrame,
+        expected: &str,
+        was: &str,
+        text: &str,
     ) {
         let scale = self.scale();
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let key_scale = (scale * 1000.0).round() as u32;
+        // D'où part l'opération vue par le fil de rendu : la boîte d'avant le
+        // geste, puisqu'il n'a vu aucune des écritures intermédiaires.
+        let live = self.live_edit;
+        let origin_for_worker = self
+            .edit
+            .as_ref()
+            .and_then(|e| e.picked.as_ref())
+            .and_then(|p| p.origin.clone())
+            .unwrap_or_else(|| from.clone());
         let Some(l) = self.loaded.as_mut() else {
             return;
         };
@@ -1125,14 +1279,19 @@ impl Viewer {
         };
         match move_paragraph(&l.doc, &page_ref, from, to, expected, text) {
             Ok(map) => {
-                if let Some(w) = &mut l.worker {
-                    w.edit(EditOp::Paragraph {
-                        page,
-                        frame: from.clone(),
-                        to: Some(to.clone()),
-                        expected: expected.to_string(),
-                        text: text.to_string(),
-                    });
+                // Pendant un geste, le fil de rendu n'est pas prévenu : il
+                // recevra l'opération entière au relâchement, ce qui lui
+                // évite de rendre quinze états intermédiaires.
+                if live.is_none() {
+                    if let Some(w) = &mut l.worker {
+                        w.edit(EditOp::Paragraph {
+                            page,
+                            frame: origin_for_worker.clone(),
+                            to: Some(to.clone()),
+                            expected: was.to_string(),
+                            text: text.to_string(),
+                        });
+                    }
                 }
                 // Une seule opération pour tout le geste : elle part de la
                 // boîte d'avant le glissement et pointe la boîte actuelle.
@@ -1146,7 +1305,7 @@ impl Viewer {
                     page,
                     frame: origin,
                     to: Some(to.clone()),
-                    expected: expected.to_string(),
+                    expected: was.to_string(),
                     text: text.to_string(),
                 };
                 let slot = self
@@ -1506,5 +1665,54 @@ fn guide_line(frame: &mut Frame<'_>, x0: f64, y0: f64, x1: f64, y1: f64, color: 
             color.1,
             color.2,
         );
+    }
+}
+
+/// Recopie une image RGBA prémultipliée dans le cadre, à la taille voulue.
+#[allow(clippy::too_many_arguments, clippy::many_single_char_names)] // un rectangle et une image
+///
+/// Un rééchantillonnage au plus proche voisin suffit : c'est un aperçu qui
+/// dure le temps d'un geste, et le vrai rendu arrive au relâchement.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn blit_scaled(
+    frame: &mut Frame<'_>,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    src: &[u8],
+    sw: u32,
+    sh: u32,
+) {
+    if w == 0 || h == 0 || sw == 0 || sh == 0 {
+        return;
+    }
+    for row in 0..h {
+        let dy = y + row as i32;
+        if dy < 0 || dy >= frame.height as i32 {
+            continue;
+        }
+        let sy = (u64::from(row) * u64::from(sh) / u64::from(h)) as u32;
+        for col in 0..w {
+            let dx = x + col as i32;
+            if dx < 0 || dx >= frame.width as i32 {
+                continue;
+            }
+            let sx = (u64::from(col) * u64::from(sw) / u64::from(w)) as u32;
+            let i = ((sy * sw + sx) * 4) as usize;
+            if i + 3 >= src.len() {
+                continue;
+            }
+            let (r, g, b, a) = (src[i], src[i + 1], src[i + 2], u32::from(src[i + 3]));
+            if a == 0 {
+                continue;
+            }
+            let d = frame.index(dx as usize, dy as usize);
+            let inv = 255 - a;
+            let px = &mut frame.pixels[d..d + 4];
+            px[0] = ((u32::from(b) * 255 + u32::from(px[0]) * inv) / 255).min(255) as u8;
+            px[1] = ((u32::from(g) * 255 + u32::from(px[1]) * inv) / 255).min(255) as u8;
+            px[2] = ((u32::from(r) * 255 + u32::from(px[2]) * inv) / 255).min(255) as u8;
+        }
     }
 }
