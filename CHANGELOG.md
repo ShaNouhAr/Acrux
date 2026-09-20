@@ -7,7 +7,7 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
-## 0.21.0 — non publiée
+## 0.21.0 — 20 septembre 2026
 
 - **Les cases à cocher dessinées se reconnaissent**, comme dans Acrobat. Un
   document qui n'est pas un formulaire — un papier numérisé, un export de
