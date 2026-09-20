@@ -52,8 +52,11 @@ pub enum BarAction {
     Larger,
     /// Choisir une couleur de la palette.
     Color(usize),
-    /// Police suivante de la liste.
-    NextFamily,
+    /// Ouvrir ou refermer la liste des polices.
+    Families,
+    /// Choisir une police : un rang dans [`FAMILIES`], ou rien pour laisser
+    /// au bloc la sienne.
+    Family(Option<usize>),
     /// Gras.
     Bold,
     /// Italique.
@@ -350,6 +353,15 @@ pub struct EditBar {
     hits: Vec<(i32, i32, i32, i32, BarAction)>,
     /// Zone survolée, rang dans `hits`.
     hover: Option<usize>,
+    /// La liste des polices est déroulée.
+    menu: bool,
+    /// Le bouton de police, tel qu'il a été dessiné : la liste s'accroche
+    /// dessous.
+    menu_anchor: (i32, i32, i32, i32),
+    /// Lignes de la liste, remplies au dessin.
+    menu_hits: Vec<(i32, i32, i32, i32, Option<usize>)>,
+    /// Ligne survolée, rang dans `menu_hits`.
+    menu_hover: Option<usize>,
 }
 
 impl Default for EditBar {
@@ -369,6 +381,10 @@ impl Default for EditBar {
             color_set: false,
             hits: Vec::new(),
             hover: None,
+            menu: false,
+            menu_anchor: (0, 0, 0, 0),
+            menu_hits: Vec::new(),
+            menu_hover: None,
         }
     }
 }
@@ -391,6 +407,15 @@ impl EditBar {
 
     /// Déplacement de la souris ; vrai si l'aspect a changé.
     pub fn mouse_move(&mut self, x: i32, y: i32) -> bool {
+        if self.menu {
+            let over = self
+                .menu_hits
+                .iter()
+                .position(|(bx, by, bw, bh, _)| x >= *bx && x < bx + bw && y >= *by && y < by + bh);
+            let changed = over != self.menu_hover;
+            self.menu_hover = over;
+            return changed;
+        }
         let over = self
             .hits
             .iter()
@@ -400,13 +425,42 @@ impl EditBar {
         changed
     }
 
-    /// Clic dans la barre.
+    /// Clic dans la barre — ou n'importe où quand la liste des polices est
+    /// déroulée : une ligne choisit, le reste referme.
     #[must_use]
     pub fn mouse_down(&self, x: i32, y: i32) -> Option<BarAction> {
+        if self.menu {
+            return Some(
+                self.menu_hits
+                    .iter()
+                    .find(|(bx, by, bw, bh, _)| x >= *bx && x < bx + bw && y >= *by && y < by + bh)
+                    .map_or(BarAction::Families, |h| BarAction::Family(h.4)),
+            );
+        }
         self.hits
             .iter()
             .find(|(bx, by, bw, bh, _)| x >= *bx && x < bx + bw && y >= *by && y < by + bh)
             .map(|h| h.4)
+    }
+
+    /// Vrai si la liste des polices est déroulée : elle prend alors tous les
+    /// clics.
+    #[must_use]
+    pub fn menu_open(&self) -> bool {
+        self.menu
+    }
+
+    /// Déroule ou referme la liste des polices.
+    pub fn toggle_menu(&mut self) {
+        self.menu = !self.menu;
+        self.menu_hover = None;
+    }
+
+    /// Referme la liste des polices ; vrai si elle était ouverte.
+    pub fn close_menu(&mut self) -> bool {
+        let was = self.menu;
+        self.menu = false;
+        was
     }
 
     /// Couleur du texte ajouté.
@@ -564,12 +618,13 @@ impl EditBar {
                     break 'groups;
                 }
                 let index = self.hits.len();
-                let face = if self.hover == Some(index) {
+                let face = if self.menu || self.hover == Some(index) {
                     theme.separator
                 } else {
                     theme.hover
                 };
                 round_rect(frame, x, top, fw_label, ctl, radius, face);
+                self.menu_anchor = (x, top, fw_label, ctl);
                 text.draw(
                     frame,
                     (x + s(10.0)) as f32,
@@ -585,8 +640,7 @@ impl EditBar {
                     dpi,
                     theme.text_dim,
                 );
-                self.hits
-                    .push((x, top, fw_label, ctl, BarAction::NextFamily));
+                self.hits.push((x, top, fw_label, ctl, BarAction::Families));
                 x += fw_label + s(10.0);
 
                 // Gras et italique.
@@ -668,6 +722,94 @@ impl EditBar {
                 ink,
             );
             self.hits.push((bx, top, w, ctl, BarAction::Close));
+        }
+
+        self.menu_hits.clear();
+        if self.editing && self.menu {
+            self.paint_menu(frame, text, theme, dpi);
+        } else {
+            self.menu = false;
+        }
+    }
+
+    /// La liste des polices, accrochée sous son bouton : une carte, une ligne
+    /// par police, la police du bloc marquée, la ligne survolée relevée.
+    fn paint_menu(
+        &mut self,
+        frame: &mut Frame<'_>,
+        text: &mut TextRenderer,
+        theme: &Theme,
+        dpi: f32,
+    ) {
+        let s = |v: f32| (v * dpi).round() as i32;
+        let size = theme.font_size * dpi;
+        let (ax, ay, aw, ah) = self.menu_anchor;
+        let row = s(32.0);
+        let pad = s(6.0);
+        let entries: Vec<(&str, Option<usize>)> = std::iter::once(("Police du texte", None))
+            .chain(FAMILIES.iter().enumerate().map(|(i, f)| (*f, Some(i))))
+            .collect();
+        let widest = entries
+            .iter()
+            .map(|(label, _)| text.measure(size, label) as i32)
+            .max()
+            .unwrap_or(0);
+        let width = (widest + s(56.0)).max(aw);
+        let height = pad * 2 + row * entries.len() as i32;
+        let x = ax.min(frame.width as i32 - width - s(8.0)).max(s(8.0));
+        let y = ay + ah + s(4.0);
+        let radius = 10.0 * dpi;
+        crate::ui::paint::shadow(frame, x, y + s(6.0), width, height, radius, 22.0 * dpi, 0.4);
+        round_rect(frame, x, y, width, height, radius, theme.bar);
+        crate::ui::paint::round_rect_outline(
+            frame,
+            x,
+            y,
+            width,
+            height,
+            radius,
+            dpi.max(1.0),
+            theme.separator,
+        );
+        let mut ry = y + pad;
+        for (index, (label, choice)) in entries.iter().enumerate() {
+            let current = self.family == *choice;
+            if self.menu_hover == Some(index) {
+                round_rect(
+                    frame,
+                    x + pad,
+                    ry,
+                    width - 2 * pad,
+                    row,
+                    7.0 * dpi,
+                    theme.hover,
+                );
+            }
+            // La police du bloc est marquée d'un point d'accent.
+            if current {
+                let dot = s(7.0);
+                round_rect(
+                    frame,
+                    x + s(16.0),
+                    ry + (row - dot) / 2,
+                    dot,
+                    dot,
+                    dot as f32 / 2.0,
+                    theme.accent,
+                );
+            }
+            let ink = if current { theme.text } else { theme.text_dim };
+            text.draw(
+                frame,
+                (x + s(34.0)) as f32,
+                (ry + row / 2) as f32 + text.ascent(size) / 2.0,
+                size,
+                label,
+                ink,
+            );
+            self.menu_hits
+                .push((x + pad, ry, width - 2 * pad, row, *choice));
+            ry += row;
         }
     }
 

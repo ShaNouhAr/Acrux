@@ -446,7 +446,12 @@ impl Viewer {
             return false;
         };
         match action {
-            BarAction::NextFamily => self.cycle_family(),
+            BarAction::Families => {
+                if let Some(mode) = &mut self.edit {
+                    mode.bar.toggle_menu();
+                }
+            }
+            BarAction::Family(choice) => self.set_family(choice),
             BarAction::Bold => self.toggle_face(true),
             BarAction::Italic => self.toggle_face(false),
             BarAction::Align(i) => self.set_alignment(i),
@@ -1883,18 +1888,22 @@ impl Viewer {
     ///
     /// Comme dans Acrobat : la police change pour **tout** le bloc, et se
     /// voit aussitôt.
-    fn cycle_family(&mut self) {
-        // La liste tourne en rond : après la dernière, la première.
-        let next = self.edit.as_ref().map_or(0, |e| {
-            e.bar
-                .family
-                .filter(|i| i + 1 < crate::ui::editpdf::FAMILIES.len())
-                .map_or(0, |i| i + 1)
-        });
+    fn set_family(&mut self, choice: Option<usize>) {
         if let Some(mode) = &mut self.edit {
-            mode.bar.family = Some(next);
+            mode.bar.family = choice;
+            mode.bar.close_menu();
         }
         self.apply_face();
+    }
+
+    /// Vrai si la liste des polices est déroulée : elle prend les clics.
+    pub(super) fn edit_menu_open(&self) -> bool {
+        self.edit.as_ref().is_some_and(|e| e.bar.menu_open())
+    }
+
+    /// Referme la liste des polices ; vrai si elle était ouverte.
+    pub(super) fn edit_menu_close(&mut self) -> bool {
+        self.edit.as_mut().is_some_and(|e| e.bar.close_menu())
     }
 
     /// Bascule la graisse ou l'italique du bloc ouvert.

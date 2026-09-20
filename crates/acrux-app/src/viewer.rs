@@ -6506,6 +6506,11 @@ impl App for Viewer {
                 }
             }
             Event::Key(Key::Escape, _)
+                if self.prompt.is_none() && self.palette.is_none() && self.edit_menu_close() =>
+            {
+                window.request_redraw();
+            }
+            Event::Key(Key::Escape, _)
                 if self.prompt.is_none() && self.palette.is_none() && self.close_3d() =>
             {
                 window.request_redraw();
@@ -6761,6 +6766,13 @@ impl App for Viewer {
                     } else {
                         self.palette = None;
                     }
+                    window.request_redraw();
+                    return;
+                }
+                // La liste des polices déroulée prend tous les clics : une
+                // ligne choisit, ailleurs referme.
+                if self.edit_menu_open() {
+                    self.edit_bar_click(x, y, window);
                     window.request_redraw();
                     return;
                 }

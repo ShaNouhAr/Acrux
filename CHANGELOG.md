@@ -7,6 +7,17 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
+## 0.19.0 — non publiée
+
+### Une liste pour la police
+
+- Le bouton de police de la barre « Modifier le PDF » faisait défiler les
+  familles à chaque clic : on tournait en rond sans voir où l'on allait. Il
+  déroule maintenant **une liste** sous lui — « Police du texte » (celle du
+  bloc), puis les familles — où la police courante est marquée, la ligne
+  survolée relevée ; un clic choisit et referme, Échap ou un clic ailleurs
+  referme sans rien changer. Le choix s'applique au bloc sur-le-champ.
+
 ## 0.18.0 — 20 septembre 2026
 
 ### L'interface, peaufinée
