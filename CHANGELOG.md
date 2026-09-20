@@ -7,6 +7,23 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
+## 0.15.0 — 20 septembre 2026
+
+### On voit ce qu'on déplace
+
+- **Un bloc de texte suit le pointeur pendant qu'on le déplace** : il est
+  réellement réécrit en cours de geste, au plus une fois toutes les 70 ms.
+  On voyait jusque-là la boîte bouger seule et le texte sauter au
+  relâchement.
+- **Une signature posée aussi** : l'original s'efface le temps du geste et
+  son dessin suit le pointeur, à la bonne taille. Plus de doublon ni de boîte
+  vide.
+- Le geste part toujours de la **boîte d'origine** : sans cela, réécrire en
+  cours de route faisait s'emballer le mouvement.
+- Le bloc et sa boîte **restent dans la page**, et le glissement garde les
+  repères de **sa** page même si le pointeur passe sur la suivante.
+- Tout un déplacement ne fait qu'**une** opération d'annulation.
+
 ## 0.14.0 — 20 septembre 2026
 
 ### Ce qu'on pose devient un objet

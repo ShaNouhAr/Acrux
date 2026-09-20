@@ -74,6 +74,14 @@ pub(super) struct Picked {
     pub drag: Option<Drag>,
     /// Poignée survolée.
     pub hover: Option<Handle>,
+    /// Boîte d'avant le geste : c'est d'elle que part l'opération inscrite à
+    /// l'historique, quel que soit le nombre d'écritures intermédiaires.
+    pub origin: Option<ParagraphFrame>,
+    /// Place de l'opération dans l'historique : une seule par geste.
+    pub history: Option<usize>,
+    /// Dernière écriture : le bloc suit le pointeur, mais pas plus vite que
+    /// la page ne se rend.
+    pub last_write: Instant,
 }
 
 /// Déplacement ou redimensionnement en cours.
@@ -83,6 +91,10 @@ pub(super) struct Drag {
     pub handle: Option<Handle>,
     /// Point de départ, en espace de page.
     pub from: Point,
+    /// Boîte au début du geste : **la** référence. Le bloc est réécrit
+    /// pendant qu'on le déplace, donc sa boîte courante change ; repartir
+    /// d'elle ferait s'emballer le mouvement.
+    pub start: Rect,
     /// Point courant.
     pub to: Point,
     /// Boîte telle qu'elle serait si l'on lâchait maintenant.
@@ -637,6 +649,9 @@ impl Viewer {
                 bbox,
                 drag: None,
                 hover: None,
+                origin: None,
+                history: None,
+                last_write: Instant::now(),
             });
         }
         self.set_notice(
@@ -645,6 +660,35 @@ impl Viewer {
             )
             .into(),
         );
+    }
+
+    /// Point de la vue exprimé dans **une page donnée**.
+    ///
+    /// Pendant un glissement, `page_at` suivrait le pointeur jusqu'à la page
+    /// voisine : le bloc sauterait alors d'un repère à l'autre. C'est la page
+    /// du bloc qui compte, et elle seule.
+    fn point_in_page(&self, page: usize, x: i32, y: i32) -> Option<Point> {
+        let layout = self.layout();
+        let m = self.page_to_view(&layout, page)?;
+        let inverse = m.invert()?;
+        Some(inverse.apply(Point::new(f64::from(x), f64::from(y))))
+    }
+
+    /// Boîte d'écriture bornée à la page : un bloc poussé dehors ne se
+    /// retrouverait plus et ne s'imprimerait pas.
+    fn clamped_frame(&self, page: usize, mut to: ParagraphFrame) -> ParagraphFrame {
+        if let Some(crop) = self
+            .loaded
+            .as_ref()
+            .and_then(|l| l.pages.get(page).map(|p| p.crop_box(&l.doc)))
+        {
+            to.width = to.width.min(crop.width());
+            to.x0 = to.x0.clamp(crop.x0, (crop.x1 - to.width).max(crop.x0));
+            to.baseline = to
+                .baseline
+                .clamp(crop.y0 + to.size, crop.y1 - to.size * 0.2);
+        }
+        to
     }
 
     /// Rectangle de la sélection dans la vue, s'il est visible.
@@ -681,16 +725,30 @@ impl Viewer {
         picked.drag = Some(Drag {
             handle,
             from: pt,
+            start: picked.bbox,
             to: pt,
             result: picked.bbox,
             guides: (None, None),
         });
+        picked.origin = Some(picked.frame.clone());
+        picked.history = None;
+        picked.last_write = Instant::now();
         true
     }
 
     /// Fait suivre le geste en cours.
     fn drag_to(&mut self, pt: Point) {
         let guides = self.guides(pt);
+        let crop = self
+            .edit
+            .as_ref()
+            .and_then(|e| e.picked.as_ref())
+            .map(|p| p.page)
+            .and_then(|page| {
+                self.loaded
+                    .as_ref()
+                    .and_then(|l| l.pages.get(page).map(|p| p.crop_box(&l.doc)))
+            });
         let Some(picked) = self.edit.as_mut().and_then(|m| m.picked.as_mut()) else {
             return;
         };
@@ -699,24 +757,20 @@ impl Viewer {
         };
         drag.to = pt;
         let (dx, dy) = (pt.x - drag.from.x, pt.y - drag.from.y);
+        let start = drag.start;
         drag.result = if let Some(handle) = drag.handle {
-            objects_ui::resized(picked.bbox, handle, dx, dy, false)
+            objects_ui::resized(start, handle, dx, dy, false)
         } else {
             {
                 // Déplacement : les repères d'alignement attirent la boîte.
                 let (mut ox, mut oy) = (dx, dy);
                 if let Some(x) = guides.0 {
-                    ox = x - picked.bbox.x0;
+                    ox = x - start.x0;
                 }
                 if let Some(y) = guides.1 {
-                    oy = y - picked.bbox.y1;
+                    oy = y - start.y1;
                 }
-                Rect::new(
-                    picked.bbox.x0 + ox,
-                    picked.bbox.y0 + oy,
-                    picked.bbox.x1 + ox,
-                    picked.bbox.y1 + oy,
-                )
+                Rect::new(start.x0 + ox, start.y0 + oy, start.x1 + ox, start.y1 + oy)
             }
         };
         drag.guides = if drag.handle.is_none() {
@@ -724,6 +778,48 @@ impl Viewer {
         } else {
             (None, None)
         };
+        // La boîte montrée ne sort pas de la page : sinon elle s'éloignerait
+        // du texte, qui, lui, y est retenu.
+        if let Some(crop) = crop {
+            let (w, h) = (drag.result.width(), drag.result.height());
+            let x0 = drag.result.x0.clamp(crop.x0, (crop.x1 - w).max(crop.x0));
+            let y0 = drag.result.y0.clamp(crop.y0, (crop.y1 - h).max(crop.y0));
+            drag.result = Rect::new(x0, y0, x0 + w, y0 + h);
+        }
+        // Le bloc suit le pointeur : on l'écrit vraiment, au plus une fois
+        // toutes les 70 ms. Voir la boîte bouger seule ne dit pas où en est le
+        // texte, et attendre le relâchement pour le découvrir non plus.
+        if picked.last_write.elapsed() >= Duration::from_millis(70) {
+            self.write_drag();
+        }
+    }
+
+    /// Écrit le bloc à la place où le geste l'a amené.
+    fn write_drag(&mut self) {
+        let Some((page, from, to, expected, text)) = self
+            .edit
+            .as_mut()
+            .and_then(|e| e.picked.as_mut())
+            .and_then(|p| {
+                let drag = p.drag?;
+                let origin = p.origin.clone().unwrap_or_else(|| p.frame.clone());
+                let mut to = origin.clone();
+                to.x0 += drag.result.x0 - drag.start.x0;
+                to.baseline += drag.result.y1 - drag.start.y1;
+                to.width = (origin.width + drag.result.width() - drag.start.width()).max(to.size);
+                let bouge = (to.x0 - p.frame.x0).abs() > 0.3
+                    || (to.baseline - p.frame.baseline).abs() > 0.3
+                    || (to.width - p.frame.width).abs() > 0.3;
+                if !bouge {
+                    return None;
+                }
+                p.last_write = Instant::now();
+                Some((p.page, p.frame.clone(), to, p.drawn.clone(), p.text.clone()))
+            })
+        else {
+            return;
+        };
+        self.apply_move(page, &from, &to, &expected, &text);
     }
 
     /// Repères d'alignement : bords des autres blocs de la page qui tombent
@@ -741,7 +837,7 @@ impl Viewer {
         if drag.handle.is_some() {
             return (None, None);
         }
-        let (page, bbox) = (picked.page, picked.bbox);
+        let (page, bbox) = (picked.page, drag.start);
         let (dx, dy) = (pt.x - drag.from.x, pt.y - drag.from.y);
         let (x0, y1) = (bbox.x0 + dx, bbox.y1 + dy);
         let tol = 4.0;
@@ -881,7 +977,12 @@ impl Viewer {
             .and_then(|e| e.picked.as_ref())
             .is_some_and(|p| p.drag.is_some());
         if dragging && dragging_pick {
-            if let Some((_, pt)) = hit {
+            let page = self
+                .edit
+                .as_ref()
+                .and_then(|e| e.picked.as_ref())
+                .map(|p| p.page);
+            if let Some(pt) = page.and_then(|page| self.point_in_page(page, x, y)) {
                 self.drag_to(pt);
                 window.request_redraw();
             }
@@ -976,37 +1077,31 @@ impl Viewer {
         let Some(drag) = picked.drag.take() else {
             return;
         };
-        let moved = (drag.result.x0 - picked.bbox.x0).abs() > 0.5
-            || (drag.result.y1 - picked.bbox.y1).abs() > 0.5
-            || (drag.result.width() - picked.bbox.width()).abs() > 0.5;
+        let moved = (drag.result.x0 - drag.start.x0).abs() > 0.5
+            || (drag.result.y1 - drag.start.y1).abs() > 0.5
+            || (drag.result.width() - drag.start.width()).abs() > 0.5;
         if !moved {
+            picked.origin = None;
             return;
         }
         // La boîte d'écriture suit la boîte visible : même décalage, même
         // largeur. Le texte s'y recompose, donc élargir reflue les lignes.
-        let mut to = picked.frame.clone();
-        to.x0 += drag.result.x0 - picked.bbox.x0;
-        to.baseline += drag.result.y1 - picked.bbox.y1;
-        to.width = (picked.frame.width + drag.result.width() - picked.bbox.width()).max(to.size);
-        // Le bloc reste dans la page : un texte poussé dehors ne se
-        // retrouverait plus, et ne s'imprimerait pas.
-        if let Some(crop) = self
-            .loaded
-            .as_ref()
-            .and_then(|l| l.pages.get(picked.page).map(|p| p.crop_box(&l.doc)))
-        {
-            to.width = to.width.min(crop.width());
-            to.x0 = to.x0.clamp(crop.x0, (crop.x1 - to.width).max(crop.x0));
-            to.baseline = to
-                .baseline
-                .clamp(crop.y0 + to.size, crop.y1 - to.size * 0.2);
-        }
+        let origin = picked
+            .origin
+            .clone()
+            .unwrap_or_else(|| picked.frame.clone());
+        let mut to = origin.clone();
+        to.x0 += drag.result.x0 - drag.start.x0;
+        to.baseline += drag.result.y1 - drag.start.y1;
+        to.width = (origin.width + drag.result.width() - drag.start.width()).max(to.size);
         let (page, from, expected, text) = (
             picked.page,
             picked.frame.clone(),
             picked.drawn.clone(),
             picked.text.clone(),
         );
+        let to = self.clamped_frame(page, to);
+        let to = self.clamped_frame(page, to);
         self.apply_move(page, &from, &to, &expected, &text);
     }
 
@@ -1039,13 +1134,36 @@ impl Viewer {
                         text: text.to_string(),
                     });
                 }
-                l.history.push(EditOp::Paragraph {
+                // Une seule opération pour tout le geste : elle part de la
+                // boîte d'avant le glissement et pointe la boîte actuelle.
+                let origin = self
+                    .edit
+                    .as_ref()
+                    .and_then(|e| e.picked.as_ref())
+                    .and_then(|p| p.origin.clone())
+                    .unwrap_or_else(|| from.clone());
+                let op = EditOp::Paragraph {
                     page,
-                    frame: from.clone(),
+                    frame: origin,
                     to: Some(to.clone()),
                     expected: expected.to_string(),
                     text: text.to_string(),
-                });
+                };
+                let slot = self
+                    .edit
+                    .as_ref()
+                    .and_then(|e| e.picked.as_ref())
+                    .and_then(|p| p.history);
+                match slot {
+                    Some(i) if i < l.history.len() => l.history[i] = op,
+                    _ => {
+                        l.history.push(op);
+                        let index = l.history.len() - 1;
+                        if let Some(p) = self.edit.as_mut().and_then(|e| e.picked.as_mut()) {
+                            p.history = Some(index);
+                        }
+                    }
+                }
                 l.redo.clear();
                 l.modified = true;
                 if let Ok(pages) = collect_pages(&l.doc) {

@@ -332,6 +332,48 @@ pub fn set_rect(doc: &Document, page_index: usize, index: usize, rect: Rect) -> 
     }
 }
 
+/// Cache ou remontre un élément posé, sans le supprimer.
+///
+/// Sert au déplacement : l'original disparaît le temps du geste, un aperçu
+/// suit le pointeur, et il revient à sa nouvelle place au relâchement. Le
+/// drapeau est celui du format (§12.5.3, bit 2 de `/F`), donc tous les
+/// lecteurs le comprennent.
+///
+/// # Errors
+/// Page ou annotation inexistante, ou annotation qui n'est pas la nôtre.
+pub fn set_hidden(doc: &Document, page_index: usize, index: usize, hidden: bool) -> Result<()> {
+    let pages = collect_pages(doc)?;
+    let page = pages
+        .get(page_index)
+        .ok_or_else(|| Error::Corrupt(format!("page {} inexistante", page_index + 1)))?;
+    let list = annots(doc, page);
+    let target = list
+        .get(index)
+        .ok_or_else(|| Error::Corrupt(format!("annotation {} inexistante", index + 1)))?;
+    let mut dict =
+        resolve_dict(doc, target).ok_or_else(|| Error::Corrupt("annotation illisible".into()))?;
+    if tag_of(doc, &dict).is_none() {
+        return Err(Error::Corrupt(
+            "cette annotation ne vient pas de « remplir et signer »".into(),
+        ));
+    }
+    let flags = dict
+        .get(&Name::new("F"))
+        .and_then(Object::as_i64)
+        .unwrap_or(0);
+    let flags = if hidden { flags | 2 } else { flags & !2 };
+    dict.insert(Name::new("F"), Object::Integer(flags));
+    match target {
+        Object::Reference(r) => {
+            doc.set(*r, Object::Dict(dict));
+            Ok(())
+        }
+        _ => Err(Error::Unsupported(
+            "annotation écrite dans la page : non modifiable".into(),
+        )),
+    }
+}
+
 /// Fond définitivement les éléments posés dans le contenu des pages.
 ///
 /// Après quoi ils ne se déplacent plus, ne se suppriment plus, et se voient

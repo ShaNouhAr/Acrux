@@ -349,6 +349,9 @@ struct PlacedSel {
     index: usize,
     /// Rectangle occupé, en coordonnées de page.
     rect: Rect,
+    /// Sorte de l'élément (`drawn`, `typed`, `mark:check`…) : de quoi le
+    /// redessiner pendant qu'on le déplace.
+    kind: String,
     /// Geste en cours : poignée saisie, point de départ, rectangle courant.
     drag: Option<(Option<objects_ui::Handle>, Point, Rect)>,
     /// Poignée survolée.
@@ -5146,6 +5149,7 @@ impl Viewer {
                 page: found.page,
                 index: found.index,
                 rect: found.rect,
+                kind: found.kind,
                 drag: None,
                 hover: None,
             });
@@ -5171,6 +5175,7 @@ impl Viewer {
                 page: p.page,
                 index: p.index,
                 rect: p.rect,
+                kind: p.kind,
                 drag: None,
                 hover: None,
             })
@@ -5206,7 +5211,37 @@ impl Viewer {
         if let Some(placed) = &mut self.placed {
             placed.drag = Some((handle, point, placed.rect));
         }
+        // L'original s'efface le temps du geste : c'est l'aperçu qui suit le
+        // pointeur, et l'on ne voit pas l'élément en double.
+        self.show_placed(false);
         true
+    }
+
+    /// Cache ou remontre l'élément sélectionné, et repeint la page.
+    fn show_placed(&mut self, visible: bool) {
+        let Some(placed) = self.placed.as_ref().map(|p| (p.page, p.index)) else {
+            return;
+        };
+        let scale = self.scale();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let key = (scale * 1000.0).round() as u32;
+        let Some(l) = self.loaded.as_mut() else {
+            return;
+        };
+        if acrux_features::fillsign::set_hidden(&l.doc, placed.0, placed.1, !visible).is_err() {
+            return;
+        }
+        l.cache.retain(|(p, _), _| *p != placed.0);
+        if let Some(page) = l.pages.get(placed.0) {
+            let options = RenderOptions {
+                annotations: true,
+                time_budget: Some(std::time::Duration::from_secs(5)),
+                background: Some(Color::WHITE),
+                ..RenderOptions::default()
+            };
+            let bitmap = render_page(&l.doc, page, scale, &options).bitmap;
+            l.cache.insert((placed.0, key), bitmap);
+        }
     }
 
     /// Suit le geste sur l'élément sélectionné.
@@ -5253,25 +5288,107 @@ impl Viewer {
         let moved = (rect.x0 - placed.rect.x0).abs() > 0.5
             || (rect.y0 - placed.rect.y0).abs() > 0.5
             || (rect.width() - placed.rect.width()).abs() > 0.5;
-        if !moved {
-            return false;
-        }
         let (page, index) = (placed.page, placed.index);
         placed.rect = rect;
+        // Remontré d'abord : l'opération qui suit part d'un état propre, et
+        // l'annulation retrouve un élément visible.
+        self.show_placed(true);
+        if !moved {
+            return true;
+        }
         self.apply_edit(EditOp::PlacedRect { page, index, rect });
         true
     }
 
-    /// Dessine l'élément sélectionné et ses poignées.
+    /// Dessine l'élément sélectionné, ses poignées, et — pendant un geste —
+    /// **le dessin lui-même à sa nouvelle place**.
+    ///
+    /// Voir la boîte bouger seule ne dit pas où l'on en est : c'est l'élément
+    /// qu'on déplace, c'est donc lui qu'il faut voir bouger.
     fn paint_placed(&mut self, frame: &mut Frame<'_>) {
-        let Some(placed) = self.placed.as_ref() else {
+        let Some((page, rect, handle, kind, dragging)) = self.placed.as_ref().map(|p| {
+            (
+                p.page,
+                p.drag.map_or(p.rect, |(_, _, r)| r),
+                p.drag.and_then(|(h, _, _)| h).or(p.hover),
+                p.kind.clone(),
+                p.drag.is_some(),
+            )
+        }) else {
             return;
         };
-        let rect = placed.drag.map_or(placed.rect, |(_, _, r)| r);
-        let handle = placed.drag.and_then(|(h, _, _)| h).or(placed.hover);
         let (theme, dpi) = (self.theme, self.dpi_scale as f32);
-        if let Some(view) = self.page_rect_to_view(placed.page, rect) {
+        if dragging {
+            self.paint_placed_preview(frame, page, rect, &kind);
+        }
+        if let Some(view) = self.page_rect_to_view(page, rect) {
             objects_ui::paint_selection(frame, &theme, dpi, view, handle);
+        }
+    }
+
+    /// Redessine un élément posé dans un rectangle donné.
+    #[allow(clippy::many_single_char_names)] // géométrie de la mise à l'échelle
+    fn paint_placed_preview(&mut self, frame: &mut Frame<'_>, page: usize, rect: Rect, kind: &str) {
+        let Some(view) = self.page_rect_to_view(page, rect) else {
+            return;
+        };
+        let [r, g, b] = self.sign_rgb();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let ink = ((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8);
+        // La marque ou la signature se redessinent par le même code que celui
+        // qui les a écrites ; une signature tapée ou importée n'a pas de
+        // contour sous la main, et se montre alors par sa boîte.
+        let outline = if let Some(mark) = kind.strip_prefix("mark:") {
+            acrux_features::fillsign::marks::Mark::from_name(mark)
+                .map(acrux_features::fillsign::marks::outline_of)
+        } else if kind == "drawn" {
+            let current = self.sign_panel.as_ref().map_or(0, |p| p.current);
+            let saved = self
+                .signatures
+                .get(current)
+                .cloned()
+                .or_else(|| self.initials.clone());
+            match saved {
+                Some(Saved::Drawn(strokes)) => {
+                    let pen =
+                        Pen::styled_for_strokes(&strokes, self.sign_nib(), self.sign_weight());
+                    Some(acrux_features::fillsign::ink::outline(&strokes, &pen))
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        match outline {
+            Some(outline) => {
+                let (bw, bh) = (
+                    (outline.bbox.x1 - outline.bbox.x0).max(0.01),
+                    (outline.bbox.y1 - outline.bbox.y0).max(0.01),
+                );
+                let k = (view.w / bw).min(view.h / bh);
+                let m = Matrix::new(
+                    k,
+                    0.0,
+                    0.0,
+                    -k,
+                    view.x + (view.w - bw * k) / 2.0 - outline.bbox.x0 * k,
+                    view.y + (view.h + bh * k) / 2.0 + outline.bbox.y0 * k,
+                );
+                sign::fill_outline(frame, &mut self.raster, &outline, &m, ink);
+            }
+            None => {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                crate::ui::paint::round_rect_alpha(
+                    frame,
+                    view.x as i32,
+                    view.y as i32,
+                    view.w as i32,
+                    view.h as i32,
+                    2.0,
+                    ink,
+                    0.35,
+                );
+            }
         }
     }
 
