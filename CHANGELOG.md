@@ -9,6 +9,30 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 
 ## 0.17.0 — 20 septembre 2026
 
+### Ouvrir une image, et les scans TIFF
+
+- **Une image ouverte devient un PDF**, comme dans Acrobat : on dépose un
+  fichier sur la fenêtre, ou on l'ouvre par Ctrl+O, et il s'affiche en
+  document. Le premier `Ctrl+S` demande où le ranger — rien n'est écrit dans
+  le dossier de l'image.
+- Formats lus, tous décodés **de zéro** : **BMP** (1 à 32 bits, palette,
+  champs de bits, RLE4 et RLE8, lignes de bas en haut ou de haut en bas),
+  **GIF** (palette locale, entrelacement, couleur transparente, LZW de la
+  norme GIF), **TIFF** (sans compression, CCITT Huffman modifié, Groupe 3,
+  Groupe 4, LZW, PackBits, Deflate, JPEG ; 1 à 16 bits par composante ;
+  palette, niveaux de gris, RVB, CMJN ; prédicteur horizontal), en plus du
+  PNG et du JPEG qu'Acrux lisait déjà.
+- **Un TIFF multipage donne autant de pages** : c'est ce que produit un
+  scanner, et c'était le seul moyen d'obtenir d'un coup le PDF d'une pile de
+  feuilles numérisées. Le Groupe 4, compression habituelle des scanners,
+  passe par le décodeur CCITT qui servait déjà aux flux PDF.
+- La ligne de commande suit : `acr create --images scan.tif -o scan.pdf`.
+  Les signatures importées, les tampons, les filigranes et le remplacement
+  d'une image dans un document acceptent eux aussi les nouveaux formats.
+- Les décodeurs sont éprouvés **au pixel près** contre des fichiers écrits
+  par GDI+, l'encodeur d'images de Windows : un décodeur mis à l'épreuve des
+  octets de son propre encodeur ne prouverait rien.
+
 ### Rechercher et remplacer
 
 - **Ctrl+H** ouvre, sous le champ de recherche, un champ **« Remplacer par… »**

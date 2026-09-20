@@ -40,12 +40,12 @@ use std::collections::BTreeMap;
 use acrux_core::{Error, Matrix, Rect, Result};
 use acrux_document::{Document, Name, Page};
 
+use super::runs::{Run, Styles};
 use super::{
     encode, fmt, out_str, restore_matrices, rewrite_show_op, scan, write_matrix, write_tj, Cut,
     GlyphIndex, Item, Replacement,
 };
 use crate::text::{extract_page_text, Alignment, Glyph, Line, PageText, Paragraph};
-use super::runs::{Run, Styles};
 use std::fmt::Write as _;
 
 /// Options de recomposition.
@@ -419,8 +419,8 @@ pub fn open_unit(
     let target = Target::find(doc, page, text, unit)?;
     let size = target.size_text * target.scale;
     let crop = page.crop_box(doc);
-    let slant = (target.rotation.abs() > 1e-4)
-        .then_some((target.rotation, target.trm.e, target.trm.f));
+    let slant =
+        (target.rotation.abs() > 1e-4).then_some((target.rotation, target.trm.e, target.trm.f));
     let frame = frame_of(unit, text, size, target.font.clone(), &crop, slant);
     let (string, caret, sources) = caret_from_glyphs(unit, text, size);
     let styles = styles_of(&target, &sources, size);
@@ -1192,9 +1192,8 @@ fn locate_whole(
             .filter(|u| normalized(&glyph_text(u, text)) == expected)
             .min_by(|a, b| {
                 let d = |u: &TextUnit| {
-                    (f64::midpoint(u.bbox.x0, u.bbox.x1) - frame.x0).hypot(
-                        f64::midpoint(u.bbox.y0, u.bbox.y1) - frame.baseline,
-                    )
+                    (f64::midpoint(u.bbox.x0, u.bbox.x1) - frame.x0)
+                        .hypot(f64::midpoint(u.bbox.y0, u.bbox.y1) - frame.baseline)
                 };
                 d(a).total_cmp(&d(b))
             })
@@ -2174,12 +2173,7 @@ fn write_to(
         (Some(styles), false) => {
             let id = styles.per_char.get(i).copied().unwrap_or(0) as usize;
             let font = fonts.get(id).unwrap_or(&prepared);
-            let size = styles
-                .runs
-                .get(id)
-                .map_or(t.size_text, |r| r.size)
-                * t.scale
-                * ratio(g);
+            let size = styles.runs.get(id).map_or(t.size_text, |r| r.size) * t.scale * ratio(g);
             font.width(&c.to_string()) * size
         }
         _ => prepared.width(&c.to_string()) * g.size,

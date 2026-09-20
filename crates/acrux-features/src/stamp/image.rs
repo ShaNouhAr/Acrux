@@ -1,5 +1,9 @@
-//! Incorporation d'une image fournie en octets (PNG ou JPEG) comme XObject
-//! image (ISO 32000-2 §8.9).
+//! Incorporation d'une image fournie en octets comme XObject image
+//! (ISO 32000-2 §8.9).
+//!
+//! Formats lus : **PNG**, **JPEG**, **BMP**, **GIF** et **TIFF** (multipage).
+//! Les trois derniers sont décodés par les modules voisins puis suivent le
+//! chemin du PNG : pixels, recompression en Flate, alpha en `/SMask`.
 //!
 //! Deux chemins :
 //!
@@ -14,6 +18,12 @@
 //! Formats PNG acceptés : profondeurs 1, 2, 4, 8 et 16 bits, types de couleur
 //! 0 (gris), 2 (RVB), 3 (palette), 4 (gris + alpha) et 6 (RVBA), sans
 //! entrelacement. L'entrelacement Adam7 est refusé avec un message clair.
+
+mod bmp;
+mod gif;
+#[cfg(test)]
+mod raster_tests;
+mod tiff;
 
 use acrux_core::{Error, Result};
 use acrux_document::{Dict, Document, Name, Object, ObjectRef};
@@ -49,20 +59,58 @@ impl DecodedImage {
     }
 }
 
-/// Décode une image PNG ou JPEG fournie en octets.
+/// Décode une image fournie en octets (PNG, JPEG, BMP, GIF ou TIFF).
+///
+/// D'un TIFF multipage, seule la **première page** est rendue ; voir
+/// [`decode_all`] pour les avoir toutes.
 ///
 /// # Errors
 /// Format inconnu, en-tête illisible, entrelacement Adam7, ou dimensions
 /// nulles.
 pub fn decode(data: &[u8]) -> Result<DecodedImage> {
-    if data.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
-        return png(data);
-    }
+    decode_all(data)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| Error::Corrupt("image : aucune page".into()))
+}
+
+/// Décode une image et **toutes ses pages**.
+///
+/// Un TIFF de scanner porte une page par feuille : c'est la seule forme qui
+/// en rend plusieurs. Tous les autres formats rendent une image et une seule
+/// — un GIF animé compris, dont on ne garde que la première vue, comme
+/// Acrobat.
+///
+/// # Errors
+/// Voir [`decode`].
+pub fn decode_all(data: &[u8]) -> Result<Vec<DecodedImage>> {
+    // Le JPEG est le seul à ne pas être décodé : ses octets sont incorporés
+    // tels quels, donc sans perte.
     if data.starts_with(&[0xFF, 0xD8]) {
-        return jpeg(data);
+        return Ok(vec![jpeg(data)?]);
+    }
+    Ok(rasters(data)?.iter().map(from_raster).collect())
+}
+
+/// Décode une image en pixels, une entrée par page.
+///
+/// # Errors
+/// Format inconnu ou fichier illisible.
+pub(crate) fn rasters(data: &[u8]) -> Result<Vec<Raster>> {
+    if data.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        return Ok(vec![png_raster(data)?]);
+    }
+    if data.starts_with(b"BM") {
+        return Ok(vec![bmp::raster(data)?]);
+    }
+    if data.starts_with(b"GIF8") {
+        return Ok(vec![gif::raster(data)?]);
+    }
+    if data.starts_with(b"II") || data.starts_with(b"MM") {
+        return tiff::rasters(data);
     }
     Err(Error::Unsupported(
-        "image : seuls les fichiers PNG et JPEG sont acceptés".into(),
+        "image : formats acceptés PNG, JPEG, BMP, GIF et TIFF".into(),
     ))
 }
 
@@ -322,9 +370,10 @@ fn alpha_or_none(a: Vec<u8>) -> Option<Vec<u8>> {
     a.iter().any(|&v| v != 255).then_some(a)
 }
 
-/// PNG réincorporé : les pixels décodés, recompressés en Flate.
-fn png(data: &[u8]) -> Result<DecodedImage> {
-    let raster = png_raster(data)?;
+/// Écrit des pixels en XObject image : Flate pour les couleurs, un second
+/// flux pour l'alpha. C'est le chemin commun à tous les formats qu'on décode
+/// nous-mêmes.
+fn from_raster(raster: &Raster) -> DecodedImage {
     let color_space = if raster.components == 1 {
         "DeviceGray"
     } else {
@@ -333,17 +382,17 @@ fn png(data: &[u8]) -> Result<DecodedImage> {
     let mut dict = image_dict(raster.width, raster.height, color_space, 8);
     dict.insert(Name::new("Filter"), Object::Name(Name::new("FlateDecode")));
     let object = stream(dict, acrux_codecs::flate::compress(&raster.data, LEVEL));
-    let smask = raster.alpha.map(|a| {
+    let smask = raster.alpha.as_ref().map(|a| {
         let mut d = image_dict(raster.width, raster.height, "DeviceGray", 8);
         d.insert(Name::new("Filter"), Object::Name(Name::new("FlateDecode")));
-        stream(d, acrux_codecs::flate::compress(&a, LEVEL))
+        stream(d, acrux_codecs::flate::compress(a, LEVEL))
     });
-    Ok(DecodedImage {
+    DecodedImage {
         width: raster.width,
         height: raster.height,
         object,
         smask,
-    })
+    }
 }
 
 /// Ramène les échantillons à 8 bits par composante : les profondeurs 1, 2 et

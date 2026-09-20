@@ -5,6 +5,34 @@ Fonctionnalités métier : édition, pages, annotations, formulaires, biffure, e
 Voir `ARCHITECTURE.md` à la racine pour la place de ce crate dans l'ensemble,
 et `src/lib.rs` pour la liste des modules et de ceux qui restent à écrire.
 
+## Lire un fichier image (`stamp::image`)
+
+Un PDF se fabrique souvent à partir d'images : un scan, une photo, une
+signature. Les décodeurs sont écrits ici, sans bibliothèque, et rendent tous
+la même chose — un `Raster` : des pixels en gris ou en RVB, plus un canal
+alpha séparé, prêt à devenir un `/SMask`.
+
+| Format | Ce qui est lu |
+| --- | --- |
+| JPEG | **incorporé octet pour octet** : jamais décodé, donc jamais dégradé |
+| PNG | profondeurs 1 à 16 bits, gris, RVB, palette, alpha (Adam7 refusé) |
+| BMP | 1 à 32 bits, palette, `BI_BITFIELDS`, `BI_RLE4`, `BI_RLE8`, lignes dans les deux sens |
+| GIF | palette globale ou locale, entrelacement, couleur transparente, LZW de la norme GIF (bit de poids faible en tête) |
+| TIFF | **multipage** ; compressions 1, 2, 3, 4, 5, 7, 8, 32773, 32946 ; 1 à 16 bits ; gris, RVB, palette, CMJN ; prédicteur horizontal |
+
+Le TIFF ne fait guère que lire des étiquettes : ses compressions sont celles
+des flux PDF, et passent donc par `acrux-codecs` — le Groupe 4 d'un scanner
+emprunte le décodeur CCITT qui sert déjà aux images incorporées.
+
+**Un TIFF de plusieurs pages rend plusieurs images** (`decode_all`) : une
+feuille numérisée par page, ce qui permet à `create::from_images` d'en faire
+un document d'un seul geste.
+
+Les épreuves comparent, au pixel près, chaque format à la version PNG du même
+motif, toutes écrites par **GDI+** (`tests/corpus/images/`) : ce sont les
+fichiers d'un autre programme, seule façon d'éprouver un décodeur pour de
+bon.
+
 ## Multimédia (`media`)
 
 Un PDF ne contient pas « une vidéo » : il contient une annotation qui occupe un

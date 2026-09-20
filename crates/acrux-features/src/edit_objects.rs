@@ -166,7 +166,8 @@ pub enum Edit {
         /// Où l'envoyer.
         to: Order,
     },
-    /// Remplacer l'image d'un objet image par une autre (PNG ou JPEG).
+    /// Remplacer l'image d'un objet image par une autre (PNG, JPEG, BMP,
+    /// GIF ou TIFF).
     ReplaceImage {
         /// Index dans l'inventaire.
         index: usize,

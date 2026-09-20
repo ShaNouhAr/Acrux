@@ -35,7 +35,8 @@ use crate::stamp::{add_header_footer, HeaderFooterOptions, NumberFormat};
 pub enum CombineSource {
     /// Un document PDF, repris tel quel.
     Pdf(Vec<u8>),
-    /// Une image PNG ou JPEG, mise en page par [`from_images`].
+    /// Une image (PNG, JPEG, BMP, GIF, TIFF), mise en page par
+    /// [`from_images`].
     Image(Vec<u8>),
     /// Du texte brut, mis en page par [`from_text`].
     Text(String),

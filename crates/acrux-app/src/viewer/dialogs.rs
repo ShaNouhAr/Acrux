@@ -278,11 +278,7 @@ impl Viewer {
         }
         match asking.then.clone() {
             // Rien à faire : un message, ou un choix déjà appliqué.
-            Then::Nothing
-            | Then::Language
-            | Then::Settings
-            | Then::Updates
-            | Then::Protection => {}
+            Then::Nothing | Then::Language | Then::Settings | Then::Updates | Then::Protection => {}
             Then::CloseTab => {
                 let active = self.active_tab;
                 self.close_tab_now(active);

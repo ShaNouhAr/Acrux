@@ -172,6 +172,7 @@ static TABLE: &[(&str, &str)] = &[
     ("Fichier introuvable", "File not found"),
     ("Fin", "Thin"),
     ("Français", "French"),
+    ("Image convertie en PDF ({} page(s)) — Ctrl+S pour l'enregistrer", "Image converted to PDF ({} page(s)) — Ctrl+S to save it"),
     ("Importer", "Import"),
     ("Imprimer", "Print"),
     ("Installer", "Install"),
@@ -285,7 +286,8 @@ mod tests {
 
     /// Prend la langue pour soi le temps d'une épreuve.
     fn seul() -> std::sync::MutexGuard<'static, ()> {
-        SEUL.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        SEUL.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     #[test]

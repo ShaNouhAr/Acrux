@@ -405,6 +405,10 @@ struct Loaded {
     full_save: bool,
     /// Modifications non enregistrées.
     modified: bool,
+    /// Le document vient d'être **fabriqué** (une image ouverte comme PDF) et
+    /// n'a pas encore de fichier à lui : le premier enregistrement demande
+    /// donc où le mettre, au lieu d'écrire dans le dossier temporaire.
+    temporary: bool,
     /// Champs de formulaire (AcroForm), rechargés après chaque modification.
     fields: Vec<Field>,
     /// Commentaires (annotations porteuses de texte), pour le panneau.
@@ -789,6 +793,19 @@ struct Search {
     scanned: usize,
 }
 
+/// Vrai si ces octets sont ceux d'une image que nous savons lire.
+///
+/// La signature vaut mieux que l'extension : un fichier mal nommé s'ouvre
+/// quand même, et un PDF nommé `.png` reste un PDF.
+fn is_image(data: &[u8]) -> bool {
+    data.starts_with(&[0x89, b'P', b'N', b'G'])
+        || data.starts_with(&[0xFF, 0xD8])
+        || data.starts_with(b"BM")
+        || data.starts_with(b"GIF8")
+        || data.starts_with(b"II* ")
+        || data.starts_with(b"MM *")
+}
+
 /// Un rectangle cliquable du bandeau de recherche : sa position, sa taille,
 /// et ce qu'il fait.
 type SearchTarget = (i32, i32, i32, i32, ReplaceButton);
@@ -826,7 +843,15 @@ fn paint_replace_bar(
     };
     let step = box_h + (4.0 * dpi) as i32;
     let y = y + step;
-    frame.fill_rect(x - 2, y - 2, box_w + 4, box_h + 4, t.bar.0, t.bar.1, t.bar.2);
+    frame.fill_rect(
+        x - 2,
+        y - 2,
+        box_w + 4,
+        box_h + 4,
+        t.bar.0,
+        t.bar.1,
+        t.bar.2,
+    );
     r.draw(frame, text, t, dpi, x, y, box_w, box_h);
     buttons.push((x, y, box_w, box_h, ReplaceButton::With));
     let y = y + step;
@@ -1964,8 +1989,10 @@ impl Viewer {
                                 self.ask_password(Some(value));
                             }
                             None => {
-                                prompt.error =
-                                    Some(crate::ui::lang::tr("un mot de passe vide ne protège rien").into());
+                                prompt.error = Some(
+                                    crate::ui::lang::tr("un mot de passe vide ne protège rien")
+                                        .into(),
+                                );
                             }
                             Some(first) if first == value => {
                                 self.prompt = None;
@@ -2636,8 +2663,7 @@ impl Viewer {
             t.bar.2,
         );
         s.input.draw(frame, text, &t, dpi, x, y, box_w, box_h);
-        let mut buttons: Vec<SearchTarget> =
-            vec![(x, y, box_w, box_h, ReplaceButton::Find)];
+        let mut buttons: Vec<SearchTarget> = vec![(x, y, box_w, box_h, ReplaceButton::Find)];
         // Le champ « remplacer par » et ses deux boutons, sous la recherche.
         let (y, more) = paint_replace_bar(frame, text, s, &t, dpi, (x, y, box_w, box_h));
         buttons.extend(more);
@@ -2680,6 +2706,15 @@ impl Viewer {
 
     fn open(&mut self, path: &Path, window: &mut dyn WindowHandle) {
         self.leave_home();
+        // Une image ouverte devient un PDF, comme dans Acrobat : un TIFF de
+        // scanner donne une page par feuille.
+        if let Some(made) = self.open_as_image(path, window) {
+            if made {
+                self.title_dirty = true;
+                window.request_redraw();
+            }
+            return;
+        }
         match Document::load(path).and_then(|doc| {
             let pages = collect_pages(&doc)?;
             Ok((doc, pages))
@@ -2717,6 +2752,92 @@ impl Viewer {
         }
         self.title_dirty = true;
         window.request_redraw();
+    }
+
+    /// Ouvre un fichier image en le convertissant en PDF.
+    ///
+    /// Rend `None` si le fichier n'est pas une image — l'ouverture ordinaire
+    /// reprend alors la main —, `Some(true)` si le document est ouvert et
+    /// `Some(false)` si la conversion a échoué (le message est déjà affiché).
+    fn open_as_image(&mut self, path: &Path, window: &mut dyn WindowHandle) -> Option<bool> {
+        let data = std::fs::read(path).ok()?;
+        if !is_image(&data) {
+            return None;
+        }
+        let name = path
+            .file_stem()
+            .map_or_else(|| "image".to_string(), |n| n.to_string_lossy().into_owned());
+        let made = acrux_features::create::from_images(
+            &[acrux_features::create::ImageInput {
+                data,
+                name: name.clone(),
+            }],
+            &acrux_features::create::ImageLayout::default(),
+        )
+        .and_then(|doc| doc.save_full());
+        let bytes = match made {
+            Ok(b) => b,
+            Err(e) => {
+                self.alert(
+                    "Ouverture impossible",
+                    &format!(
+                        "{}
+
+{e}",
+                        path.display()
+                    ),
+                );
+                return Some(false);
+            }
+        };
+        // Le fil de rendu relit le document sur le disque : le PDF fabriqué a
+        // donc besoin d'un fichier, qui va dans le dossier temporaire tant
+        // que l'utilisateur n'a pas dit où le ranger.
+        let dir = std::env::temp_dir().join("acrux-images");
+        let _ = std::fs::create_dir_all(&dir);
+        let target = dir.join(format!("{name}.pdf"));
+        if let Err(e) = std::fs::write(&target, &bytes) {
+            self.alert(
+                "Ouverture impossible",
+                &format!(
+                    "{}
+
+{e}",
+                    target.display()
+                ),
+            );
+            return Some(false);
+        }
+        match Document::load(&target).and_then(|doc| {
+            let pages = collect_pages(&doc)?;
+            Ok((doc, pages))
+        }) {
+            Ok((doc, pages)) => {
+                let count = pages.len();
+                self.finish_open(target, doc, pages, None, window);
+                if let Some(l) = &mut self.loaded {
+                    l.temporary = true;
+                    l.modified = true;
+                }
+                self.set_notice(crate::ui::lang::trf(
+                    "Image convertie en PDF ({} page(s)) — Ctrl+S pour l'enregistrer",
+                    &[&count.to_string()],
+                ));
+                Some(true)
+            }
+            Err(e) => {
+                self.alert(
+                    "Ouverture impossible",
+                    &format!(
+                        "{}
+
+{e}",
+                        path.display()
+                    ),
+                );
+                Some(false)
+            }
+        }
     }
 
     /// Installe un document analysé (et authentifié) comme document courant.
@@ -2783,6 +2904,7 @@ impl Viewer {
             redo: Vec::new(),
             full_save: false,
             modified: false,
+            temporary: false,
             fields,
             comments,
             layers,
@@ -3639,14 +3761,15 @@ impl Viewer {
         l.full_save = true;
         self.title_dirty = true;
         self.set_notice(
-            crate::ui::lang::tr("document protégé : le mot de passe sera demandé à l'ouverture").into(),
+            crate::ui::lang::tr("document protégé : le mot de passe sera demandé à l'ouverture")
+                .into(),
         );
         // Un chiffrement qui reste en mémoire ne protège rien : on écrit.
         self.save(false, window);
     }
 
     /// Retire la protection d'un document chiffré.
-    fn remove_protection(&mut self, ) {
+    fn remove_protection(&mut self) {
         let Some(l) = &mut self.loaded else { return };
         if l.password.is_none() {
             self.set_notice(crate::ui::lang::tr("ce document n'est pas protégé").into());
@@ -3660,7 +3783,9 @@ impl Viewer {
         l.modified = true;
         l.full_save = true;
         self.title_dirty = true;
-        self.set_notice(crate::ui::lang::tr("protection retirée : enregistrez pour l'appliquer").into());
+        self.set_notice(
+            crate::ui::lang::tr("protection retirée : enregistrez pour l'appliquer").into(),
+        );
     }
 
     /// Applique une modification au document (et à la copie du fil de rendu).
@@ -3822,6 +3947,9 @@ impl Viewer {
         // Ce qui est tapé mais pas encore écrit doit l'être avant le fichier.
         self.close_active();
         let Some(l) = &self.loaded else { return false };
+        // Un document fabriqué à partir d'une image n'a pas de fichier à lui :
+        // le premier Ctrl+S demande où le ranger.
+        let save_as = save_as || l.temporary;
         let suggested = l.path.file_name().map_or_else(
             || "document.pdf".to_string(),
             |n| n.to_string_lossy().into_owned(),
@@ -3867,6 +3995,8 @@ impl Viewer {
         if let Some(l) = &mut self.loaded {
             l.path = target;
             l.modified = false;
+            // Le document a désormais un fichier à lui.
+            l.temporary = false;
             // Le fichier enregistré devient la nouvelle base de l'annulation :
             // rejouer l'historique par-dessus le ferait une deuxième fois.
             l.history.clear();
@@ -6380,10 +6510,7 @@ impl App for Viewer {
             // La tabulation passe du champ « rechercher » au champ
             // « remplacer », comme dans n'importe quel formulaire.
             Event::Key(Key::Tab, _)
-                if self
-                    .search
-                    .as_ref()
-                    .is_some_and(|s| s.replace.is_some()) =>
+                if self.search.as_ref().is_some_and(|s| s.replace.is_some()) =>
             {
                 if let Some(s) = &mut self.search {
                     s.on_replace = !s.on_replace;

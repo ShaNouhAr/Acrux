@@ -35,7 +35,10 @@ fn corpus_files() -> Vec<PathBuf> {
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+            if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+            {
                 out.push(path);
             }
         }
@@ -164,9 +167,9 @@ fn remplace_toutes_les_occurrences_du_corpus() {
                 if touched.iter().any(|y| (y - bb.y0).abs() < 1.0) {
                     continue;
                 }
-                let found = a
-                    .iter()
-                    .any(|(wa, ba)| wa == wb && (bb.x0 - ba.x0).abs() < 0.01 && (bb.y0 - ba.y0).abs() < 0.01);
+                let found = a.iter().any(|(wa, ba)| {
+                    wa == wb && (bb.x0 - ba.x0).abs() < 0.01 && (bb.y0 - ba.y0).abs() < 0.01
+                });
                 assert!(found, "{} : le mot « {wb} » a bougé", path.display());
             }
         }

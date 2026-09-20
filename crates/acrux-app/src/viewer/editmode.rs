@@ -239,7 +239,12 @@ impl Viewer {
     /// Suppr pour l'effacer, Échap pour le lâcher.
     ///
     /// Rend vrai si la touche a été prise.
-    pub(super) fn posed_key(&mut self, key: Key, m: Modifiers, window: &mut dyn WindowHandle) -> bool {
+    pub(super) fn posed_key(
+        &mut self,
+        key: Key,
+        m: Modifiers,
+        window: &mut dyn WindowHandle,
+    ) -> bool {
         if !self.block_posed() {
             return false;
         }
@@ -679,9 +684,7 @@ impl Viewer {
                 a.page,
                 rect,
                 a.drag.as_ref().and_then(|d| d.handle).or(a.hover),
-                a.drag
-                    .as_ref()
-                    .map_or((None, None), |d| d.guides),
+                a.drag.as_ref().map_or((None, None), |d| d.guides),
             ))
         }) {
             if let Some(view) = self.page_rect_to_view(page, rect) {
@@ -929,7 +932,12 @@ impl Viewer {
             .as_ref()
             .map_or_else(|| a.map.bounds(), |l| l.caret.bounds());
         let f = &a.frame;
-        let fallback = Rect::new(f.x0, f.baseline - f.size, f.x0 + f.width, f.baseline + f.size);
+        let fallback = Rect::new(
+            f.x0,
+            f.baseline - f.size,
+            f.x0 + f.width,
+            f.baseline + f.size,
+        );
         let r = text.unwrap_or(fallback);
         // Un paragraphe de plusieurs lignes montre la largeur où son texte
         // coule : c'est elle qu'on redimensionne.
@@ -1062,7 +1070,9 @@ impl Viewer {
         // pas, et ne se retrouverait plus.
         if let Some(crop) = crop {
             frame.width = frame.width.min(crop.width());
-            frame.x0 = frame.x0.clamp(crop.x0, (crop.x1 - frame.width).max(crop.x0));
+            frame.x0 = frame
+                .x0
+                .clamp(crop.x0, (crop.x1 - frame.width).max(crop.x0));
             frame.baseline = frame
                 .baseline
                 .clamp(crop.y0 + frame.size, crop.y1 - frame.size * 0.2);
@@ -1415,7 +1425,9 @@ impl Viewer {
             for col in x0..x1 {
                 let i = ((row * pw + col) * 4) as usize;
                 if i + 2 < data.len() {
-                    *tally.entry((data[i + 2], data[i + 1], data[i])).or_default() += 1;
+                    *tally
+                        .entry((data[i + 2], data[i + 1], data[i]))
+                        .or_default() += 1;
                 }
             }
         };
@@ -1560,10 +1572,8 @@ impl Viewer {
                         && pt.x <= r.x1 + m
                         && pt.y >= r.y0 - m
                         && pt.y <= r.y1 + m;
-                    let inner = pt.x > r.x0 + m
-                        && pt.x < r.x1 - m
-                        && pt.y > r.y0 + m
-                        && pt.y < r.y1 - m;
+                    let inner =
+                        pt.x > r.x0 + m && pt.x < r.x1 - m && pt.y > r.y0 + m && pt.y < r.y1 - m;
                     outer && !inner
                 });
             if on_border {
@@ -1572,11 +1582,9 @@ impl Viewer {
             }
             // Un bloc posé se saisit tout entier : le pointeur le dit.
             if self.block_posed() {
-                let inside = hit
-                    .zip(self.active_box())
-                    .is_some_and(|((_, pt), r)| {
-                        pt.x >= r.x0 && pt.x <= r.x1 && pt.y >= r.y0 && pt.y <= r.y1
-                    });
+                let inside = hit.zip(self.active_box()).is_some_and(|((_, pt), r)| {
+                    pt.x >= r.x0 && pt.x <= r.x1 && pt.y >= r.y0 && pt.y <= r.y1
+                });
                 if inside {
                     window.set_cursor(Cursor::Move);
                     return;
@@ -1903,8 +1911,10 @@ impl Viewer {
 
     /// Reporte la police choisie sur le bloc, et le redessine.
     fn apply_face(&mut self) {
-        let choice = self.edit.as_ref().map(|e| {
-            acrux_features::edit_text::FaceChoice {
+        let choice = self
+            .edit
+            .as_ref()
+            .map(|e| acrux_features::edit_text::FaceChoice {
                 family: e
                     .bar
                     .family
@@ -1912,8 +1922,7 @@ impl Viewer {
                     .map(|f| (*f).to_string()),
                 bold: e.bar.bold,
                 italic: e.bar.italic,
-            }
-        });
+            });
         let Some(choice) = choice else { return };
         let (page, frame) = {
             let Some(a) = self.edit.as_mut().and_then(|e| e.active.as_mut()) else {

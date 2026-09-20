@@ -477,3 +477,59 @@ fn the_images_corpus_file_is_what_the_generator_claims() {
     assert!(flate_images >= 3, "les PNG sont recompressés en Flate");
     assert_eq!(masks, 1, "une seule image transparente");
 }
+
+// --- Images d'autres formats ------------------------------------------------
+
+/// Un fichier du corpus d'images, écrit par l'encodeur de Windows.
+fn image(name: &str) -> Vec<u8> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("tests")
+        .join("corpus")
+        .join("images")
+        .join(name);
+    std::fs::read(&path).unwrap_or_else(|e| panic!("{} : {e}", path.display()))
+}
+
+/// Un scan TIFF de deux pages doit donner un PDF de deux pages : c'est tout
+/// l'intérêt du format pour un document numérisé.
+#[test]
+fn un_tiff_multipage_donne_autant_de_pages() {
+    let doc = from_images(
+        &[ImageInput {
+            data: image("deux-pages.tif"),
+            name: "deux-pages.tif".into(),
+        }],
+        &ImageLayout::default(),
+    )
+    .unwrap();
+    assert_eq!(collect_pages(&doc).unwrap().len(), 2);
+    let doc = roundtrip(&doc);
+    check(&doc, "tiff multipage");
+    renders_cleanly(&doc, "tiff multipage");
+}
+
+/// Les autres formats font un document sain, comme le PNG et le JPEG.
+#[test]
+fn bmp_gif_et_tiff_donnent_un_document_sain() {
+    for name in [
+        "motif-24.bmp",
+        "motif.gif",
+        "motif-lzw.tif",
+        "damier-g4.tif",
+    ] {
+        let doc = from_images(
+            &[ImageInput {
+                data: image(name),
+                name: name.into(),
+            }],
+            &ImageLayout::default(),
+        )
+        .unwrap_or_else(|e| panic!("{name} : {e}"));
+        assert_eq!(collect_pages(&doc).unwrap().len(), 1, "{name}");
+        let doc = roundtrip(&doc);
+        check(&doc, name);
+        renders_cleanly(&doc, name);
+    }
+}

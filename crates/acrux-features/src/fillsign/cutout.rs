@@ -28,7 +28,7 @@ use acrux_core::{Error, Result};
 use acrux_document::{Dict, Document, Name, Object};
 
 use super::{fmt, Form, Rgb};
-use crate::stamp::image::{decode, png_raster, Raster};
+use crate::stamp::image::{decode, Raster};
 
 /// Réglages du détourage.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -103,11 +103,8 @@ struct Cut {
     alpha: Vec<u8>,
 }
 
-/// Décode une image en pixels, PNG ou JPEG.
+/// Décode une image en pixels (PNG, JPEG, BMP, GIF, TIFF).
 fn pixels(data: &[u8]) -> Result<Raster> {
-    if data.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
-        return png_raster(data);
-    }
     if data.starts_with(&[0xFF, 0xD8]) {
         let image = acrux_codecs::dct::decode(data)?;
         let components = match image.components {
@@ -127,9 +124,12 @@ fn pixels(data: &[u8]) -> Result<Raster> {
             alpha: None,
         });
     }
-    Err(Error::Unsupported(
-        "signature importée : seuls les fichiers PNG et JPEG sont acceptés".into(),
-    ))
+    // Tout le reste passe par le décodeur commun ; d'un TIFF de plusieurs
+    // pages, on ne garde que la première : une signature n'en a qu'une.
+    crate::stamp::image::rasters(data)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| Error::Unsupported("signature importée : image vide".into()))
 }
 
 /// Luminance perçue d'un pixel, sur 0–255.

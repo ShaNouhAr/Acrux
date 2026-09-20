@@ -16,14 +16,14 @@ use acrux_document::{Document, ObjectRef};
 
 use super::builder::Builder;
 use super::paper::PageSetup;
-use crate::stamp::image::decode;
+use crate::stamp::image::decode_all;
 use crate::stamp::Rgb;
 
 /// Une image à placer, avec le nom qui la désigne dans les messages et les
 /// signets de [`super::combine`].
 #[derive(Debug, Clone)]
 pub struct ImageInput {
-    /// Octets du fichier, PNG ou JPEG.
+    /// Octets du fichier : PNG, JPEG, BMP, GIF ou TIFF.
     pub data: Vec<u8>,
     /// Nom affiché (celui du fichier, en général).
     pub name: String,
@@ -174,7 +174,11 @@ pub(crate) fn place(cell: Rect, pixels: (u32, u32), fit: Fit, dpi: f64) -> (Rect
     (drawn, clip)
 }
 
-/// Compose un document à partir d'images PNG ou JPEG.
+/// Compose un document à partir d'images (PNG, JPEG, BMP, GIF, TIFF).
+///
+/// Un **TIFF multipage** — ce que produit un scanner — donne autant d'images
+/// qu'il porte de pages, dans l'ordre : un fichier suffit donc à faire un
+/// document de plusieurs feuilles.
 ///
 /// # Errors
 /// Liste vide, image d'un format inconnu ou d'en-tête illisible.
@@ -186,8 +190,11 @@ pub fn from_images(images: &[ImageInput], layout: &ImageLayout) -> Result<Docume
     let per_page = layout.cells_per_page();
     let (width, height) = layout.setup.page_size();
     let mut page = usize::MAX;
-    for (index, input) in images.iter().enumerate() {
-        let decoded = decode(&input.data).map_err(|e| annotate(&input.name, &e))?;
+    let mut decoded_all = Vec::with_capacity(images.len());
+    for input in images {
+        decoded_all.extend(decode_all(&input.data).map_err(|e| annotate(&input.name, &e))?);
+    }
+    for (index, decoded) in decoded_all.into_iter().enumerate() {
         let pixels = (decoded.width, decoded.height);
         let object: ObjectRef = decoded.write(&builder.doc);
         if index % per_page == 0 {

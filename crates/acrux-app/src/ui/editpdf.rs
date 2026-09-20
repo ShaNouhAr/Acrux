@@ -582,7 +582,8 @@ impl EditBar {
                 family,
                 theme.text,
             );
-            self.hits.push((x, top, fw_label, inner, BarAction::NextFamily));
+            self.hits
+                .push((x, top, fw_label, inner, BarAction::NextFamily));
             x += fw_label + (8.0 * dpi) as i32;
 
             // Gras et italique.
@@ -721,7 +722,11 @@ fn align_icon(
         // Une ligne sur deux est courte, comme un vrai paragraphe ; un texte
         // justifié n'a que sa dernière ligne courte.
         let len = if kind == 3 {
-            if row < 3 { full } else { short }
+            if row < 3 {
+                full
+            } else {
+                short
+            }
         } else if row % 2 == 0 {
             full
         } else {

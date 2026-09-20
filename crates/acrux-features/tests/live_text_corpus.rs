@@ -79,7 +79,9 @@ fn lapercu_place_le_texte_ou_lecriture_le_mettra() {
         let Ok(doc) = Document::load(&file) else {
             continue;
         };
-        let Some(opened) = a_block(&doc) else { continue };
+        let Some(opened) = a_block(&doc) else {
+            continue;
+        };
         let pages = collect_pages(&doc).unwrap();
         let Ok(live) = LiveText::open(&doc, &pages[0], &opened.frame) else {
             continue;
@@ -160,7 +162,9 @@ fn les_lettres_absentes_du_sous_ensemble_se_dessinent_quand_meme() {
         let Ok(doc) = Document::load(&file) else {
             continue;
         };
-        let Some(opened) = a_block(&doc) else { continue };
+        let Some(opened) = a_block(&doc) else {
+            continue;
+        };
         let pages = collect_pages(&doc).unwrap();
         let Ok(live) = LiveText::open(&doc, &pages[0], &opened.frame) else {
             continue;
@@ -203,7 +207,10 @@ fn les_lignes_de_lapercu_portent_le_texte_tape() {
         .map(|l| l.text.trim())
         .collect::<Vec<_>>()
         .join(" ");
-    assert_eq!(rendu.split_whitespace().collect::<Vec<_>>(), typed.split_whitespace().collect::<Vec<_>>());
+    assert_eq!(
+        rendu.split_whitespace().collect::<Vec<_>>(),
+        typed.split_whitespace().collect::<Vec<_>>()
+    );
     // Chaque ligne descend, et chacune part de la boîte.
     for pair in laid.lines.windows(2) {
         assert!(pair[1].baseline < pair[0].baseline);
@@ -219,7 +226,9 @@ fn lapercu_connait_lencre_du_bloc() {
         let Ok(doc) = Document::load(&file) else {
             continue;
         };
-        let Some(opened) = a_block(&doc) else { continue };
+        let Some(opened) = a_block(&doc) else {
+            continue;
+        };
         let pages = collect_pages(&doc).unwrap();
         let Ok(live) = LiveText::open(&doc, &pages[0], &opened.frame) else {
             continue;
@@ -242,8 +251,12 @@ fn une_ligne_seule_sapercoit_aussi() {
     let pages = collect_pages(&doc).unwrap();
     let text = extract_page_text(&doc, &pages[0]).unwrap();
     let line = text.lines.first().expect("une ligne");
-    let index = line_at(&text, f64::midpoint(line.bbox.x0, line.bbox.x1), f64::midpoint(line.bbox.y0, line.bbox.y1))
-        .expect("ligne sous le point");
+    let index = line_at(
+        &text,
+        f64::midpoint(line.bbox.x0, line.bbox.x1),
+        f64::midpoint(line.bbox.y0, line.bbox.y1),
+    )
+    .expect("ligne sous le point");
     let unit = line_unit(&text, index).expect("unité de ligne");
     let opened = open_unit(&doc, &pages[0], &text, &unit).expect("ouverture");
     let apercu = LiveText::open(&doc, &pages[0], &opened.frame).expect("police");

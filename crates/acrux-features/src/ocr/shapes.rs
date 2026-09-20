@@ -321,11 +321,7 @@ pub fn best(face: &Face, grid: &[u8; CELLS], aspect: f64, top: f64, bottom: f64)
             second = Some((template.c, score));
         }
     }
-    best.map(|(c, score)| Match {
-        c,
-        score,
-        second,
-    })
+    best.map(|(c, score)| Match { c, score, second })
 }
 
 /// Les neuf cadrages d'une grille : le sien, et ses voisins d'une case.
@@ -375,15 +371,18 @@ fn distance(views: &[[u8; CELLS]], template: &[u8; CELLS]) -> f64 {
 /// Avance d'un caractère dans une police, en cadratins.
 #[must_use]
 pub fn advance(face: &Face, c: char) -> Option<f64> {
-    face.templates
-        .iter()
-        .find(|t| t.c == c)
-        .map(|t| t.advance)
+    face.templates.iter().find(|t| t.c == c).map(|t| t.advance)
 }
 
 /// Les meilleurs candidats d'une tache, pour la mise au point.
 #[must_use]
-pub fn ranked(face: &Face, grid: &[u8; CELLS], aspect: f64, top: f64, bottom: f64) -> Vec<(char, f64, f64, f64, f64)> {
+pub fn ranked(
+    face: &Face,
+    grid: &[u8; CELLS],
+    aspect: f64,
+    top: f64,
+    bottom: f64,
+) -> Vec<(char, f64, f64, f64, f64)> {
     let views = views_of(grid);
     let mut all: Vec<(char, f64, f64, f64, f64)> = face
         .templates
@@ -458,7 +457,6 @@ fn draw_glyph(font: &TrueTypeFont, gid: u16, size: u32) -> Option<(Vec<u8>, u32,
     }
     Some((rgb, w, h))
 }
-
 
 /// Dessine une grille en caractères, pour la mise au point.
 #[must_use]
@@ -546,7 +544,10 @@ mod tests {
                 sum += recognition_rate(face, &[size], false);
                 n += 1;
             }
-            println!("--- {size} px : {:.0} % ---", sum / f64::from(n.max(1)) * 100.0);
+            println!(
+                "--- {size} px : {:.0} % ---",
+                sum / f64::from(n.max(1)) * 100.0
+            );
         }
         for face in faces() {
             let rate = recognition_rate(face, &[20, 28, 40], false);

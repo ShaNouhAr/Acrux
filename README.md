@@ -100,10 +100,12 @@ de passe vide) ; `rotate`, `delete`, `reorder`, `extract`, `merge`, `rewrite` le
 recompresse les flux en Flate avec notre propre compresseur, `rewrite --compact` y ajoute les flux
 d'objets et une table xref compressée) ;
 `create` **fabrique** un PDF : `--blank` (page vierge, `--size A4|lettre|légal|tabloïd|dl|c5|210x297mm`,
-`--orientation portrait|paysage`, `--pages N`, `--margin N`), `--images a.jpg b.png`
+`--orientation portrait|paysage`, `--pages N`, `--margin N`), `--images a.jpg b.png scan.tif`
 (une image par page ou une grille `--grid 2x3`, `--fit contain|cover|actual`, `--dpi N`,
-`--background r,g,b` ; le JPEG est incorporé **octet pour octet**, sans recompression, le PNG
-recompressé en Flate avec son `/SMask` si transparence), `--text fichier.txt` (vraie mise en page :
+`--background r,g,b` ; formats lus **PNG, JPEG, BMP, GIF et TIFF** — un TIFF multipage, ce que
+sort un scanner, donne une page par feuille ; le JPEG est incorporé **octet pour octet**, sans
+recompression, les autres sont décodés et recompressés en Flate avec leur `/SMask` s'ils ont de
+la transparence), `--text fichier.txt` (vraie mise en page :
 coupure aux espaces, césure simple, paragraphes, `--align gauche|droite|centre|justifie` où la
 dernière ligne d'un paragraphe ne se justifie jamais, pagination, `--font`, `--size`, `--margin`,
 `--header`/`--footer` avec les jetons `{page}` et `{pages}`) et `--markdown fichier.md` (titres,
@@ -261,6 +263,9 @@ dans la barre d'outils et « page iii (3 / 240) » dans la barre d'état, et sai
 | `Ctrl+C`, `Ctrl+A` | copier, tout sélectionner |
 | `Ctrl+F` | rechercher (`Entrée` / `Maj+Entrée` : occurrence suivante / précédente) |
 | `Ctrl+H` | rechercher et remplacer (`Tab` : d'un champ à l'autre, `Entrée` : remplacer, ou « Tout remplacer ») |
+
+Ouvrir une **image** (PNG, JPEG, BMP, GIF, TIFF) la convertit en PDF : un TIFF de scanner donne
+une page par feuille, et `Ctrl+S` demande où ranger le document obtenu.
 
 | Modifier | |
 | --- | --- |

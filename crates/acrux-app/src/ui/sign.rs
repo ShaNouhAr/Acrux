@@ -786,7 +786,9 @@ impl Capture {
                 self.buttons.push((ax, ay, w, bh, Button::Import));
                 let chosen = match &self.image {
                     Some(path) => path.display().to_string(),
-                    None => "Photo ou capture de votre signature, PNG ou JPEG.".into(),
+                    None => {
+                        "Photo ou capture de votre signature : PNG, JPEG, BMP, GIF ou TIFF.".into()
+                    }
                 };
                 text.draw_clipped(
                     frame,

@@ -26,6 +26,7 @@ Livrable : inspecteur de PDF fiable sur 100 % du corpus. **Reste pour clore la p
 - [x] Polices TrueType, CFF, Type1, Type3, encodages, CMaps (acrux-fonts, 160 tests avec la composition) ; polices de secours via les polices système (CMaps CJK prédéfinies à faire)
 - [x] Interpréteur de contenu : chemins, texte, images, XObjects, formulaires, motifs de pavage et d'ombrage, contenu optionnel, ExtGState
 - [x] Décodeurs d'images : DCT (JPEG de base et progressif), CCITT G3/G4, JBIG2 (générique, symboles/texte, raffinement, demi-teintes, globaux), JPX (JPEG 2000 partie 1, conteneur JP2, `/SMaskInData`) — tous branchés dans `acrux-render/image.rs`
+- [x] Lecture des **fichiers image** à importer (`acrux-features/stamp/image/`) : PNG, JPEG, BMP (1 à 32 bits, palette, champs de bits, RLE4/RLE8), GIF (palette locale, entrelacement, transparence) et TIFF **multipage** (CCITT 2/3/4, LZW, PackBits, Deflate, JPEG, prédicteur, palette, CMJN) ; éprouvés au pixel près contre des fichiers écrits par GDI+ (`tests/corpus/images/`)
 - [x] Ombrages types 1 à 7 (maillages en Gouraud, patches subdivisés), motifs
 - [~] Transparence : alpha constant, 16 modes de fusion, masques souples (luminosité/alpha), groupes hors écran (knockout/isolated à affiner)
 - [x] Apparences d'annotations (/AP /N, /AS, algorithme 8.1)

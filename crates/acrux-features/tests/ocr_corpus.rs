@@ -67,7 +67,11 @@ fn une_page_en_image_se_relit() {
     let read = ocr::read_page(&doc, &pages[0]).unwrap();
     assert_eq!(read.len(), 1, "une image, une lecture");
     let lines = &read[0].lines;
-    assert!(lines.len() > 25, "seulement {} ligne(s) lue(s)", lines.len());
+    assert!(
+        lines.len() > 25,
+        "seulement {} ligne(s) lue(s)",
+        lines.len()
+    );
 
     // Chaque ligne lue doit ressembler à une ligne de l'original : c'est la
     // seule mesure qui vaille, et 15 % d'écart moyen laisse déjà voir
@@ -134,7 +138,9 @@ fn les_lignes_lues_savent_ou_elles_sont() {
 fn couvrir_une_ligne_ne_touche_pas_limage() {
     let doc = Document::load(corpus("synthese/texte-en-image.pdf")).unwrap();
     let pages = collect_pages(&doc).unwrap();
-    let before = acrux_features::edit_objects::list(&doc, &pages[0]).unwrap().len();
+    let before = acrux_features::edit_objects::list(&doc, &pages[0])
+        .unwrap()
+        .len();
     let rect = acrux_core::Rect::new(100.0, 700.0, 300.0, 720.0);
     ocr::mask(&doc, &pages[0], rect, [1.0, 1.0, 1.0]).unwrap();
     let after = acrux_features::edit_objects::list(&doc, &pages[0]).unwrap();
@@ -160,12 +166,7 @@ fn voir_la_lecture() {
         for line in &image.lines {
             println!(
                 "{:>5.2} {:>6.1} {:>6.1} {:>5.1}pt {} | {}",
-                line.confidence,
-                line.bbox.x0,
-                line.baseline,
-                line.size,
-                line.family,
-                line.text
+                line.confidence, line.bbox.x0, line.baseline, line.size, line.family, line.text
             );
         }
     }
@@ -175,7 +176,10 @@ fn voir_la_lecture() {
 #[test]
 #[ignore = "sortie de mise au point"]
 fn voir_les_grilles() {
-    let Some(face) = ocr::shapes::faces().iter().find(|f| f.family.starts_with("Times")) else {
+    let Some(face) = ocr::shapes::faces()
+        .iter()
+        .find(|f| f.family.starts_with("Times"))
+    else {
         return;
     };
     for c in ['p', 'e', 'n'] {
@@ -215,7 +219,10 @@ fn voir_les_candidats() {
 #[test]
 #[ignore = "banc d'essai"]
 fn le_banc_de_la_page() {
-    let vrai = Document::load(corpus("reels/chrome-skia-deux-colonnes-entete-pied-cesure.pdf")).unwrap();
+    let vrai = Document::load(corpus(
+        "reels/chrome-skia-deux-colonnes-entete-pied-cesure.pdf",
+    ))
+    .unwrap();
     let pages_vrai = collect_pages(&vrai).unwrap();
     let texte = acrux_features::text::extract_page_text(&vrai, &pages_vrai[0]).unwrap();
     let lignes: Vec<String> = texte

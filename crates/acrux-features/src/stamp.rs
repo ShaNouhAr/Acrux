@@ -242,8 +242,8 @@ pub enum StampSource {
         /// Couleur de remplissage.
         color: Rgb,
     },
-    /// Image PNG ou JPEG, fournie en octets. À l'échelle 1, un pixel vaut un
-    /// point.
+    /// Image fournie en octets (PNG, JPEG, BMP, GIF, TIFF). À l'échelle 1,
+    /// un pixel vaut un point.
     Image {
         /// Octets du fichier image.
         data: Vec<u8>,

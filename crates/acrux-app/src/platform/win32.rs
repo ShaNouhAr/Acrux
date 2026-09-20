@@ -641,7 +641,7 @@ impl WindowHandle for Handle<'_> {
         if let Some(scripted) = scripted_path("ACRUX_OPEN_FILE") {
             return scripted.answer();
         }
-        file_dialog(self.state.hwnd, false, "", PDF_TYPES, "")
+        file_dialog(self.state.hwnd, false, "", OPEN_TYPES, "")
     }
 
     fn save_file_dialog(&mut self, suggested: &str) -> Option<PathBuf> {
@@ -1031,6 +1031,18 @@ fn set_fullscreen(state: &mut WindowState, on: bool) {
 /// Dialogue standard « Ouvrir » ou « Enregistrer sous » (filtre PDF).
 const PDF_TYPES: &[(&str, &str)] = &[("Documents PDF", "pdf")];
 
+/// Ce qu'accepte le dialogue d'ouverture : les PDF et les images, qu'Acrux
+/// convertit en PDF à la volée. Un motif peut en réunir plusieurs, séparés
+/// par des points-virgules.
+const OPEN_TYPES: &[(&str, &str)] = &[
+    (
+        "Documents PDF et images",
+        "pdf;png;jpg;jpeg;bmp;gif;tif;tiff",
+    ),
+    ("Documents PDF", "pdf"),
+    ("Images", "png;jpg;jpeg;bmp;gif;tif;tiff"),
+];
+
 fn file_dialog(
     hwnd: HWND,
     save: bool,
@@ -1047,12 +1059,25 @@ fn file_dialog(
     // clos par un zéro supplémentaire : « libellé\0motif\0…\0 ».
     let mut spec = String::new();
     for (label, ext) in types {
-        let _ = write!(spec, "{label} (*.{ext})\0*.{ext}\0");
+        // Un motif peut réunir plusieurs extensions : « pdf;png » donne
+        // « *.pdf;*.png ».
+        let patterns: Vec<String> = ext.split(';').map(|e| format!("*.{e}")).collect();
+        let (shown, matched) = (patterns.join(", "), patterns.join(";"));
+        let _ = write!(spec, "{label} ({shown})\0{matched}\0");
     }
     spec.push_str("Tous les fichiers\0*.*\0");
     let filter = wide(&spec);
-    let title = wide(if save { save_title } else { "Ouvrir un PDF" });
-    let default_ext = wide(types.first().map_or("pdf", |t| t.1));
+    let title = wide(if save {
+        save_title
+    } else {
+        "Ouvrir un document"
+    });
+    let default_ext = wide(
+        types
+            .first()
+            .and_then(|t| t.1.split(';').next())
+            .unwrap_or("pdf"),
+    );
     let flags = if save {
         OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_EXPLORER
     } else {

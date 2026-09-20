@@ -50,7 +50,11 @@ impl Styles {
     /// Corps du caractère de rang `index`, pour une boîte de corps `size`.
     #[must_use]
     pub fn size_at(&self, index: usize, size: f64) -> f64 {
-        let ratio = if self.base > 1e-9 { size / self.base } else { 1.0 };
+        let ratio = if self.base > 1e-9 {
+            size / self.base
+        } else {
+            1.0
+        };
         self.at(index).map_or(size, |r| r.page_size * ratio)
     }
 }

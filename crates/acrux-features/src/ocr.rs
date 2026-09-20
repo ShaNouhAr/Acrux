@@ -150,7 +150,11 @@ pub fn read_object(doc: &Document, page: &Page, object: &PageObject) -> Option<I
 }
 
 /// Décode les pixels d'une image de la page.
-fn decode(doc: &Document, page: &Page, object: &PageObject) -> Option<acrux_render::image::DecodedImage> {
+fn decode(
+    doc: &Document,
+    page: &Page,
+    object: &PageObject,
+) -> Option<acrux_render::image::DecodedImage> {
     let name = object.name.as_ref()?;
     let resources = edit_objects::resources(doc, page);
     let xobjects = doc
@@ -176,7 +180,11 @@ fn decode(doc: &Document, page: &Page, object: &PageObject) -> Option<acrux_rend
 ///
 /// Comparer chaque tache à toutes les polices coûterait dix fois plus cher ;
 /// on tranche sur une trentaine de caractères, puis on s'y tient.
-fn choose_face<'a, F>(ink: &image::Ink, rows: &[segment::Row], faces: &'a [F]) -> Option<&'a shapes::Face>
+fn choose_face<'a, F>(
+    ink: &image::Ink,
+    rows: &[segment::Row],
+    faces: &'a [F],
+) -> Option<&'a shapes::Face>
 where
     F: std::borrow::Borrow<shapes::Face>,
 {
@@ -312,7 +320,9 @@ fn read_row(
     // plus rien de sûr.
     let confidence = (1.0 - average * 2.0).clamp(0.0, 1.0);
     let bbox = image::page_rect(to_page, row.bbox.x0, row.bbox.y0, row.bbox.x1, row.bbox.y1);
-    let baseline = to_page.apply(Point::new(f64::from(row.bbox.x0), metrics.baseline)).y;
+    let baseline = to_page
+        .apply(Point::new(f64::from(row.bbox.x0), metrics.baseline))
+        .y;
     // Le corps se déduit de la hauteur d'x mesurée : c'est la seule mesure
     // que l'image donne sûrement.
     let x_ratio = 0.52;
@@ -569,7 +579,8 @@ pub fn probe_ranking(doc: &Document, page: &Page, skip: usize, count: usize) -> 
                 let Some(probe) = Probe::of(&ink, glyph.bbox, &metrics) else {
                     continue;
                 };
-                let ranked = shapes::ranked(face, &probe.grid, probe.aspect, probe.top, probe.bottom);
+                let ranked =
+                    shapes::ranked(face, &probe.grid, probe.aspect, probe.top, probe.bottom);
                 let mut line = format!(
                     "boite {}x{} prop {:.2} haut {:.2} bas {:.2} :",
                     glyph.bbox.width(),
