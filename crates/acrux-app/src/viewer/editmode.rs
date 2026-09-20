@@ -1966,10 +1966,16 @@ impl Viewer {
                 1.2
             };
             let face = a.frame.face.clone();
-            (align, leading, face, a.frame.size, a.frame.color)
+            // La police d'origine du bloc, dite comme un lecteur la dirait.
+            let native = a
+                .live
+                .as_ref()
+                .filter(|_| face.is_none())
+                .map(|l| acrux_features::sysfonts::describe(l.family()));
+            (align, leading, face, a.frame.size, a.frame.color, native)
         });
         if let Some(mode) = &mut self.edit {
-            if let Some((align, leading, face, size, color)) = state {
+            if let Some((align, leading, face, size, color, native)) = state {
                 {
                     mode.bar.editing = true;
                     // La pastille montre l'encre du bloc ; un bloc neuf, lui,
@@ -1978,8 +1984,19 @@ impl Viewer {
                     mode.bar.align = align;
                     mode.bar.leading = leading;
                     mode.bar.active_size = Some(size);
-                    mode.bar.bold = face.as_ref().is_some_and(|f| f.bold);
-                    mode.bar.italic = face.as_ref().is_some_and(|f| f.italic);
+                    // Sans police imposée, la barre dit ce que le document
+                    // donne au bloc : sa famille, son gras, son italique.
+                    mode.bar.bold = face
+                        .as_ref()
+                        .map_or(native.as_ref().is_some_and(|n| n.1), |f| f.bold);
+                    mode.bar.italic = face
+                        .as_ref()
+                        .map_or(native.as_ref().is_some_and(|n| n.2), |f| f.italic);
+                    if let Some((name, _, _)) = native {
+                        mode.bar.native = Some(name);
+                    } else if face.is_none() {
+                        mode.bar.native = None;
+                    }
                     mode.bar.family = face.as_ref().and_then(|f| {
                         f.family.as_ref().and_then(|name| {
                             acrux_features::sysfonts::families()
@@ -1992,6 +2009,7 @@ impl Viewer {
                 mode.bar.editing = false;
                 mode.bar.active_size = None;
                 mode.bar.family = None;
+                mode.bar.native = None;
                 mode.bar.bold = false;
                 mode.bar.italic = false;
             }
@@ -2040,7 +2058,10 @@ impl Viewer {
                     .bar
                     .family
                     .and_then(|i| acrux_features::sysfonts::families().get(i))
-                    .map(|f| f.name.clone()),
+                    .map(|f| f.name.clone())
+                    // « Police du texte » : la famille d'origine, pour que
+                    // retirer le gras d'un titre gras rende bien son romain.
+                    .or_else(|| e.bar.native.clone()),
                 bold: e.bar.bold,
                 italic: e.bar.italic,
             });

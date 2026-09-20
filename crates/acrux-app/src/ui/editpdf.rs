@@ -316,6 +316,9 @@ pub struct EditBar {
     /// Police du bloc en cours : rang dans le catalogue du système, ou rien
     /// quand le bloc garde la sienne.
     pub family: Option<usize>,
+    /// Police **d'origine** du bloc ouvert, lue dans le document (« Georgia ») :
+    /// c'est elle que le bouton montre tant qu'aucune autre n'est choisie.
+    pub native: Option<String>,
     /// Gras du bloc en cours.
     pub bold: bool,
     /// Italique du bloc en cours.
@@ -360,6 +363,7 @@ impl Default for EditBar {
             color: [0.0, 0.0, 0.0],
             active_size: None,
             family: None,
+            native: None,
             bold: false,
             italic: false,
             align: 0,
@@ -509,10 +513,18 @@ impl EditBar {
 
     /// Déroule ou referme la liste des polices.
     pub fn toggle_menu(&mut self) {
-        self.popup = match self.popup {
-            Some(Popup::Fonts(_)) => None,
-            _ => Some(Popup::Fonts(Box::new(FontPicker::new(self.family)))),
-        };
+        if matches!(self.popup, Some(Popup::Fonts(_))) {
+            self.popup = None;
+            return;
+        }
+        // La liste s'ouvre sur la police du bloc, choisie ou d'origine.
+        let current = self.family.or_else(|| {
+            let native = self.native.as_deref()?;
+            acrux_features::sysfonts::families()
+                .iter()
+                .position(|f| f.name.eq_ignore_ascii_case(native))
+        });
+        self.popup = Some(Popup::Fonts(Box::new(FontPicker::new(current))));
     }
 
     /// Déroule ou referme le nuancier.
@@ -655,18 +667,31 @@ impl EditBar {
                 (self.color[1].clamp(0.0, 1.0) * 255.0).round() as u8,
                 (self.color[2].clamp(0.0, 1.0) * 255.0).round() as u8,
             );
-            let cy = top + (ctl - chip) / 2;
-            round_rect(frame, x + s(8.0), cy, chip, chip, chip as f32 / 2.0, ink);
-            crate::ui::paint::round_rect_outline(
+            // Un « A » souligné de l'encre, comme dans un traitement de
+            // texte : la lettre dit « couleur du texte », la barre dit
+            // laquelle. Un liseré clair la détache quand elle est sombre — une
+            // encre noire sur une barre noire ne se verrait pas.
+            let letter_w = text.measure(size, "A");
+            text.draw(
                 frame,
-                x + s(8.0),
-                cy,
-                chip,
-                chip,
-                chip as f32 / 2.0,
-                dpi.max(1.0),
-                theme.separator,
+                (x + s(8.0)) as f32 + (chip as f32 - letter_w) / 2.0,
+                baseline - 3.0 * dpi,
+                size,
+                "A",
+                theme.text,
             );
+            let bar_h = s(5.0);
+            let by = top + ctl - bar_h - s(4.0);
+            round_rect(
+                frame,
+                x + s(7.0),
+                by - 1,
+                chip + s(2.0),
+                bar_h + 2,
+                3.0 * dpi,
+                theme.text_dim,
+            );
+            round_rect(frame, x + s(8.0), by, chip, bar_h, 2.0 * dpi, ink);
             chevron(frame, x + cw - s(14.0), top + ctl / 2, dpi, theme.text_dim);
             self.hits.push((x, top, cw, ctl, BarAction::Colors));
             x += cw + s(6.0);
@@ -680,10 +705,14 @@ impl EditBar {
                 // La police : un bouton-menu qui déroule la liste des polices
                 // installées. Sa largeur est fixe : sans cela, changer de
                 // police déplacerait tous les boutons suivants sous le pointeur.
+                // Le bouton dit la police du bloc : celle qu'on a choisie,
+                // sinon celle que le document lui donne.
                 let family = self
                     .family
                     .and_then(|i| acrux_features::sysfonts::families().get(i))
-                    .map_or("Police du texte", |f| f.name.as_str());
+                    .map(|f| f.name.as_str())
+                    .or(self.native.as_deref())
+                    .unwrap_or("Police du texte");
                 let fw_label = s(176.0);
                 if x + fw_label > limit {
                     break 'groups;

@@ -132,6 +132,8 @@ pub struct FontPicker {
     row_h: i32,
     /// Des noms restent à dessiner dans leur police : il faut repeindre.
     pending: bool,
+    /// Première image : la liste s'ouvre **sur** la police du bloc.
+    fresh: bool,
 }
 
 impl FontPicker {
@@ -151,6 +153,7 @@ impl FontPicker {
             view: (0, 0, 0, 0),
             row_h: 1,
             pending: false,
+            fresh: true,
         };
         picker.rebuild();
         picker
@@ -373,6 +376,18 @@ impl FontPicker {
         );
 
         self.view = (x + pad / 2, y + pad * 2 + field, width - pad, list_h);
+        if self.fresh {
+            // Comme dans un traitement de texte : la liste s'ouvre sur la
+            // police en cours, au milieu de la fenêtre, déjà mise en avant.
+            self.fresh = false;
+            if let Some(at) = self
+                .current
+                .and_then(|c| self.rows.iter().rposition(|r| *r == Row::Family(c)))
+            {
+                self.highlight = Some(at);
+                self.scroll = f64::from(at as i32 * self.row_h - (list_h - self.row_h) / 2);
+            }
+        }
         self.clamp_scroll();
         let (vx, vy, vw, vh) = self.view;
         let first = (self.scroll / f64::from(self.row_h)) as usize;

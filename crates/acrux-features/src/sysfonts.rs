@@ -93,6 +93,52 @@ pub fn find(name: &str) -> Option<&'static Family> {
         .find(|f| f.name.eq_ignore_ascii_case(wanted))
 }
 
+/// Clé de comparaison d'un nom de police : lettres et chiffres seuls, en
+/// minuscules, sans les marques de fonderie (`PS`, `MT`) qu'un PDF ajoute.
+fn key(name: &str) -> String {
+    let mut bare: String = name.chars().filter(char::is_ascii_alphanumeric).collect();
+    for mark in ["PSMT", "PS", "MT"] {
+        if bare.len() > mark.len() && bare.ends_with(mark) {
+            bare.truncate(bare.len() - mark.len());
+        }
+    }
+    bare.to_ascii_lowercase()
+}
+
+/// Ce qu'un nom de police de PDF (`ABCDEF+Georgia-Bold`,
+/// `TimesNewRomanPS-BoldItalicMT`) veut dire pour un lecteur : la famille,
+/// telle que le système l'appelle quand il la connaît, le gras et l'italique.
+///
+/// C'est ce que la barre « Modifier le PDF » montre pour le bloc ouvert :
+/// « Georgia », gras — et non le nom de ressource, ni rien du tout.
+#[must_use]
+pub fn describe(base_font: &str) -> (String, bool, bool) {
+    // Le préfixe de sous-ensemble : six capitales et un « + ».
+    let name = match base_font.split_once('+') {
+        Some((p, rest)) if p.len() == 6 && p.bytes().all(|b| b.is_ascii_uppercase()) => rest,
+        _ => base_font,
+    };
+    let (family, style) = name
+        .split_once(['-', ','])
+        .map_or((name, ""), |(f, s)| (f, s));
+    let (bold, italic) = names::style_of(style);
+    let wanted = key(family);
+    if let Some(known) = families().iter().find(|f| key(&f.name) == wanted) {
+        return (known.name.clone(), bold, italic);
+    }
+    // Inconnue du système : on sépare au moins les mots collés.
+    let mut spaced = String::new();
+    let mut previous = ' ';
+    for c in family.chars() {
+        if c.is_ascii_uppercase() && previous.is_ascii_lowercase() {
+            spaced.push(' ');
+        }
+        spaced.push(c);
+        previous = c;
+    }
+    (spaced, bold, italic)
+}
+
 /// Parcourt les dossiers de polices.
 fn scan() -> Vec<Family> {
     let mut found: Vec<Family> = Vec::new();
@@ -216,6 +262,20 @@ mod tests {
             family.face(true, true).map(|f| f.path.clone()),
             Some(PathBuf::from("essai.ttf"))
         );
+    }
+
+    /// Un nom de police de PDF se lit comme un lecteur le dirait.
+    #[test]
+    fn un_nom_de_police_de_pdf_se_lit() {
+        let (family, bold, italic) = describe("ABCDEF+Zzyzx-BoldItalic");
+        assert_eq!((family.as_str(), bold, italic), ("Zzyzx", true, true));
+        let (family, bold, italic) = describe("MaPoliceInconnue");
+        assert_eq!(
+            (family.as_str(), bold, italic),
+            ("Ma Police Inconnue", false, false)
+        );
+        assert_eq!(key("TimesNewRomanPSMT"), "timesnewroman");
+        assert_eq!(key("Times New Roman"), "timesnewroman");
     }
 
     /// La recherche ignore la casse et les blancs autour.
