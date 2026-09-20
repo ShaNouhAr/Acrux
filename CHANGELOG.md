@@ -9,6 +9,20 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 
 ## 0.21.0 — non publiée
 
+- **Les cases à cocher dessinées se reconnaissent**, comme dans Acrobat. Un
+  document qui n'est pas un formulaire — un papier numérisé, un export de
+  traitement de texte — a ses cases tracées dans la page. Dans « Remplir et
+  signer », avec la coche, la croix ou le point en main, la case **s'encadre
+  au survol** et la marque **se cale dedans**, centrée et à sa taille, même si
+  l'on clique de travers. La détection n'est qu'une suggestion : elle ne pose
+  rien d'elle-même, et cliquer hors d'une case pose librement comme avant.
+  Sont reconnus les petits tracés carrés cernés (5 à 40 points, contour ou
+  fond clair — un carré plein et sombre est une puce) et les caractères
+  ☐ □ ▢ ◻ ❏ ❐ ❑ ❒ (`acrux_features::fillsign::boxes`). Les cases des vrais
+  formulaires (AcroForm) se cochaient déjà d'un clic.
+- Une **marque reste en main** après la pose : on coche plusieurs cases à la
+  suite sans revenir au panneau. Une signature, elle, se pose toujours une
+  fois puis se laisse ajuster.
 - **Vider l'historique** : sur l'écran d'accueil, un lien au bout de
   « Documents récents » efface la liste, après confirmation. Les fichiers
   eux-mêmes ne sont pas touchés.

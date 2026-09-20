@@ -21,6 +21,10 @@
 //! S'y ajoutent les outils de remplissage d'Acrobat : du texte libre et cinq
 //! marques ([`Mark`]) — coche, croix, rond, trait, point.
 //!
+//! Sur un document sans champs, les cases à cocher **dessinées** sont
+//! reconnues ([`boxes`]) pour que la marque s'y cale — une suggestion, jamais
+//! une pose d'office.
+//!
 //! # Ce qui est écrit dans le fichier
 //!
 //! Chaque élément posé est une **annotation** avec son apparence (`/AP /N`),
@@ -64,6 +68,7 @@
 //! # }
 //! ```
 
+pub mod boxes;
 pub mod cutout;
 pub mod ink;
 pub mod marks;

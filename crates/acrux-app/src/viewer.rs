@@ -423,6 +423,9 @@ struct Loaded {
     media: Vec<acrux_features::media::Media>,
     /// Modèles 3D du document, avec leur rectangle.
     models: Vec<acrux_features::three_d::Model>,
+    /// Cases à cocher **dessinées** de chaque page déjà regardée (voir
+    /// [`acrux_features::fillsign::boxes`]), oubliées à chaque modification.
+    boxes: HashMap<usize, Vec<Rect>>,
     /// Étiquette de chaque page (`/PageLabels`). Vide quand le document s'en
     /// tient à la numérotation décimale : c'est ce qui distingue « iii sur
     /// 240 » de « 3 sur 240 » dans la barre d'outils et la barre d'état.
@@ -3044,6 +3047,7 @@ impl Viewer {
             attachments,
             media,
             models,
+            boxes: HashMap::new(),
             labels,
         });
         self.error = None;
@@ -3945,6 +3949,7 @@ impl Viewer {
         l.cache.clear();
         l.texts.clear();
         l.links.clear();
+        l.boxes.clear();
         l.fields = list_fields(&l.doc).unwrap_or_default();
         l.comments = collect_comments(&l.doc, &l.pages);
         l.attachments = collect_attachments(&l.doc);
@@ -5510,12 +5515,14 @@ impl Viewer {
         // l'accompagne : on vise une ligne ou une case, et c'est là que ça
         // tombe. Poser au coin supérieur gauche obligeait à viser à côté.
         let (w, h) = item.default_size();
-        let rect = Rect::new(
-            point.x - w / 2.0,
-            point.y - h / 2.0,
-            point.x + w / 2.0,
-            point.y + h / 2.0,
-        );
+        let rect = self.snap_box(item, page, point).unwrap_or_else(|| {
+            Rect::new(
+                point.x - w / 2.0,
+                point.y - h / 2.0,
+                point.x + w / 2.0,
+                point.y + h / 2.0,
+            )
+        });
         let source = match item {
             SignItem::Signature => {
                 let current = self.sign_panel.as_ref().map_or(0, |p| p.current);
@@ -5560,6 +5567,39 @@ impl Viewer {
         };
         self.apply_fillsign(page, rect, fill_item);
         true
+    }
+
+    /// La case à cocher **dessinée** sous un point de la page, s'il y en a
+    /// une. Les cases d'une page se cherchent une fois, puis se retiennent.
+    fn drawn_box_at(&mut self, page: usize, point: Point) -> Option<Rect> {
+        let l = self.loaded.as_mut()?;
+        if !l.boxes.contains_key(&page) {
+            let found = l
+                .pages
+                .get(page)
+                .and_then(|p| acrux_features::fillsign::boxes::find(&l.doc, p).ok())
+                .unwrap_or_default();
+            l.boxes.insert(page, found);
+        }
+        acrux_features::fillsign::boxes::at(l.boxes.get(&page)?, point.x, point.y)
+    }
+
+    /// Où poser une marque cliquée dans une case dessinée : **dans** la case,
+    /// centrée, avec un peu d'air autour — comme Acrobat. Rien hors d'une
+    /// case, ni pour ce qui ne se coche pas : la pose reste alors libre.
+    fn snap_box(&mut self, item: SignItem, page: usize, point: Point) -> Option<Rect> {
+        use acrux_features::fillsign::marks::Mark;
+        if !matches!(item, SignItem::Mark(Mark::Check | Mark::Cross | Mark::Dot)) {
+            return None;
+        }
+        let found = self.drawn_box_at(page, point)?;
+        let air = found.width().min(found.height()) * 0.16;
+        Some(Rect::new(
+            found.x0 + air,
+            found.y0 + air,
+            found.x1 - air,
+            found.y1 - air,
+        ))
     }
 
     /// Fenêtre de capture, avec l'encre retenue.
@@ -5639,7 +5679,7 @@ impl Viewer {
     ///
     /// Sans cet aperçu, on pose une signature « à peu près » puis on annule :
     /// la taille et le centrage ne se devinent pas.
-    #[allow(clippy::many_single_char_names)] // géométrie de la boîte
+    #[allow(clippy::many_single_char_names, clippy::too_many_lines)] // géométrie de la boîte, lue de haut en bas
     fn paint_sign_ghost(&mut self, frame: &mut Frame<'_>) {
         let Some(item) = self.sign_panel.as_ref().and_then(|p| p.item) else {
             return;
@@ -5681,8 +5721,44 @@ impl Viewer {
         };
         // Le point cliqué est le centre : l'aperçu montre exactement la boîte
         // où l'élément ira.
-        let (cx, cy) = (f64::from(mx), f64::from(my));
-        let (dw, dh) = (w * scale, h * scale);
+        let (mut cx, mut cy) = (f64::from(mx), f64::from(my));
+        let (mut dw, mut dh) = (w * scale, h * scale);
+        // Au-dessus d'une case dessinée, elle s'encadre et l'aperçu s'y cale :
+        // on voit où la marque ira avant de cliquer.
+        if let Some((page, point)) = self.page_at(mx, my) {
+            let snapped = self.snap_box(item, page, point);
+            let found = snapped.and_then(|_| self.drawn_box_at(page, point));
+            let layout = self.layout();
+            if let (Some(inner), Some(outer), Some(m)) =
+                (snapped, found, self.page_to_view(&layout, page))
+            {
+                // L'aperçu se peint dans la vue : mêmes coordonnées.
+                let corner = |x: f64, y: f64| {
+                    let p = m.apply(Point::new(x, y));
+                    (p.x, p.y)
+                };
+                let (ax, ay) = corner(outer.x0, outer.y1);
+                let (bx, by) = corner(outer.x1, outer.y0);
+                let ring = (2.0 * self.dpi_scale).round();
+                #[allow(clippy::cast_possible_truncation)]
+                crate::ui::paint::round_rect_outline(
+                    frame,
+                    (ax.min(bx) - ring) as i32,
+                    (ay.min(by) - ring) as i32,
+                    ((ax - bx).abs() + 2.0 * ring) as i32,
+                    ((ay - by).abs() + 2.0 * ring) as i32,
+                    3.0 * self.dpi_scale as f32,
+                    ring as f32,
+                    self.theme.accent,
+                );
+                let (ix, iy) = corner(inner.x0, inner.y1);
+                let (jx, jy) = corner(inner.x1, inner.y0);
+                cx = f64::midpoint(ix, jx);
+                cy = f64::midpoint(iy, jy);
+                dw = (ix - jx).abs();
+                dh = (iy - jy).abs();
+            }
+        }
         let box_rect = (cx - dw / 2.0, cy - dh / 2.0, dw, dh);
         let [r, g, b] = self.sign_rgb();
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -6045,7 +6121,18 @@ impl Viewer {
             options: Box::new(options),
         });
         self.set_notice(format!("posé : {label} en page {}", page + 1));
-        self.select_last_placed(page);
+        // Une marque reste en main : on coche rarement une seule case, et
+        // Acrobat fait de même. Le reste — une signature, un paraphe — se
+        // pose une fois, puis se laisse ajuster.
+        let sticky = self
+            .sign_panel
+            .as_ref()
+            .is_some_and(|p| matches!(p.item, Some(SignItem::Mark(_))));
+        if sticky {
+            self.placed = None;
+        } else {
+            self.select_last_placed(page);
+        }
     }
 
     /// Dessine le panneau de l'outil, à gauche.

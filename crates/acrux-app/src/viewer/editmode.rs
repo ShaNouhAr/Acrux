@@ -614,7 +614,7 @@ impl Viewer {
     }
 
     /// Matrice espace de page → coordonnées de la vue, pour une page.
-    fn page_to_view(&self, layout: &[PageBox], page: usize) -> Option<Matrix> {
+    pub(super) fn page_to_view(&self, layout: &[PageBox], page: usize) -> Option<Matrix> {
         let l = self.loaded.as_ref()?;
         let (ox, top) = self.page_screen(layout, page)?;
         let PageBox { w, h, .. } = *layout.get(page)?;
