@@ -7,6 +7,19 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
+## 0.13.0 — 20 septembre 2026
+
+### Paramètres
+
+- **Les mises à jour s'y règlent** : version installée, résultat de la
+  dernière recherche, « Rechercher maintenant », « Installer » quand une
+  version attend, et la recherche au démarrage qui s'active ou se coupe. Rien
+  n'est téléchargé sans accord, et rien n'est contacté quand la recherche est
+  coupée.
+- Les paramètres sont maintenant un **menu** : Langue, Mises à jour.
+- **L'icône change** : deux curseurs de réglage au lieu d'une roue dentée,
+  qu'on confondait avec le soleil du thème juste à côté.
+
 ## 0.12.0 — 20 septembre 2026
 
 ### Déplacer et redimensionner, comme dans Acrobat

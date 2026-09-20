@@ -444,20 +444,12 @@ pub fn geometry(icon: Icon) -> (Path, Path) {
             polyline(&mut lines, &[(9.5, 5.0), (9.5, 19.0)]);
         }
         Icon::Settings => {
-            // Une roue dentée : un anneau et huit dents, dessinés au compas.
-            circle(&mut fills, 12.0, 12.0, 3.2);
-            for i in 0..8 {
-                let a = f64::from(i) * std::f64::consts::FRAC_PI_4;
-                let (s, c) = a.sin_cos();
-                polyline(
-                    &mut lines,
-                    &[
-                        (12.0 + 6.0 * c, 12.0 + 6.0 * s),
-                        (12.0 + 9.2 * c, 12.0 + 9.2 * s),
-                    ],
-                );
-            }
-            circle(&mut lines, 12.0, 12.0, 6.0);
+            // Deux curseurs de réglage : rien à voir avec le soleil du
+            // thème, qui rayonne, alors que celui-ci glisse.
+            polyline(&mut lines, &[(4.0, 8.5), (20.0, 8.5)]);
+            polyline(&mut lines, &[(4.0, 15.5), (20.0, 15.5)]);
+            circle(&mut fills, 9.0, 8.5, 2.6);
+            circle(&mut fills, 15.0, 15.5, 2.6);
         }
         Icon::Theme => {
             circle(&mut fills, 12.0, 12.0, 4.0);

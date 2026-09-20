@@ -27,6 +27,10 @@ pub(super) enum Then {
     InstallUpdate(String, String),
     /// Choisir la langue de l'interface : le rang du bouton dit laquelle.
     Language,
+    /// Menu des paramètres : le rang du bouton dit quelle page ouvrir.
+    Settings,
+    /// Réglages des mises à jour.
+    Updates,
 }
 
 /// Forme de la question, qui dit ce que veut chaque bouton.
@@ -223,16 +227,25 @@ impl Viewer {
                 .map_or("?", |b| b.label.as_str())
         ));
         if asking.kind == Kind::Choice {
-            if matches!(asking.then, Then::Language) {
-                let choice = match index {
-                    0 => Some(crate::ui::lang::Lang::Auto),
-                    1 => Some(crate::ui::lang::Lang::French),
-                    2 => Some(crate::ui::lang::Lang::English),
-                    _ => None,
-                };
-                if let Some(choice) = choice {
-                    self.set_language(choice, window);
+            match asking.then {
+                Then::Language => {
+                    let choice = match index {
+                        0 => Some(crate::ui::lang::Lang::Auto),
+                        1 => Some(crate::ui::lang::Lang::French),
+                        2 => Some(crate::ui::lang::Lang::English),
+                        _ => None,
+                    };
+                    if let Some(choice) = choice {
+                        self.set_language(choice, window);
+                    }
                 }
+                Then::Settings => match index {
+                    0 => self.open_language(window),
+                    1 => self.open_updates(window),
+                    _ => {}
+                },
+                Then::Updates => self.updates_answer(index, window),
+                _ => {}
             }
             return;
         }
@@ -252,7 +265,7 @@ impl Viewer {
         }
         match asking.then.clone() {
             // Rien à faire : un message, ou un choix déjà appliqué.
-            Then::Nothing | Then::Language => {}
+            Then::Nothing | Then::Language | Then::Settings | Then::Updates => {}
             Then::CloseTab => {
                 let active = self.active_tab;
                 self.close_tab_now(active);

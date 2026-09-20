@@ -1482,18 +1482,46 @@ impl Viewer {
         Some(if at >= self.active_tab { at + 1 } else { at })
     }
 
-    /// Ouvre les paramètres : pour l'instant, la langue de l'interface.
+    /// Ouvre les paramètres : un menu, puisqu'il y a plus d'un réglage.
     fn open_settings(&mut self, window: &mut dyn WindowHandle) {
+        let langue = Lang::from_key(&self.prefs.language);
+        let auto = if self.prefs.check_updates {
+            lang::tr("activée")
+        } else {
+            lang::tr("désactivée")
+        };
+        let message = lang::trf(
+            "Acrux {} — langue : {} · recherche de mises à jour : {}.",
+            &[env!("CARGO_PKG_VERSION"), lang::tr(langue.label()), auto],
+        );
+        self.push_choice(
+            lang::tr("Paramètres"),
+            &message,
+            &[
+                lang::tr("Langue"),
+                lang::tr("Mises à jour"),
+                lang::tr("Fermer"),
+            ],
+            Then::Settings,
+        );
+        window.request_redraw();
+    }
+
+    /// Choix de la langue.
+    fn open_language(&mut self, window: &mut dyn WindowHandle) {
         let current = Lang::from_key(&self.prefs.language);
         let system = system_lang();
         let message = lang::trf(
             "Acrux suit la langue du système ({}). Vous pouvez en imposer une autre ; le choix est retenu.",
-            &[system.label()],
+            &[lang::tr(system.label())],
         );
-        let choice = lang::trf("Choix actuel : {}.", &[current.label()]);
+        let choice = lang::trf("Choix actuel : {}.", &[lang::tr(current.label())]);
         self.push_choice(
             lang::tr("Langue de l'interface"),
-            &format!("{message}\n{choice}"),
+            &format!(
+                "{message}
+{choice}"
+            ),
             &[
                 lang::tr("Système"),
                 lang::tr("Français"),
@@ -1502,6 +1530,65 @@ impl Viewer {
             ],
             Then::Language,
         );
+        window.request_redraw();
+    }
+
+    /// Réglages des mises à jour : état, vérification, installation.
+    fn open_updates(&mut self, window: &mut dyn WindowHandle) {
+        let mut message = lang::trf("Version installée : {}.", &[env!("CARGO_PKG_VERSION")]);
+        match &self.update_found {
+            Some(release) => {
+                message.push(' ');
+                message.push_str(&lang::trf(
+                    "Acrux {} est disponible.",
+                    &[release.version.as_str()],
+                ));
+            }
+            None if self.prefs.last_update_check > 0 => {
+                message.push(' ');
+                message.push_str(lang::tr("Aucune version plus récente n'a été trouvée."));
+            }
+            None => {}
+        }
+        message.push('\n');
+        message.push_str(if self.prefs.check_updates {
+            lang::tr("Acrux cherche une version plus récente au démarrage, au plus une fois par jour. Rien n'est installé sans votre accord.")
+        } else {
+            lang::tr("La recherche automatique est désactivée : Acrux ne contacte rien au démarrage.")
+        });
+        let mut labels: Vec<&str> = vec![lang::tr("Rechercher maintenant")];
+        if self.update_found.is_some() {
+            labels.push(lang::tr("Installer"));
+        }
+        labels.push(if self.prefs.check_updates {
+            lang::tr("Ne plus chercher")
+        } else {
+            lang::tr("Chercher au démarrage")
+        });
+        labels.push(lang::tr("Fermer"));
+        self.push_choice(lang::tr("Mises à jour"), &message, &labels, Then::Updates);
+        window.request_redraw();
+    }
+
+    /// Réponse au menu des mises à jour.
+    fn updates_answer(&mut self, index: usize, window: &mut dyn WindowHandle) {
+        // Les boutons dépendent de l'état : on les renomme ici plutôt que de
+        // retenir leur rang.
+        let has_update = self.update_found.is_some();
+        let toggle = usize::from(has_update) + 1;
+        if index == 0 {
+            self.check_updates(true, window);
+        } else if has_update && index == 1 {
+            self.install_update(window);
+        } else if index == toggle {
+            self.prefs.check_updates = !self.prefs.check_updates;
+            self.prefs.save();
+            self.set_notice(if self.prefs.check_updates {
+                lang::tr("mises à jour : recherche au démarrage").into()
+            } else {
+                lang::tr("mises à jour : recherche désactivée").into()
+            });
+        }
         window.request_redraw();
     }
 
