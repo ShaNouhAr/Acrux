@@ -9,6 +9,12 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 
 ## 0.22.0 — non publiée
 
+- Les cases à cocher **tracées trait par trait** sont reconnues aussi : quatre
+  filets qui ferment un carré font une case, même noyés dans le grand tracé
+  qui dessine tout le cadre d'une page (la façon de Word et de bien des
+  générateurs de formulaires). Les cellules d'un peigne (IBAN, date) en sont.
+- Sur l'accueil, **survoler un document récent** affiche son chemin complet —
+  que la carte tronque —, sa taille et sa date.
 - « Remplir et signer » s'ouvre **sans rien en main** : plus de fenêtre de
   signature imposée à l'ouverture, ni de signature collée au pointeur. On y
   vient autant pour cocher une case que pour signer ; on choisit dans le

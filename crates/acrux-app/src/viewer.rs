@@ -2601,7 +2601,7 @@ impl Viewer {
     /// réveil qui la fera apparaître (rien ne se repeint tant que la souris
     /// ne bouge pas : sans ce réveil, l'info-bulle n'arriverait jamais).
     fn update_tip(&mut self, window: &mut dyn WindowHandle) {
-        let tip = self.toolbar.hover_tip();
+        let tip = self.toolbar.hover_tip().or_else(|| self.recent_tip());
         let same = match (&self.tip, &tip) {
             (Some((a, _, _)), Some((b, _))) => a == b,
             (None, None) => true,
@@ -2623,6 +2623,33 @@ impl Viewer {
                 });
         }
         window.request_redraw();
+    }
+
+    /// Info-bulle d'un document récent de l'accueil : son **chemin complet**,
+    /// que la carte tronque, puis sa taille et sa date.
+    fn recent_tip(&self) -> Option<(String, (i32, i32, i32, i32))> {
+        if !self.showing_home() {
+            return None;
+        }
+        let (mx, my) = self.last_mouse?;
+        let index = self
+            .recent_hits
+            .iter()
+            .position(|&(x, y, w, h)| mx >= x && mx < x + w && my >= y && my < y + h)?;
+        let path = self.prefs.recent.get(index)?;
+        let (x, y, w, h) = self.recent_hits[index];
+        // Taille et date, sans le dossier : le chemin le dit déjà.
+        let details = describe_file(path);
+        let facts: Vec<&str> = details.split(" · ").collect();
+        let facts = facts[..facts.len().saturating_sub(1)].join(" · ");
+        let text = if facts.is_empty() {
+            path.display().to_string()
+        } else {
+            format!("{}   —   {facts}", path.display())
+        };
+        // Les cartes sont en coordonnées de la vue ; l'info-bulle, de la fenêtre.
+        let (left, top) = (self.view_left() as i32, self.view_top() as i32);
+        Some((text, (x + left, y + top, w, h)))
     }
 
     /// Vrai si une info-bulle a dépassé son délai d'attente : c'est le seul
@@ -7236,6 +7263,10 @@ impl App for Viewer {
                 }
                 let (x, y) = (x - self.view_left() as i32, y - self.view_top() as i32);
                 self.last_mouse = (x >= 0 && y >= 0).then_some((x, y));
+                // Sur l'accueil, survoler un document récent en dit le chemin.
+                if self.showing_home() {
+                    self.update_tip(window);
+                }
                 if self.edit_on() && self.prompt.is_none() && self.drag_last.is_none() {
                     self.edit_mouse_move(x, y, dragging, window);
                     if hover_changed {

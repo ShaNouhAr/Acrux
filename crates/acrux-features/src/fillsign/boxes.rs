@@ -17,6 +17,9 @@
 //!   [`MIN_SIDE`] et [`MAX_SIDE`] points), qui est **cerné** : un trait de
 //!   contour, ou un remplissage clair. Un carré plein et sombre est une puce,
 //!   pas une case ;
+//! - **quatre filets** qui ferment un carré : bien des producteurs (Word,
+//!   les générateurs de formulaires) tracent une case trait par trait, ou la
+//!   noient dans un grand tracé qui dessine tout le cadre de la page ;
 //! - un **caractère** de case vide : ☐ □ ▢ ◻ ❏ ❐ ❑ ❒.
 //!
 //! Un tracé qui en contient un autre de même nature (le cadre d'un tableau
@@ -96,8 +99,9 @@ pub fn find(doc: &Document, page: &Page) -> Result<Vec<Rect>> {
         .filter(|o| content.get(o.range.0..o.range.1).is_some_and(outlined))
         .map(|o| o.bbox)
         .collect();
-    // Les caractères de case vide.
+    // Les caractères de case vide, et les carrés fermés par quatre filets.
     if let Ok(text) = crate::text::extract_page_text(doc, page) {
+        found.extend(ruled_squares(&text.rules));
         for glyph in text
             .lines
             .iter()
@@ -124,6 +128,54 @@ pub fn find(doc: &Document, page: &Page) -> Result<Vec<Rect>> {
     // Ordre de lecture : de haut en bas, puis de gauche à droite.
     kept.sort_by(|a, b| b.y1.total_cmp(&a.y1).then(a.x0.total_cmp(&b.x0)));
     Ok(kept)
+}
+
+/// Écart toléré entre deux filets censés se rejoindre, en points.
+const JOIN: f64 = 1.6;
+
+/// Les carrés fermés par quatre filets : deux verticaux de même hauteur, et
+/// deux horizontaux qui couvrent l'intervalle entre eux, en haut et en bas.
+///
+/// Les filets horizontaux peuvent dépasser — la ligne du haut d'un peigne de
+/// cases court d'un bout à l'autre —, d'où « couvrent » et non « égalent ».
+fn ruled_squares(rules: &[Rect]) -> Vec<Rect> {
+    let mut vertical: Vec<&Rect> = rules.iter().filter(|r| r.height() > r.width()).collect();
+    let horizontal: Vec<&Rect> = rules.iter().filter(|r| r.width() >= r.height()).collect();
+    vertical.sort_by(|a, b| a.x0.total_cmp(&b.x0));
+    let mut squares = Vec::new();
+    for (i, left) in vertical.iter().enumerate() {
+        let lx = f64::midpoint(left.x0, left.x1);
+        for right in &vertical[i + 1..] {
+            let rx = f64::midpoint(right.x0, right.x1);
+            let width = rx - lx;
+            if width > MAX_SIDE {
+                break;
+            }
+            if width < MIN_SIDE {
+                continue;
+            }
+            // La hauteur que les deux montants ont en commun.
+            let (low, high) = (left.y0.max(right.y0), left.y1.min(right.y1));
+            if high - low < MIN_SIDE {
+                continue;
+            }
+            // Les traverses qui couvrent l'intervalle, de bas en haut.
+            let mut bars: Vec<f64> = horizontal
+                .iter()
+                .filter(|h| h.x0 <= lx + JOIN && h.x1 >= rx - JOIN)
+                .map(|h| f64::midpoint(h.y0, h.y1))
+                .filter(|y| *y >= low - JOIN && *y <= high + JOIN)
+                .collect();
+            bars.sort_by(f64::total_cmp);
+            for pair in bars.windows(2) {
+                let candidate = Rect::new(lx, pair[0], rx, pair[1]);
+                if box_shaped(&candidate) {
+                    squares.push(candidate);
+                }
+            }
+        }
+    }
+    squares
 }
 
 /// La case sous un point, s'il y en a une.
@@ -178,6 +230,34 @@ mod tests {
                 assert!(boxes.is_empty(), "{name} : {boxes:?}");
             }
         }
+    }
+
+    /// Une case tracée trait par trait — quatre filets — est une case ; trois
+    /// filets n'en font pas une, et deux longues lignes parallèles non plus.
+    #[test]
+    fn quatre_filets_ferment_une_case() {
+        let h = |x0: f64, x1: f64, y: f64| Rect::new(x0, y - 0.3, x1, y + 0.3);
+        let v = |x: f64, y0: f64, y1: f64| Rect::new(x - 0.3, y0, x + 0.3, y1);
+        let closed = [
+            h(100.0, 112.0, 500.0),
+            h(100.0, 112.0, 512.0),
+            v(100.0, 500.0, 512.0),
+            v(112.0, 500.0, 512.0),
+        ];
+        let found = ruled_squares(&closed);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!((found[0].width() - 12.0).abs() < 0.1 && (found[0].height() - 12.0).abs() < 0.1);
+        assert!(
+            ruled_squares(&closed[..3]).is_empty(),
+            "trois côtés ne ferment rien"
+        );
+        // Un peigne : une longue ligne en haut et en bas, des montants réguliers.
+        let mut comb = vec![h(100.0, 160.0, 500.0), h(100.0, 160.0, 512.0)];
+        comb.extend((0..=5).map(|i| v(100.0 + 12.0 * f64::from(i), 500.0, 512.0)));
+        let cells = ruled_squares(&comb);
+        assert!(cells.len() >= 5, "cinq cellules au moins : {}", cells.len());
+        // Deux lignes à remplir, l'une sous l'autre : pas de montants, pas de case.
+        assert!(ruled_squares(&[h(50.0, 300.0, 400.0), h(50.0, 300.0, 415.0)]).is_empty());
     }
 
     #[test]
