@@ -795,11 +795,11 @@ fn nearest_style(
 
 /// Trait de champ sous le clic : origine et ligne de base du texte à y poser.
 fn field_line(doc: &Document, page: &Page, x: f64, y: f64, size: f64) -> Option<(f64, f64)> {
-    let objects = crate::edit_objects::list(doc, page).ok()?;
-    objects
-        .iter()
-        .filter(|o| o.kind == crate::edit_objects::Kind::Path)
-        .map(|o| o.bbox)
+    // Traits dessinés et suites de tirets bas : les deux façons de tracer
+    // une ligne à remplir.
+    crate::fillsign::boxes::field_lines(doc, page)
+        .ok()?
+        .into_iter()
         .filter(|b| {
             b.height() <= 2.5
                 && b.width() >= size * 2.0
@@ -809,7 +809,7 @@ fn field_line(doc: &Document, page: &Page, x: f64, y: f64, size: f64) -> Option<
                 && y <= b.y1 + size * 1.3
         })
         .min_by(|a, b| (y - a.y1).abs().total_cmp(&(y - b.y1).abs()))
-        .map(|b| (x.max(b.x0 + 1.5), b.y1 + size * 0.22))
+        .map(|b| (x.max(b.x0 + 1.5), b.y1 + size * 0.3))
 }
 
 /// Texte sans blancs, pour comparer ce qui est dessiné à ce qui a été écrit.

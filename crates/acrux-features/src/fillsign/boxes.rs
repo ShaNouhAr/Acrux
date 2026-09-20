@@ -137,6 +137,8 @@ pub struct Found {
     pub checks: Vec<Rect>,
     /// Les peignes : on y écrit, un caractère par case.
     pub combs: Vec<Comb>,
+    /// Les lignes à remplir — « Nom : ________ » : on écrit dessus.
+    pub lines: Vec<Rect>,
 }
 
 impl Found {
@@ -144,6 +146,17 @@ impl Found {
     #[must_use]
     pub fn check_at(&self, x: f64, y: f64) -> Option<Rect> {
         at(&self.checks, x, y)
+    }
+
+    /// La ligne à remplir sous un point — ou juste sous lui : on vise
+    /// l'espace **au-dessus** du trait, là où le texte ira.
+    #[must_use]
+    pub fn line_at(&self, x: f64, y: f64) -> Option<Rect> {
+        self.lines
+            .iter()
+            .filter(|l| x >= l.x0 && x <= l.x1 && y >= l.y0 - 4.0 && y <= l.y1 + LINE_ROOM)
+            .min_by(|a, b| (y - a.y1).abs().total_cmp(&(y - b.y1).abs()))
+            .copied()
     }
 
     /// Le peigne sous un point.
@@ -211,12 +224,79 @@ pub fn sort_out(boxes: Vec<Rect>) -> Found {
     found
 }
 
-/// Les cases à cocher et les peignes dessinés d'une page.
+/// Les cases à cocher, les peignes et les lignes à remplir d'une page.
 ///
 /// # Errors
 /// Flux de contenu illisible.
 pub fn scan(doc: &Document, page: &Page) -> Result<Found> {
-    Ok(sort_out(find(doc, page)?))
+    let mut found = sort_out(find(doc, page)?);
+    found.lines = field_lines(doc, page)?;
+    Ok(found)
+}
+
+/// Hauteur réservée au texte au-dessus d'une ligne à remplir, en points.
+pub const LINE_ROOM: f64 = 14.0;
+
+/// Plus courte ligne à remplir, en points : en dessous, c'est un tiret.
+const LINE_MIN: f64 = 24.0;
+
+/// Les **lignes à remplir** d'une page : « Nom : ____________ ».
+///
+/// Deux façons de les tracer, et les deux se rencontrent : un **trait** fin
+/// dessiné dans la page, ou une **suite de tirets bas** tapée au clavier.
+/// Un trait qui fait le bord d'un cadre ou d'un tableau — un filet vertical
+/// part de l'un de ses bouts — n'est pas une ligne à remplir.
+///
+/// # Errors
+/// Flux de contenu illisible.
+pub fn field_lines(doc: &Document, page: &Page) -> Result<Vec<Rect>> {
+    let mut lines: Vec<Rect> = edit_objects::list(doc, page)?
+        .into_iter()
+        .filter(|o| o.kind == Kind::Path)
+        .map(|o| o.bbox)
+        .filter(|b| b.height() <= 2.5 && b.width() >= LINE_MIN)
+        .collect();
+    let Ok(text) = crate::text::extract_page_text(doc, page) else {
+        return Ok(lines);
+    };
+    // Un bord de cadre : un filet vertical touche l'un de ses bouts.
+    let framed = |line: &Rect| {
+        text.rules.iter().any(|r| {
+            r.height() > r.width()
+                && r.height() >= MIN_SIDE
+                && r.y0 <= line.y1 + JOIN
+                && r.y1 >= line.y0 - JOIN
+                && ((f64::midpoint(r.x0, r.x1) - line.x0).abs() <= JOIN
+                    || (f64::midpoint(r.x0, r.x1) - line.x1).abs() <= JOIN)
+        })
+    };
+    lines.retain(|l| !framed(l));
+    // Les suites de tirets bas.
+    for word in text.lines.iter().flat_map(|l| &l.words) {
+        let mut run: Option<Rect> = None;
+        let mut close = |run: &mut Option<Rect>| {
+            if let Some(r) = run.take() {
+                if r.width() >= LINE_MIN {
+                    lines.push(r);
+                }
+            }
+        };
+        for glyph in &word.glyphs {
+            if glyph.text.chars().all(|c| c == '_') && !glyph.text.is_empty() {
+                // Le tiret bas se trace un peu sous la ligne de base.
+                let y = glyph.bbox.y0 + glyph.size * 0.08;
+                let piece = Rect::new(glyph.bbox.x0, y, glyph.bbox.x1, y + 0.6);
+                run = Some(match run {
+                    Some(r) => Rect::new(r.x0, r.y0.min(piece.y0), piece.x1.max(r.x1), r.y1),
+                    None => piece,
+                });
+            } else {
+                close(&mut run);
+            }
+        }
+        close(&mut run);
+    }
+    Ok(lines)
 }
 
 /// Toutes les cases dessinées d'une page, en espace de page — cases à cocher

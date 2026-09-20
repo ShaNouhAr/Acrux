@@ -5560,7 +5560,17 @@ impl Viewer {
             // sauf dans une case à cocher dessinée, qu'il coche. C'est le
             // geste d'Acrobat : on ouvre l'outil, on clique les cases.
             let Some(rect) = self.snap_box(item, page, point) else {
-                return false;
+                // Pas de case : une ligne à remplir, peut-être. On y écrit
+                // comme avec l'outil texte, sans avoir eu à le choisir.
+                let Some(line) = self.field_line_at(item, page, point) else {
+                    return false;
+                };
+                let color = self.sign_rgb();
+                // Le texte part du début de la ligne, où qu'on ait cliqué :
+                // c'est là qu'on écrit un nom, une adresse.
+                let at = Point::new(line.x0 + 2.0, line.y1 + 3.0);
+                self.type_on_page(page, at, color, window);
+                return true;
             };
             let check = acrux_features::fillsign::marks::Mark::Check;
             self.apply_fillsign(page, rect, acrux_features::fillsign::Item::Mark(check));
@@ -5656,6 +5666,15 @@ impl Viewer {
     /// La case à cocher **dessinée** sous un point de la page.
     fn drawn_box_at(&mut self, page: usize, point: Point) -> Option<Rect> {
         self.drawn_boxes(page)?.check_at(point.x, point.y)
+    }
+
+    /// La ligne à remplir — « Nom : ______ » — sous un point de la page, pour
+    /// qui a la main nue ou l'outil texte.
+    fn field_line_at(&mut self, item: SignItem, page: usize, point: Point) -> Option<Rect> {
+        if !matches!(item, SignItem::Move | SignItem::Text) {
+            return None;
+        }
+        self.drawn_boxes(page)?.line_at(point.x, point.y)
     }
 
     /// Le peigne dessiné sous un point de la page, pour qui a la main nue ou
@@ -5804,6 +5823,29 @@ impl Viewer {
                 );
             }
             return;
+        }
+        // Au-dessus d'une ligne à remplir, la place du texte s'encadre.
+        if self.snap_box(item, page, point).is_none() {
+            if let Some(line) = self.field_line_at(item, page, point) {
+                let room = acrux_features::fillsign::boxes::LINE_ROOM;
+                let layout = self.layout();
+                if let Some(m) = self.page_to_view(&layout, page) {
+                    let a = m.apply(Point::new(line.x0, line.y1 + room));
+                    let b = m.apply(Point::new(line.x1, line.y0));
+                    #[allow(clippy::cast_possible_truncation)]
+                    crate::ui::paint::round_rect_outline(
+                        frame,
+                        a.x.min(b.x) as i32,
+                        a.y.min(b.y) as i32,
+                        (a.x - b.x).abs() as i32,
+                        (a.y - b.y).abs() as i32,
+                        3.0 * self.dpi_scale as f32,
+                        (1.5 * self.dpi_scale).round() as f32,
+                        self.theme.accent,
+                    );
+                }
+                return;
+            }
         }
         // L'outil texte n'a pas d'autre aperçu que son curseur.
         if item == SignItem::Text {
