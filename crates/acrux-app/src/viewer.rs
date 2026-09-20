@@ -1882,6 +1882,8 @@ impl Viewer {
 
     /// Quitte l'accueil pour revenir au document ouvert.
     pub(super) fn leave_home(&mut self) {
+        // L'info-bulle d'un document récent n'a plus lieu d'être.
+        self.tip = None;
         if self.home {
             self.home = false;
             self.wake_anim();
@@ -5524,8 +5526,20 @@ impl Viewer {
             return false;
         };
         if item == SignItem::Move {
-            // Le mode déplacement ne pose rien : le clic sert à choisir.
-            return false;
+            // Le mode déplacement ne pose rien : le clic sert à choisir —
+            // sauf dans une case à cocher dessinée, qu'il coche. C'est le
+            // geste d'Acrobat : on ouvre l'outil, on clique les cases.
+            let Some(rect) = self.snap_box(item, page, point) else {
+                return false;
+            };
+            let check = acrux_features::fillsign::marks::Mark::Check;
+            self.apply_fillsign(page, rect, acrux_features::fillsign::Item::Mark(check));
+            // La coche posée n'est pas prise en main : on enchaîne les cases.
+            self.placed = None;
+            if let Some(panel) = &mut self.sign_panel {
+                panel.item = Some(SignItem::Move);
+            }
+            return true;
         }
         if item == SignItem::Draw {
             // Le stylo ne pose rien : il commence un trait, que le
@@ -5614,7 +5628,12 @@ impl Viewer {
     /// case, ni pour ce qui ne se coche pas : la pose reste alors libre.
     fn snap_box(&mut self, item: SignItem, page: usize, point: Point) -> Option<Rect> {
         use acrux_features::fillsign::marks::Mark;
-        if !matches!(item, SignItem::Mark(Mark::Check | Mark::Cross | Mark::Dot)) {
+        // La coche, la croix, le point — et la main nue : sans rien choisir,
+        // une case dessinée se coche.
+        if !matches!(
+            item,
+            SignItem::Move | SignItem::Mark(Mark::Check | Mark::Cross | Mark::Dot)
+        ) {
             return None;
         }
         let found = self.drawn_box_at(page, point)?;
@@ -5709,23 +5728,27 @@ impl Viewer {
         let Some(item) = self.sign_panel.as_ref().and_then(|p| p.item) else {
             return;
         };
-        if self.capture.is_some()
-            || item == SignItem::Draw
-            || item == SignItem::Text
-            || item == SignItem::Move
-        {
+        if self.capture.is_some() || item == SignItem::Draw || item == SignItem::Text {
             return;
         }
         let Some((mx, my)) = self.last_mouse else {
             return;
         };
-        if self.page_at(mx, my).is_none() {
+        let Some((page, point)) = self.page_at(mx, my) else {
+            return;
+        };
+        // La main nue ne montre rien — sauf au-dessus d'une case dessinée,
+        // où elle propose la coche qu'un clic poserait.
+        if item == SignItem::Move && self.snap_box(item, page, point).is_none() {
             return;
         }
         let scale = self.scale();
         let (w, h) = item.default_size();
         let outline = match item {
             SignItem::Mark(mark) => Some(acrux_features::fillsign::marks::outline_of(mark)),
+            SignItem::Move => Some(acrux_features::fillsign::marks::outline_of(
+                acrux_features::fillsign::marks::Mark::Check,
+            )),
             SignItem::Signature | SignItem::Initials => {
                 let saved = if item == SignItem::Initials {
                     self.initials.clone()
@@ -5742,7 +5765,7 @@ impl Viewer {
                     _ => None,
                 }
             }
-            SignItem::Draw | SignItem::Text | SignItem::Move => None,
+            SignItem::Draw | SignItem::Text => None,
         };
         // Le point cliqué est le centre : l'aperçu montre exactement la boîte
         // où l'élément ira.
@@ -6938,6 +6961,8 @@ impl App for Viewer {
                 modifiers,
                 clicks,
             } => {
+                // Un clic fait taire l'info-bulle : on agit, on ne lit plus.
+                self.tip = None;
                 if self.capture.is_some() {
                     let action = self
                         .capture
@@ -7264,7 +7289,10 @@ impl App for Viewer {
                 let (x, y) = (x - self.view_left() as i32, y - self.view_top() as i32);
                 self.last_mouse = (x >= 0 && y >= 0).then_some((x, y));
                 // Sur l'accueil, survoler un document récent en dit le chemin.
-                if self.showing_home() {
+                // Et une info-bulle affichée se réévalue à chaque mouvement :
+                // sans cela, celle d'un document récent survivait à
+                // l'ouverture du document et restait plantée sur la page.
+                if self.showing_home() || self.tip.is_some() {
                     self.update_tip(window);
                 }
                 if self.edit_on() && self.prompt.is_none() && self.drag_last.is_none() {

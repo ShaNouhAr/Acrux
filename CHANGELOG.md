@@ -9,6 +9,14 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 
 ## 0.22.0 — non publiée
 
+- **Cocher sans rien choisir**, comme dans Acrobat : « Remplir et signer »
+  ouvert, la main nue (« Déplacer »), une case dessinée s'encadre au survol
+  avec la coche qu'un clic y poserait — et le clic la pose. Plus besoin d'aller
+  chercher la ✓ dans le panneau ; on enchaîne les cases. Un clic sur une coche
+  déjà posée la reprend en main, comme avant.
+- Une **info-bulle ne reste plus plantée** : elle se réévalue à chaque
+  mouvement, et un clic ou la sortie de l'accueil la fait taire. Celle d'un
+  document récent survivait à l'ouverture du document.
 - Les cases à cocher **tracées trait par trait** sont reconnues aussi : quatre
   filets qui ferment un carré font une case, même noyés dans le grand tracé
   qui dessine tout le cadre d'une page (la façon de Word et de bien des
