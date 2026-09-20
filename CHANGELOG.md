@@ -34,6 +34,20 @@ fini — vu de l'extérieur, sur des captures, et corrigé pièce par pièce.
 - Les cartes de l'accueil flottent sur une ombre large et légère au lieu
   d'être cernées ; l'info-bulle porte une ombre.
 
+### La barre « Modifier le PDF », redessinée
+
+- Elle alignait des rectangles plats, tous du même gris. Ses réglages sont
+  maintenant **groupés dans des creux arrondis** : les deux outils en
+  contrôle segmenté, le corps et l'interligne en pas-à-pas « − valeur + »,
+  gras, italique et alignement en segments, la police en bouton-menu avec
+  son chevron, les couleurs en **pastilles rondes** cerclées d'accent.
+- Le survol se voit sur chaque commande, et « Terminer » est le bouton
+  principal, le même que dans les fenêtres.
+- Sa place est **réservée** : sur une fenêtre étroite, ce sont les derniers
+  réglages qui s'effacent, jamais lui. Les libellés redondants (« Taille »,
+  « Couleur ») ont laissé la place aux valeurs elles-mêmes, et l'interligne
+  se dit par une icône ; le titre du mode s'efface quand un bloc est ouvert.
+
 ### Le harnais de test invisible sait faire Ctrl+lettre
 
 - Une fenêtre invisible ne voit pas le vrai clavier : `GetKeyState` y lit

@@ -26,6 +26,7 @@
 )]
 
 use crate::platform::Frame;
+use crate::ui::paint::round_rect;
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
 
@@ -346,6 +347,8 @@ pub struct EditBar {
     pub color_set: bool,
     /// Zones cliquables, remplies au dessin.
     hits: Vec<(i32, i32, i32, i32, BarAction)>,
+    /// Zone survolée, rang dans `hits`.
+    hover: Option<usize>,
 }
 
 impl Default for EditBar {
@@ -364,6 +367,7 @@ impl Default for EditBar {
             size_set: false,
             color_set: false,
             hits: Vec::new(),
+            hover: None,
         }
     }
 }
@@ -381,7 +385,18 @@ impl EditBar {
     /// Hauteur de la barre en pixels.
     #[must_use]
     pub fn height(dpi: f32) -> i32 {
-        (38.0 * dpi) as i32
+        (44.0 * dpi) as i32
+    }
+
+    /// Déplacement de la souris ; vrai si l'aspect a changé.
+    pub fn mouse_move(&mut self, x: i32, y: i32) -> bool {
+        let over = self
+            .hits
+            .iter()
+            .position(|(bx, by, bw, bh, _)| x >= *bx && x < bx + bw && y >= *by && y < by + bh);
+        let changed = over != self.hover;
+        self.hover = over;
+        changed
     }
 
     /// Clic dans la barre.
@@ -422,278 +437,465 @@ impl EditBar {
             theme.separator.2,
         );
         self.hits.clear();
-        let pad = (10.0 * dpi) as i32;
-        let inner = h - (8.0 * dpi) as i32;
-        let top = y + (4.0 * dpi) as i32;
-        let baseline = |text: &mut TextRenderer| (y + h / 2) as f32 + text.ascent(size) / 2.0;
+        let s = |v: f32| (v * dpi).round() as i32;
+        let pad = s(12.0);
+        // Tous les contrôles ont la même hauteur, centrée dans la barre.
+        let ctl = s(30.0);
+        let top = y + (h - ctl) / 2;
+        let radius = 7.0 * dpi;
+        let baseline = (top + ctl / 2) as f32 + text.ascent(size) / 2.0;
+        let close_label = "Terminer";
+        let close_w = text.measure(size, close_label) as i32 + s(28.0);
+        // Rien ne se dessine au-delà : le bouton « Terminer » garde sa place,
+        // et sur une fenêtre étroite ce sont les derniers réglages qui
+        // s'effacent, pas lui.
+        let limit = fw - pad - close_w - s(10.0);
+        let geometry = Geometry {
+            top,
+            ctl,
+            radius,
+            baseline,
+            size,
+            dpi,
+            limit,
+        };
         let mut x = pad;
 
-        // Titre du mode : on sait toujours où l'on est.
-        let title = "Modifier le PDF";
-        let tb = baseline(text);
-        text.draw(frame, x as f32, tb, size, title, theme.text_dim);
-        x += text.measure(size, title) as i32 + (18.0 * dpi) as i32;
-
-        // Les deux outils.
-        for (label, tool) in [
-            ("Modifier le texte", EditTool::Select),
-            ("Ajouter du texte", EditTool::AddText),
-        ] {
-            let w = text.measure(size, label) as i32 + (22.0 * dpi) as i32;
-            let on = self.tool == tool;
-            if on {
-                frame.fill_rect(
-                    x,
-                    top,
-                    w,
-                    inner,
-                    theme.accent.0,
-                    theme.accent.1,
-                    theme.accent.2,
-                );
-            }
-            let color = if on { (255, 255, 255) } else { theme.text };
-            let b = baseline(text);
-            text.draw(
-                frame,
-                (x + (11.0 * dpi) as i32) as f32,
-                b,
-                size,
-                label,
-                color,
-            );
-            self.hits.push((x, top, w, inner, BarAction::Tool(tool)));
-            x += w + (4.0 * dpi) as i32;
+        // Titre du mode, tant qu'un bloc n'est pas ouvert : alors le contrôle
+        // allumé le dit déjà, et la place manque aux réglages.
+        if !self.editing {
+            let title = "Modifier le PDF";
+            text.draw(frame, x as f32, baseline, size, title, theme.text_dim);
+            x += text.measure(size, title) as i32 + s(14.0);
         }
-        x += (10.0 * dpi) as i32;
-        separator(frame, theme, x, top, inner);
-        x += (14.0 * dpi) as i32;
 
-        // Corps : celui du paragraphe en cours, sinon celui du texte ajouté.
-        let shown = self.active_size.unwrap_or(self.size);
-        let b = baseline(text);
-        text.draw(frame, x as f32, b, size, "Taille", theme.text_dim);
-        x += text.measure(size, "Taille") as i32 + (8.0 * dpi) as i32;
-        let button = inner;
-        for (label, action) in [("−", BarAction::Smaller), ("+", BarAction::Larger)] {
-            if action == BarAction::Larger {
-                let value = format!("{shown:.0} pt");
-                let vw = text.measure(size, &value) as i32;
+        'groups: {
+            // Les deux outils, en contrôle segmenté.
+            let Some(w) = self.segmented(
+                frame,
+                text,
+                theme,
+                &geometry,
+                x,
+                &[
+                    (
+                        Content::Label("Modifier le texte"),
+                        self.tool == EditTool::Select,
+                        BarAction::Tool(EditTool::Select),
+                    ),
+                    (
+                        Content::Label("Ajouter du texte"),
+                        self.tool == EditTool::AddText,
+                        BarAction::Tool(EditTool::AddText),
+                    ),
+                ],
+            ) else {
+                break 'groups;
+            };
+            x += w + s(12.0);
+
+            // Corps : celui du paragraphe en cours, sinon celui du texte
+            // ajouté. La valeur « 12 pt » se passe de libellé.
+            let shown = self.active_size.unwrap_or(self.size);
+            let Some(next) = self.stepper(
+                frame,
+                text,
+                theme,
+                &geometry,
+                x,
+                None,
+                &format!("{shown:.0} pt"),
+                BarAction::Smaller,
+                BarAction::Larger,
+            ) else {
+                break 'groups;
+            };
+            x = next + s(12.0);
+
+            // Couleurs du texte ajouté : des pastilles rondes, celle qui est
+            // choisie cerclée d'accent.
+            let swatch = s(18.0);
+            if x + (swatch + s(6.0)) * COLORS.len() as i32 > limit {
+                break 'groups;
+            }
+            let sy = top + (ctl - swatch) / 2;
+            for (i, c) in COLORS.iter().enumerate() {
+                let rgb = (
+                    (c[0] * 255.0) as u8,
+                    (c[1] * 255.0) as u8,
+                    (c[2] * 255.0) as u8,
+                );
+                let index = self.hits.len();
+                let ring = s(3.0);
+                if i == self.color {
+                    round_rect(
+                        frame,
+                        x - ring,
+                        sy - ring,
+                        swatch + 2 * ring,
+                        swatch + 2 * ring,
+                        (swatch + 2 * ring) as f32 / 2.0,
+                        theme.accent,
+                    );
+                    round_rect(
+                        frame,
+                        x - ring / 3,
+                        sy - ring / 3,
+                        swatch + 2 * (ring / 3),
+                        swatch + 2 * (ring / 3),
+                        (swatch + 2 * (ring / 3)) as f32 / 2.0,
+                        theme.bar,
+                    );
+                } else if self.hover == Some(index) {
+                    round_rect(
+                        frame,
+                        x - ring,
+                        sy - ring,
+                        swatch + 2 * ring,
+                        swatch + 2 * ring,
+                        (swatch + 2 * ring) as f32 / 2.0,
+                        theme.separator,
+                    );
+                }
+                round_rect(frame, x, sy, swatch, swatch, swatch as f32 / 2.0, rgb);
+                self.hits
+                    .push((x - ring, top, swatch + 2 * ring, ctl, BarAction::Color(i)));
+                x += swatch + s(6.0);
+            }
+
+            // Mise en forme du bloc ouvert : police, graisse, alignement,
+            // interligne. Ce sont les réglages d'Acrobat, et ils n'ont de sens
+            // que lorsqu'un bloc est ouvert.
+            if self.editing {
+                x += s(6.0);
+
+                // La police : un bouton-menu qui fait défiler les familles.
+                let family = self
+                    .family
+                    .and_then(|i| FAMILIES.get(i))
+                    .copied()
+                    .unwrap_or("Police du texte");
+                // Largeur figée sur le plus long des noms : sans cela, changer de
+                // police déplacerait tous les boutons suivants sous le pointeur.
+                let widest = FAMILIES
+                    .iter()
+                    .chain(std::iter::once(&"Police du texte"))
+                    .map(|f| text.measure(size, f) as i32)
+                    .max()
+                    .unwrap_or(0);
+                let fw_label = widest + s(24.0);
+                if x + fw_label > limit {
+                    break 'groups;
+                }
+                let index = self.hits.len();
+                let face = if self.hover == Some(index) {
+                    theme.separator
+                } else {
+                    theme.hover
+                };
+                round_rect(frame, x, top, fw_label, ctl, radius, face);
                 text.draw(
                     frame,
-                    (x + (4.0 * dpi) as i32) as f32,
-                    b,
+                    (x + s(10.0)) as f32,
+                    baseline,
                     size,
-                    &value,
+                    family,
                     theme.text,
                 );
-                x += vw + (8.0 * dpi) as i32;
+                chevron(
+                    frame,
+                    x + fw_label - s(16.0),
+                    top + ctl / 2,
+                    dpi,
+                    theme.text_dim,
+                );
+                self.hits
+                    .push((x, top, fw_label, ctl, BarAction::NextFamily));
+                x += fw_label + s(10.0);
+
+                // Gras et italique.
+                let Some(w) = self.segmented(
+                    frame,
+                    text,
+                    theme,
+                    &geometry,
+                    x,
+                    &[
+                        (Content::Label("G"), self.bold, BarAction::Bold),
+                        (Content::Label("I"), self.italic, BarAction::Italic),
+                    ],
+                ) else {
+                    break 'groups;
+                };
+                x += w + s(8.0);
+
+                // Alignement : quatre segments dessinés en barres, celui du bloc
+                // allumé. Les glyphes d'alignement d'Unicode manquent à trop de
+                // polices pour qu'on s'y fie.
+                let aligns: Vec<(Content<'_>, bool, BarAction)> = (0..ALIGNMENTS.len())
+                    .map(|i| (Content::Align(i), self.align == i, BarAction::Align(i)))
+                    .collect();
+                let Some(w) = self.segmented(frame, text, theme, &geometry, x, &aligns) else {
+                    break 'groups;
+                };
+                x += w + s(12.0);
+
+                // Interligne : une icône plutôt qu'un mot, la place est comptée.
+                let icon = s(18.0);
+                if x + icon + s(6.0) < limit {
+                    leading_icon(frame, x, top + (ctl - icon) / 2, icon, dpi, theme.text_dim);
+                    x += icon + s(6.0);
+                }
+                if let Some(next) = self.stepper(
+                    frame,
+                    text,
+                    theme,
+                    &geometry,
+                    x,
+                    None,
+                    &format!("{:.2}", self.leading),
+                    BarAction::Tighter,
+                    BarAction::Looser,
+                ) {
+                    x = next;
+                }
             }
-            frame.fill_rect(
-                x,
+        }
+
+        // Terminer, à droite : le bouton principal, le même que partout.
+        let (label, w) = (close_label, close_w);
+        let bx = fw - pad - w;
+        if bx > x {
+            let index = self.hits.len();
+            let ink = crate::ui::paint::button(
+                frame,
+                bx,
                 top,
-                button,
-                inner,
-                theme.hover.0,
-                theme.hover.1,
-                theme.hover.2,
+                w,
+                ctl,
+                dpi,
+                theme,
+                crate::ui::paint::ButtonLook {
+                    primary: true,
+                    hovered: self.hover == Some(index),
+                    focused: false,
+                    disabled: false,
+                },
             );
             let lw = text.measure(size, label);
             text.draw(
                 frame,
-                x as f32 + (button as f32 - lw) / 2.0,
-                b,
+                bx as f32 + (w as f32 - lw) / 2.0,
+                baseline,
                 size,
                 label,
-                theme.text,
+                ink,
             );
-            self.hits.push((x, top, button, inner, action));
-            x += button + (4.0 * dpi) as i32;
+            self.hits.push((bx, top, w, ctl, BarAction::Close));
         }
-        x += (10.0 * dpi) as i32;
-        separator(frame, theme, x, top, inner);
-        x += (14.0 * dpi) as i32;
+    }
 
-        // Couleurs du texte ajouté.
-        text.draw(frame, x as f32, b, size, "Couleur", theme.text_dim);
-        x += text.measure(size, "Couleur") as i32 + (8.0 * dpi) as i32;
-        let swatch = (inner as f32 * 0.62) as i32;
-        let sy = top + (inner - swatch) / 2;
-        for (i, c) in COLORS.iter().enumerate() {
-            let rgb = (
-                (c[0] * 255.0) as u8,
-                (c[1] * 255.0) as u8,
-                (c[2] * 255.0) as u8,
-            );
-            if i == self.color {
-                let ring = (2.0 * dpi) as i32;
-                frame.fill_rect(
-                    x - ring,
-                    sy - ring,
-                    swatch + ring * 2,
-                    swatch + ring * 2,
-                    theme.accent.0,
-                    theme.accent.1,
-                    theme.accent.2,
-                );
-            }
-            frame.fill_rect(x, sy, swatch, swatch, rgb.0, rgb.1, rgb.2);
-            self.hits.push((x, top, swatch, inner, BarAction::Color(i)));
-            x += swatch + (8.0 * dpi) as i32;
+    /// Un contrôle segmenté : des cases côte à côte dans un même creux, la
+    /// case allumée en couleur d'accent. Rend la largeur occupée, ou rien si
+    /// la place manque.
+    #[allow(clippy::too_many_arguments)] // le cadre, la police, le thème, la géométrie et les cases
+    fn segmented(
+        &mut self,
+        frame: &mut Frame<'_>,
+        text: &mut TextRenderer,
+        theme: &Theme,
+        g: &Geometry,
+        x: i32,
+        items: &[(Content<'_>, bool, BarAction)],
+    ) -> Option<i32> {
+        let s = |v: f32| (v * g.dpi).round() as i32;
+        let inset = s(2.0);
+        let widths: Vec<i32> = items
+            .iter()
+            .map(|(content, _, _)| match content {
+                Content::Label(label) => (text.measure(g.size, label) as i32 + s(18.0)).max(g.ctl),
+                Content::Align(_) => g.ctl,
+            })
+            .collect();
+        let total = widths.iter().sum::<i32>() + 2 * inset;
+        if x + total > g.limit {
+            return None;
         }
-
-        // Mise en forme du bloc ouvert : police, graisse, alignement,
-        // interligne. Ce sont les réglages d'Acrobat, et ils n'ont de sens
-        // que lorsqu'un bloc est ouvert.
-        if self.editing {
-            x += (10.0 * dpi) as i32;
-            separator(frame, theme, x, top, inner);
-            x += (14.0 * dpi) as i32;
-
-            // La police : un bouton qui fait défiler les familles.
-            let family = self
-                .family
-                .and_then(|i| FAMILIES.get(i))
-                .copied()
-                .unwrap_or("Police du texte");
-            // Largeur figée sur le plus long des noms : sans cela, changer de
-            // police déplacerait tous les boutons suivants sous le pointeur.
-            let widest = FAMILIES
-                .iter()
-                .chain(std::iter::once(&"Police du texte"))
-                .map(|f| text.measure(size, f) as i32)
-                .max()
-                .unwrap_or(0);
-            let fw_label = widest + (22.0 * dpi) as i32;
-            frame.fill_rect(
-                x,
-                top,
-                fw_label,
-                inner,
-                theme.hover.0,
-                theme.hover.1,
-                theme.hover.2,
-            );
-            text.draw(
-                frame,
-                (x + (11.0 * dpi) as i32) as f32,
-                b,
-                size,
-                family,
-                theme.text,
-            );
-            self.hits
-                .push((x, top, fw_label, inner, BarAction::NextFamily));
-            x += fw_label + (8.0 * dpi) as i32;
-
-            // Gras et italique.
-            for (label, on, action) in [
-                ("G", self.bold, BarAction::Bold),
-                ("I", self.italic, BarAction::Italic),
-            ] {
-                let bw = button;
-                let (fill, ink) = if on {
-                    (theme.accent, (255, 255, 255))
-                } else {
-                    (theme.hover, theme.text)
-                };
-                frame.fill_rect(x, top, bw, inner, fill.0, fill.1, fill.2);
-                let lw = text.measure(size, label);
-                text.draw(
+        well(frame, x, g.top, total, g.ctl, g.radius, theme);
+        let mut sx = x + inset;
+        for ((content, on, action), w) in items.iter().zip(&widths) {
+            let index = self.hits.len();
+            let hovered = self.hover == Some(index);
+            let (fill, ink) = if *on {
+                (Some(theme.accent), (255, 255, 255))
+            } else if hovered {
+                (Some(theme.separator), theme.text)
+            } else {
+                (None, theme.text)
+            };
+            if let Some(fill) = fill {
+                round_rect(
                     frame,
-                    x as f32 + (bw as f32 - lw) / 2.0,
-                    b,
-                    size,
-                    label,
-                    ink,
+                    sx,
+                    g.top + inset,
+                    *w,
+                    g.ctl - 2 * inset,
+                    g.radius - g.dpi,
+                    fill,
                 );
-                self.hits.push((x, top, bw, inner, action));
-                x += bw + (4.0 * dpi) as i32;
             }
-            x += (6.0 * dpi) as i32;
-
-            // Alignement : quatre boutons dessinés en barres, celui du bloc
-            // allumé. Les glyphes d'alignement d'Unicode manquent à trop de
-            // polices pour qu'on s'y fie.
-            for i in 0..ALIGNMENTS.len() {
-                let bw = button;
-                let on = self.align == i;
-                let (fill, ink) = if on {
-                    (theme.accent, (255, 255, 255))
-                } else {
-                    (theme.hover, theme.text)
-                };
-                frame.fill_rect(x, top, bw, inner, fill.0, fill.1, fill.2);
-                align_icon(frame, x, top, bw, inner, dpi, i, ink);
-                self.hits.push((x, top, bw, inner, BarAction::Align(i)));
-                x += bw + (4.0 * dpi) as i32;
-            }
-            x += (6.0 * dpi) as i32;
-
-            // Interligne.
-            text.draw(frame, x as f32, b, size, "Interligne", theme.text_dim);
-            x += text.measure(size, "Interligne") as i32 + (8.0 * dpi) as i32;
-            for (label, action) in [("−", BarAction::Tighter), ("+", BarAction::Looser)] {
-                if action == BarAction::Looser {
-                    let value = format!("{:.2}", self.leading);
-                    let vw = text.measure(size, &value) as i32;
+            match content {
+                Content::Label(label) => {
+                    let lw = text.measure(g.size, label);
                     text.draw(
                         frame,
-                        (x + (4.0 * dpi) as i32) as f32,
-                        b,
-                        size,
-                        &value,
-                        theme.text,
+                        sx as f32 + (*w as f32 - lw) / 2.0,
+                        g.baseline,
+                        g.size,
+                        label,
+                        ink,
                     );
-                    x += vw + (8.0 * dpi) as i32;
                 }
-                frame.fill_rect(
-                    x,
-                    top,
-                    button,
-                    inner,
-                    theme.hover.0,
-                    theme.hover.1,
-                    theme.hover.2,
-                );
-                let lw = text.measure(size, label);
-                text.draw(
-                    frame,
-                    x as f32 + (button as f32 - lw) / 2.0,
-                    b,
-                    size,
-                    label,
-                    theme.text,
-                );
-                self.hits.push((x, top, button, inner, action));
-                x += button + (4.0 * dpi) as i32;
+                Content::Align(kind) => align_icon(frame, sx, g.top, *w, g.ctl, g.dpi, *kind, ink),
             }
+            self.hits.push((sx, g.top, *w, g.ctl, *action));
+            sx += w;
         }
+        Some(total)
+    }
 
-        // Terminer, à droite.
-        let label = "Terminer";
-        let w = text.measure(size, label) as i32 + (26.0 * dpi) as i32;
-        let bx = fw - pad - w;
-        if bx > x {
-            frame.fill_rect(
-                bx,
-                top,
-                w,
-                inner,
-                theme.accent.0,
-                theme.accent.1,
-                theme.accent.2,
-            );
+    /// Un pas-à-pas : un libellé s'il y en a un, puis « − valeur + » dans un
+    /// même creux. Rend l'abscisse atteinte, ou rien si la place manque.
+    #[allow(clippy::too_many_arguments)] // un libellé, une valeur, deux actions
+    fn stepper(
+        &mut self,
+        frame: &mut Frame<'_>,
+        text: &mut TextRenderer,
+        theme: &Theme,
+        g: &Geometry,
+        x: i32,
+        label: Option<&str>,
+        value: &str,
+        minus: BarAction,
+        plus: BarAction,
+    ) -> Option<i32> {
+        let s = |v: f32| (v * g.dpi).round() as i32;
+        let label_w = label.map_or(0, |l| text.measure(g.size, l) as i32 + s(10.0));
+        let value_w = text.measure(g.size, value) as i32 + s(12.0);
+        let total = g.ctl * 2 + value_w;
+        if x + label_w + total > g.limit {
+            return None;
+        }
+        if let Some(label) = label {
+            text.draw(frame, x as f32, g.baseline, g.size, label, theme.text_dim);
+        }
+        let x = x + label_w;
+        well(frame, x, g.top, total, g.ctl, g.radius, theme);
+        let inset = s(2.0);
+        for (i, (glyph, action)) in [("\u{2212}", minus), ("+", plus)].into_iter().enumerate() {
+            let bx = if i == 0 { x } else { x + g.ctl + value_w };
+            let index = self.hits.len();
+            if self.hover == Some(index) {
+                round_rect(
+                    frame,
+                    bx + inset,
+                    g.top + inset,
+                    g.ctl - 2 * inset,
+                    g.ctl - 2 * inset,
+                    g.radius - g.dpi,
+                    theme.separator,
+                );
+            }
+            let lw = text.measure(g.size, glyph);
             text.draw(
                 frame,
-                (bx + (13.0 * dpi) as i32) as f32,
-                b,
-                size,
-                label,
-                (255, 255, 255),
+                bx as f32 + (g.ctl as f32 - lw) / 2.0,
+                g.baseline,
+                g.size,
+                glyph,
+                theme.text,
             );
-            self.hits.push((bx, top, w, inner, BarAction::Close));
+            self.hits.push((bx, g.top, g.ctl, g.ctl, action));
         }
+        let vw = text.measure(g.size, value);
+        text.draw(
+            frame,
+            (x + g.ctl) as f32 + (value_w as f32 - vw) / 2.0,
+            g.baseline,
+            g.size,
+            value,
+            theme.text,
+        );
+        Some(x + total)
+    }
+}
+
+/// Ce que tous les contrôles de la barre partagent : leur ligne, leur
+/// hauteur, leur rayon, leur police.
+struct Geometry {
+    top: i32,
+    ctl: i32,
+    radius: f32,
+    baseline: f32,
+    size: f32,
+    dpi: f32,
+    /// Abscisse à ne pas dépasser : la place du bouton « Terminer ».
+    limit: i32,
+}
+
+/// Ce qu'un segment affiche.
+enum Content<'a> {
+    /// Un libellé.
+    Label(&'a str),
+    /// L'icône d'un alignement (rang dans [`ALIGNMENTS`]).
+    Align(usize),
+}
+
+/// Le creux dans lequel un groupe de contrôles est posé : un peu plus sombre
+/// que la barre, aux coins arrondis.
+#[allow(clippy::too_many_arguments)] // un rectangle, un rayon, un thème
+fn well(frame: &mut Frame<'_>, x: i32, y: i32, w: i32, h: i32, radius: f32, theme: &Theme) {
+    crate::ui::paint::round_rect_alpha(frame, x, y, w, h, radius, theme.hover, 0.7);
+}
+
+/// L'icône de l'interligne : trois lignes de texte et une flèche double qui
+/// dit qu'on les écarte ou les resserre.
+fn leading_icon(frame: &mut Frame<'_>, x: i32, y: i32, size: i32, dpi: f32, ink: (u8, u8, u8)) {
+    let thick = (1.5 * dpi).max(1.0) as i32;
+    let lines_x = x + size * 2 / 5;
+    let lines_w = size - size * 2 / 5;
+    for i in 0..3 {
+        let ly = y + i * (size - thick) / 2;
+        frame.fill_rect(lines_x, ly, lines_w, thick, ink.0, ink.1, ink.2);
+    }
+    // La flèche : un trait vertical et deux pointes.
+    let ax = x + size / 6;
+    frame.fill_rect(ax, y, thick, size, ink.0, ink.1, ink.2);
+    let head = (size / 5).max(2);
+    for d in 0..head {
+        frame.fill_rect(ax - d, y + d, 2 * d + thick, 1, ink.0, ink.1, ink.2);
+        frame.fill_rect(
+            ax - d,
+            y + size - 1 - d,
+            2 * d + thick,
+            1,
+            ink.0,
+            ink.1,
+            ink.2,
+        );
+    }
+}
+
+/// Un chevron vers le bas, centré sur `(cx, cy)` : le bouton est un menu.
+fn chevron(frame: &mut Frame<'_>, cx: i32, cy: i32, dpi: f32, ink: (u8, u8, u8)) {
+    let step = (1.0 * dpi).max(1.0) as i32;
+    let half = (4.0 * dpi) as i32;
+    let mut y = cy - half / 2;
+    let mut reach = half;
+    while reach >= 0 {
+        frame.fill_rect(cx - reach, y, 2 * reach + 1, step, ink.0, ink.1, ink.2);
+        y += step;
+        reach -= step;
     }
 }
 
@@ -740,19 +942,6 @@ fn align_icon(
         frame.fill_rect(lx, ly, len, thick, ink.0, ink.1, ink.2);
         ly += thick + gap;
     }
-}
-
-/// Filet vertical entre deux groupes de la barre.
-fn separator(frame: &mut Frame<'_>, theme: &Theme, x: i32, top: i32, h: i32) {
-    frame.fill_rect(
-        x,
-        top + h / 6,
-        1,
-        h * 2 / 3,
-        theme.separator.0,
-        theme.separator.1,
-        theme.separator.2,
-    );
 }
 
 #[cfg(test)]

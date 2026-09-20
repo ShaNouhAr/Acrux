@@ -7007,6 +7007,9 @@ impl App for Viewer {
                 }
                 let bar = Toolbar::height(&self.theme, self.dpi_scale as f32);
                 let mut hover_changed = self.toolbar.mouse_move(x, y);
+                if let Some(mode) = &mut self.edit {
+                    hover_changed |= mode.bar.mouse_move(x, y);
+                }
                 if hover_changed {
                     self.update_tip(window);
                 }
