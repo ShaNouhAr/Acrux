@@ -809,7 +809,10 @@ fn field_line(doc: &Document, page: &Page, x: f64, y: f64, size: f64) -> Option<
                 && y <= b.y1 + size * 1.3
         })
         .min_by(|a, b| (y - a.y1).abs().total_cmp(&(y - b.y1).abs()))
-        .map(|b| (x.max(b.x0 + 1.5), b.y1 + size * 0.3))
+        // L'écriture se pose **au-dessus** du trait, jambages compris : la
+        // descente d'une police vaut un quart du corps environ, plus un peu
+        // d'air pour que le « p » et le « g » ne touchent pas la ligne.
+        .map(|b| (x.max(b.x0 + 1.5), b.y1 + size * 0.25 + 0.6))
 }
 
 /// Texte sans blancs, pour comparer ce qui est dessiné à ce qui a été écrit.
