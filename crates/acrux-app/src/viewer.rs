@@ -6382,8 +6382,15 @@ impl Viewer {
         let size = t.font_size * self.dpi_scale as f32;
         let baseline = top as f32 + (h as f32 + text.ascent(size)) / 2.0 - 1.0;
         let pad = 10.0 * self.dpi_scale as f32;
+        // La version, tout au bout, en plus petit : on sait d'un coup d'œil
+        // quelle version on a sous la main, sans ouvrir de fenêtre « À propos ».
+        let version = concat!("v", env!("CARGO_PKG_VERSION"));
+        let small = size * 0.85;
+        let version_w = text.measure(small, version);
+        let version_x = self.width as f32 - pad - version_w;
+        text.draw(frame, version_x, baseline, small, version, t.text_dim);
         let right_w = text.measure(size, &right);
-        let right_x = self.width as f32 - pad - right_w;
+        let right_x = version_x - if right.is_empty() { 0.0 } else { 1.6 * pad } - right_w;
         text.draw(frame, right_x, baseline, size, &right, t.text_dim);
         let max_left = (right_x - 2.0 * pad).max(40.0);
         text.draw_clipped(frame, pad, baseline, size, &left, t.text, max_left);

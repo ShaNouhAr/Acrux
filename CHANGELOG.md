@@ -7,6 +7,11 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
+## 0.20.0 — non publiée
+
+- La **version** s'affiche en petit tout au bout de la barre d'état, en bas à
+  droite : on sait d'un coup d'œil quelle version on a sous la main.
+
 ## 0.19.1 — 20 septembre 2026
 
 ### Correction
