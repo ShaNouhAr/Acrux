@@ -63,6 +63,21 @@ impl TextInput {
         InputAction::Changed
     }
 
+    /// Texte collé : il entre au curseur, d'un bloc. Un champ tient sur une
+    /// ligne — les sauts de ligne deviennent des espaces, et ceux du bout
+    /// (une cellule de tableur copiée en amène toujours un) sont ignorés.
+    pub fn paste(&mut self, text: &str) -> InputAction {
+        let mut changed = InputAction::None;
+        let flat = text.trim_end_matches(['\r', '\n']).replace("\r\n", " ");
+        for c in flat.chars() {
+            let c = if c.is_control() { ' ' } else { c };
+            if self.insert_char(c) == InputAction::Changed {
+                changed = InputAction::Changed;
+            }
+        }
+        changed
+    }
+
     /// Touche non imprimable.
     pub fn key(&mut self, key: Key, shift: bool) -> InputAction {
         match key {

@@ -2727,6 +2727,41 @@ impl Viewer {
         );
     }
 
+    /// Colle le presse-papiers dans le champ de saisie qui a la main, s'il y
+    /// en a un. Rend vrai si le collage le concernait.
+    fn paste_into_field(&mut self, window: &mut dyn WindowHandle) -> bool {
+        let has_field = self.prompt.is_some()
+            || self.edit_menu_open()
+            || (self.search.is_some() && !self.editing_text());
+        if !has_field {
+            return false;
+        }
+        let Some(text) = window.clipboard_text().filter(|t| !t.is_empty()) else {
+            return true;
+        };
+        if let Some(p) = &mut self.prompt {
+            let _ = p.input.paste(&text);
+            p.error = None;
+        } else if self.edit_menu_open() {
+            // La recherche d'une police, le code d'une couleur : caractère
+            // par caractère, comme une frappe.
+            for c in text.chars().filter(|c| !c.is_control()) {
+                let _ = self.edit_popup_char(c, window);
+            }
+        } else if let Some(s) = &mut self.search {
+            if s.on_replace {
+                if let Some(r) = s.replace.as_mut() {
+                    let _ = r.paste(&text);
+                }
+            } else if s.input.paste(&text) == InputAction::Changed {
+                self.update_search();
+                self.scroll_to_hit();
+            }
+        }
+        window.request_redraw();
+        true
+    }
+
     /// Affiche un message passager dans la barre d'état.
     fn set_notice(&mut self, message: String) {
         log_line(&message);
@@ -6824,6 +6859,13 @@ impl App for Viewer {
                         self.run_command(c, window);
                     }
                 }
+            }
+            // Ctrl+V dans un champ de saisie — une invite (le texte d'un
+            // peigne, une note, un mot de passe), la recherche, le code d'une
+            // couleur — y colle le presse-papiers. Un IBAN se copie d'ailleurs,
+            // il ne se retape pas.
+            Event::Char(c, m)
+                if m.ctrl && matches!(c, 'v' | 'V' | '\u{16}') && self.paste_into_field(window) => {
             }
             // Un sélecteur de la barre « Modifier » déroulé prend le clavier :
             // flèches et Entrée dans la liste des polices, frappe dans sa

@@ -22,6 +22,11 @@ c'est la section correspondante de ce fichier qui devient la page de version.
   saisie était ouverte, le clic suivant passait par l'éditeur de texte, qui
   écrivait à l'endroit brut du clic, sur le trait. Il repasse maintenant par
   « Remplir et signer », qui sait viser la ligne, la case ou le peigne.
+- **Ctrl+V colle dans les champs de saisie** : l'invite d'un peigne (un IBAN
+  se copie d'ailleurs, il ne se retape pas — ses espaces sont ignorés à la
+  répartition), une note, la recherche et le remplacement, la recherche d'une
+  police, le code d'une couleur. Aucun champ ne savait coller jusqu'ici ; seul
+  le texte de la page le pouvait.
 - Le harnais invisible a son presse-papiers d'essai (`ACRUX_CLIPBOARD`), pour
   éprouver le collage sans toucher à celui de la personne.
 
