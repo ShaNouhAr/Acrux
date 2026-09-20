@@ -5353,9 +5353,10 @@ impl Viewer {
 
     /// Ouvre ou ferme l'outil « remplir et signer ».
     ///
-    /// À la première ouverture, si aucune signature n'est enregistrée, la
-    /// fenêtre de capture s'ouvre aussitôt : c'est le geste attendu, on ne
-    /// choisit pas « Signature » avant d'en avoir une.
+    /// L'outil s'ouvre **sans rien en main** : on y vient autant pour cocher
+    /// une case ou taper une date que pour signer, et se voir imposer la
+    /// fenêtre de signature — ou une signature collée au pointeur — à chaque
+    /// ouverture gênait plus que cela n'aidait. On choisit dans le panneau.
     fn toggle_fillsign(&mut self, window: &mut dyn WindowHandle) {
         self.leave_home();
         if self.loaded.is_none() {
@@ -5371,11 +5372,8 @@ impl Viewer {
         } else {
             self.sign_panel = Some(self.new_sign_panel());
             self.wake_anim();
-            if self.signatures.is_empty() {
-                self.capture = Some(self.new_capture(false));
-            } else {
-                self.pick_sign_item(SignItem::Signature);
-            }
+            self.pick_sign_item(SignItem::Move);
+            self.set_notice("remplir et signer : choisissez quoi poser dans le panneau".into());
         }
         self.clamp_scroll();
         window.request_redraw();

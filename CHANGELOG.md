@@ -7,6 +7,13 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
+## 0.22.0 — non publiée
+
+- « Remplir et signer » s'ouvre **sans rien en main** : plus de fenêtre de
+  signature imposée à l'ouverture, ni de signature collée au pointeur. On y
+  vient autant pour cocher une case que pour signer ; on choisit dans le
+  panneau.
+
 ## 0.21.0 — 20 septembre 2026
 
 - **Les cases à cocher dessinées se reconnaissent**, comme dans Acrobat. Un
