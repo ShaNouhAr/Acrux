@@ -440,6 +440,27 @@ pub fn set_paragraph_text(
     expected: &str,
     new_text: &str,
 ) -> Result<CaretMap> {
+    move_paragraph(doc, page, frame, frame, expected, new_text)
+}
+
+/// Réécrit un bloc **dans une autre boîte** : même texte, autre place, autre
+/// largeur ou autre corps.
+///
+/// C'est ce qui permet de déplacer un bloc ou de le redimensionner : la boîte
+/// de départ sert à le retrouver, celle d'arrivée à l'écrire. Le texte s'y
+/// recompose, donc élargir la boîte reflue les lignes au lieu d'étirer les
+/// lettres.
+///
+/// # Errors
+/// Bloc introuvable, ou recomposition impossible.
+pub fn move_paragraph(
+    doc: &Document,
+    page: &Page,
+    from: &ParagraphFrame,
+    to: &ParagraphFrame,
+    expected: &str,
+    new_text: &str,
+) -> Result<CaretMap> {
     let text = extract_page_text(doc, page)?;
     let expected = normalized(expected);
     if expected.is_empty() {
@@ -449,46 +470,46 @@ pub fn set_paragraph_text(
             // n'ont pas de glyphe à retrouver ; les écrire ferait un bloc
             // invisible de plus à chaque frappe.
             let chars: Vec<char> = new_text.chars().collect();
-            let laid = lay_out_with(&chars, &Geometry::from(frame), |c| {
+            let laid = lay_out_with(&chars, &Geometry::from(to), |c| {
                 if c == ' ' {
                     0.28
                 } else {
                     0.5
                 }
             });
-            return Ok(caret_from_layout(&laid, frame.size));
+            return Ok(caret_from_layout(&laid, to.size));
         }
-        return append_block(doc, page, frame, new_text);
+        return append_block(doc, page, to, new_text);
     }
     // Un bloc déjà écrit par nous porte son ancre : on le retrouve par elle,
     // sans rien demander à l'extraction. C'est ce qui permet de continuer à
     // taper quand le bloc s'est mis à toucher son voisin.
-    if let Some(target) = Target::by_tag(doc, page, &frame_tag(frame))? {
+    if let Some(target) = Target::by_tag(doc, page, &frame_tag(from))? {
         let unit = TextUnit {
             bbox: Rect::new(
-                frame.x0,
-                frame.baseline - frame.size,
-                frame.x0 + frame.width,
-                frame.baseline + frame.size,
+                from.x0,
+                from.baseline - from.size,
+                from.x0 + from.width,
+                from.baseline + from.size,
             ),
             pieces: Vec::new(),
-            alignment: frame.alignment,
-            first_line_indent: frame.first_line_indent,
-            line_spacing: frame.line_spacing,
-            size: frame.size,
+            alignment: to.alignment,
+            first_line_indent: to.first_line_indent,
+            line_spacing: to.line_spacing,
+            size: to.size,
         };
         let laid = write_to(
             doc,
             page,
             &unit,
             new_text,
-            Some(frame),
+            Some(to),
             &ReflowOptions::default(),
             &target,
         )?;
-        return Ok(caret_from_layout(&laid, frame.size));
+        return Ok(caret_from_layout(&laid, to.size));
     }
-    let unit = locate(&text, frame, &expected).ok_or_else(|| {
+    let unit = locate(&text, from, &expected).ok_or_else(|| {
         Error::Unsupported(
             "le paragraphe ne se retrouve plus seul sur la page : il touche un autre texte".into(),
         )
@@ -499,10 +520,10 @@ pub fn set_paragraph_text(
         &text,
         &unit,
         new_text,
-        Some(frame),
+        Some(to),
         &ReflowOptions::default(),
     )?;
-    Ok(caret_from_layout(&laid, frame.size))
+    Ok(caret_from_layout(&laid, to.size))
 }
 
 /// Prépare une zone de texte neuve dont la première ligne de base passe par

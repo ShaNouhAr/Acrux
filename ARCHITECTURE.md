@@ -364,6 +364,10 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   les confie au système (`CreateIconIndirect` sous Windows).
 - `ui/modebar` : barre fine d'un outil d'annotation en cours — son nom, sa consigne, « Terminer ».
   Un outil qui change ce que fait un clic sur la page doit le dire.
+- Le **déplacement d'un bloc de texte** passe par `edit_text::move_paragraph` : la boîte de départ
+  sert à retrouver le bloc, celle d'arrivée à l'écrire. Le texte s'y recompose, donc élargir la
+  boîte reflue les lignes au lieu d'étirer les lettres. Le mode « Modifier le PDF » réutilise pour
+  cela les poignées de `ui/objects`.
 - `ui/objects` : outil « modifier » — boîte de sélection, huit poignées, redimensionnement sans
   retournement, proportions gardées avec Maj ; la conversion page ↔ vue reste au viewer, qui seul
   connaît le zoom et le défilement.

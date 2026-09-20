@@ -30,6 +30,8 @@ use crate::ui::theme::Theme;
 pub enum ToolAction {
     /// Revenir à l'accueil.
     Home,
+    /// Ouvrir les paramètres.
+    Settings,
     /// Ouvrir un fichier.
     Open,
     /// Page précédente.
@@ -75,6 +77,7 @@ impl ToolAction {
     fn command(&self) -> Option<Command> {
         Some(match self {
             ToolAction::Home => Command::Home,
+            ToolAction::Settings => Command::Settings,
             ToolAction::Open => Command::Open,
             ToolAction::PrevPage => Command::PrevPage,
             ToolAction::NextPage => Command::NextPage,
@@ -230,6 +233,11 @@ impl Toolbar {
             Button {
                 icon: Icon::Tools,
                 action: ToolAction::ToggleTools,
+                needs_document: false,
+            },
+            Button {
+                icon: Icon::Settings,
+                action: ToolAction::Settings,
                 needs_document: false,
             },
             Button {

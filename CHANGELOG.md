@@ -7,6 +7,27 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
+## 0.12.0 — 20 septembre 2026
+
+### Déplacer et redimensionner, comme dans Acrobat
+
+- Dans « Modifier le PDF », **un clic sélectionne un bloc** : il s'encadre et
+  reçoit huit poignées. On le **glisse** pour le déplacer, on tire une
+  **poignée** pour changer sa boîte — et le texte **reflue** dans la nouvelle
+  largeur au lieu de s'étirer. Un **double-clic** entre dans le texte, comme
+  avant.
+- **Repères d'alignement** : pendant le déplacement, le bloc s'aimante aux
+  bords des autres blocs de la page (à quatre points près) et une ligne fine
+  montre sur quoi il s'aligne.
+- Le bloc **reste dans la page** : on ne peut plus le pousser dehors.
+- Le déplacement est une opération d'historique comme les autres : Ctrl+Z le
+  défait.
+
+### Paramètres
+
+- **Un engrenage** dans la barre du haut ouvre les paramètres — la langue
+  pour l'instant. La palette y mène aussi.
+
 ## 0.11.0 — 20 septembre 2026
 
 ### On peut taper plus d'une lettre

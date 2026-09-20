@@ -24,9 +24,10 @@ use super::{
     Viewer, WindowHandle,
 };
 use crate::ui::editpdf::{step_size, BarAction, Buffer, EditBar, EditTool};
+use crate::ui::objects::{self as objects_ui, Handle, ViewRect};
 use acrux_features::edit_text::{
-    line_at, line_unit, normalized, open_paragraph, open_unit, set_paragraph_text, text_frame_at,
-    text_units, CaretMap, NewTextStyle, ParagraphFrame, TextUnit,
+    line_at, line_unit, move_paragraph, normalized, open_paragraph, open_unit, set_paragraph_text,
+    text_frame_at, text_units, CaretMap, NewTextStyle, ParagraphFrame, TextUnit,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -52,6 +53,42 @@ pub(super) struct EditMode {
     /// Écriture au service d'un autre outil (« remplir et signer ») : pas de
     /// barre à soi, et c'est l'autre outil qui commande.
     pub overlay: bool,
+    /// Bloc sélectionné : encadré et muni de poignées, comme dans Acrobat.
+    /// Un clic sélectionne, un double-clic entre dans le texte.
+    pub picked: Option<Picked>,
+}
+
+/// Bloc sélectionné : on peut le déplacer et le redimensionner.
+pub(super) struct Picked {
+    /// Page.
+    pub page: usize,
+    /// Boîte du bloc, telle qu'elle a été relevée.
+    pub frame: ParagraphFrame,
+    /// Texte du bloc.
+    pub text: String,
+    /// Ce qu'il dessine, sans blancs : c'est par là qu'on le retrouve.
+    pub drawn: String,
+    /// Boîte visible, en espace de page.
+    pub bbox: Rect,
+    /// Geste en cours.
+    pub drag: Option<Drag>,
+    /// Poignée survolée.
+    pub hover: Option<Handle>,
+}
+
+/// Déplacement ou redimensionnement en cours.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Drag {
+    /// Poignée saisie ; `None` pour un déplacement.
+    pub handle: Option<Handle>,
+    /// Point de départ, en espace de page.
+    pub from: Point,
+    /// Point courant.
+    pub to: Point,
+    /// Boîte telle qu'elle serait si l'on lâchait maintenant.
+    pub result: Rect,
+    /// Repères d'alignement trouvés (abscisse, ordonnée).
+    pub guides: (Option<f64>, Option<f64>),
 }
 
 /// Paragraphe en cours d'édition.
@@ -137,6 +174,7 @@ impl Viewer {
             ticking,
             units: HashMap::new(),
             overlay: false,
+            picked: None,
         });
         self.set_notice(match tool {
             EditTool::Select => "cliquez dans un texte pour le modifier".into(),
@@ -190,6 +228,7 @@ impl Viewer {
                 ticking,
                 units: HashMap::new(),
                 overlay: true,
+                picked: None,
             });
         }
         if let Some(mode) = &mut self.edit {
@@ -339,6 +378,7 @@ impl Viewer {
     }
 
     /// Dessine les cadres, la sélection et le curseur dans la vue.
+    #[allow(clippy::too_many_lines)] // une peinture, lue de haut en bas
     pub(super) fn paint_edit(&mut self, frame: &mut Frame<'_>) {
         if self.edit.is_none() || self.loaded.is_none() {
             return;
@@ -377,7 +417,43 @@ impl Viewer {
                 }
             }
         }
-        // 2. Le bloc en cours : filet fin, sélection, curseur.
+        // 2. Le bloc sélectionné : boîte, poignées, repères d'alignement.
+        if let Some((page, rect, handle, guides)) =
+            self.edit.as_ref().and_then(|e| e.picked.as_ref()).map(|p| {
+                (
+                    p.page,
+                    p.drag.map_or(p.bbox, |d| d.result),
+                    p.drag.and_then(|d| d.handle).or(p.hover),
+                    p.drag.map_or((None, None), |d| d.guides),
+                )
+            })
+        {
+            if let Some(view) = self.page_rect_to_view(page, rect) {
+                objects_ui::paint_selection(frame, &self.theme, dpi as f32, view, handle);
+            }
+            // Les repères : une ligne fine qui dit sur quoi le bloc s'aligne.
+            if let Some(m) = self.page_to_view(&layout, page) {
+                let view_w = f64::from(frame.width);
+                if let Some(x) = guides.0 {
+                    let p0 = m.apply(Point::new(x, rect.y0));
+                    let p1 = m.apply(Point::new(x, rect.y1));
+                    guide_line(frame, p0.x, p0.y - 40.0, p1.x, p1.y + 40.0, accent);
+                }
+                if let Some(y) = guides.1 {
+                    let p0 = m.apply(Point::new(rect.x0, y));
+                    let p1 = m.apply(Point::new(rect.x1, y));
+                    guide_line(
+                        frame,
+                        (p0.x - 40.0).max(0.0),
+                        p0.y,
+                        (p1.x + 40.0).min(view_w),
+                        p1.y,
+                        accent,
+                    );
+                }
+            }
+        }
+        // 3. Le bloc en cours : filet fin, sélection, curseur.
         let Some(page) = active_page else { return };
         let Some(m) = self.page_to_view(&layout, page) else {
             return;
@@ -487,6 +563,11 @@ impl Viewer {
             window.request_redraw();
             return true;
         }
+        // Sur la sélection : une poignée redimensionne, l'intérieur déplace.
+        if self.start_drag(page, pt, x, y) {
+            window.request_redraw();
+            return true;
+        }
         // Ailleurs : la saisie en cours est finie (déjà dans le document).
         if let Some(mode) = &mut self.edit {
             mode.active = None;
@@ -494,9 +575,17 @@ impl Viewer {
         match tool {
             EditTool::AddText => self.open_new_box(page, pt, window),
             EditTool::Select => {
+                // Un double-clic entre dans le texte ; un simple clic
+                // sélectionne le bloc, comme dans Acrobat.
                 if let Some((index, _)) = self.paragraph_at(page, pt) {
-                    self.open_existing(page, index, pt);
+                    if clicks >= 2 {
+                        self.edit.as_mut().map(|m| m.picked.take());
+                        self.open_existing(page, index, pt);
+                    } else {
+                        self.pick_block(page, index, pt);
+                    }
                 } else {
+                    self.edit.as_mut().map(|m| m.picked.take());
                     // Un clic hors du texte prépare une zone neuve, invisible
                     // tant qu'on n'a rien tapé : pour remplir un formulaire
                     // imprimé, on clique sur chaque ligne et on écrit, sans
@@ -507,6 +596,175 @@ impl Viewer {
         }
         window.request_redraw();
         true
+    }
+
+    /// Sélectionne un bloc : encadré, poignées, prêt à être déplacé.
+    fn pick_block(&mut self, page: usize, index: Option<usize>, pt: Point) {
+        let opened = {
+            let Some(l) = self.loaded.as_mut() else {
+                return;
+            };
+            let text = l.text(page).0.clone();
+            let Some(p) = l.pages.get(page) else { return };
+            let whole = index.map(|i| open_paragraph(&l.doc, p, &text, i));
+            match whole {
+                Some(Ok(o)) => Some((o, index)),
+                _ => line_at(&text, pt.x, pt.y)
+                    .and_then(|i| line_unit(&text, i))
+                    .and_then(|unit| open_unit(&l.doc, p, &text, &unit).ok())
+                    .map(|o| (o, None)),
+            }
+        };
+        let Some((opened, _)) = opened else {
+            self.set_notice(crate::ui::lang::tr("ce bloc ne peut pas être déplacé").into());
+            return;
+        };
+        let bbox = opened.caret.bounds().unwrap_or_else(|| {
+            Rect::new(
+                opened.frame.x0,
+                opened.frame.baseline - opened.frame.size,
+                opened.frame.x0 + opened.frame.width,
+                opened.frame.baseline + opened.frame.size,
+            )
+        });
+        if let Some(mode) = &mut self.edit {
+            mode.active = None;
+            mode.picked = Some(Picked {
+                page,
+                frame: opened.frame,
+                text: opened.text,
+                drawn: opened.drawn,
+                bbox,
+                drag: None,
+                hover: None,
+            });
+        }
+        self.set_notice(
+            crate::ui::lang::tr(
+                "bloc sélectionné : glissez pour le déplacer, les poignées pour le redimensionner, double-cliquez pour écrire",
+            )
+            .into(),
+        );
+    }
+
+    /// Rectangle de la sélection dans la vue, s'il est visible.
+    fn picked_view_rect(&self) -> Option<ViewRect> {
+        let picked = self.edit.as_ref()?.picked.as_ref()?;
+        let rect = picked.drag.map_or(picked.bbox, |d| d.result);
+        self.page_rect_to_view(picked.page, rect)
+    }
+
+    /// Commence un déplacement ou un redimensionnement, si le clic tombe sur
+    /// la sélection. Rend vrai s'il l'a pris.
+    fn start_drag(&mut self, page: usize, pt: Point, x: i32, y: i32) -> bool {
+        let Some(view) = self.picked_view_rect() else {
+            return false;
+        };
+        let dpi = self.dpi_scale;
+        // Le point du clic, pas la dernière position connue du pointeur :
+        // un clic arrive sans mouvement préalable.
+        let handle = objects_ui::handle_at(view, f64::from(x), f64::from(y), dpi);
+        let Some(picked) = self.edit.as_mut().and_then(|m| m.picked.as_mut()) else {
+            return false;
+        };
+        if picked.page != page {
+            return false;
+        }
+        let inside = handle.is_some()
+            || (pt.x >= picked.bbox.x0 - 2.0
+                && pt.x <= picked.bbox.x1 + 2.0
+                && pt.y >= picked.bbox.y0 - 2.0
+                && pt.y <= picked.bbox.y1 + 2.0);
+        if !inside {
+            return false;
+        }
+        picked.drag = Some(Drag {
+            handle,
+            from: pt,
+            to: pt,
+            result: picked.bbox,
+            guides: (None, None),
+        });
+        true
+    }
+
+    /// Fait suivre le geste en cours.
+    fn drag_to(&mut self, pt: Point) {
+        let guides = self.guides(pt);
+        let Some(picked) = self.edit.as_mut().and_then(|m| m.picked.as_mut()) else {
+            return;
+        };
+        let Some(drag) = picked.drag.as_mut() else {
+            return;
+        };
+        drag.to = pt;
+        let (dx, dy) = (pt.x - drag.from.x, pt.y - drag.from.y);
+        drag.result = if let Some(handle) = drag.handle {
+            objects_ui::resized(picked.bbox, handle, dx, dy, false)
+        } else {
+            {
+                // Déplacement : les repères d'alignement attirent la boîte.
+                let (mut ox, mut oy) = (dx, dy);
+                if let Some(x) = guides.0 {
+                    ox = x - picked.bbox.x0;
+                }
+                if let Some(y) = guides.1 {
+                    oy = y - picked.bbox.y1;
+                }
+                Rect::new(
+                    picked.bbox.x0 + ox,
+                    picked.bbox.y0 + oy,
+                    picked.bbox.x1 + ox,
+                    picked.bbox.y1 + oy,
+                )
+            }
+        };
+        drag.guides = if drag.handle.is_none() {
+            guides
+        } else {
+            (None, None)
+        };
+    }
+
+    /// Repères d'alignement : bords des autres blocs de la page qui tombent
+    /// à moins de quelques points de celui qu'on déplace.
+    ///
+    /// C'est ce qui permet d'aligner un bloc sur un autre sans viser au
+    /// pixel — et la ligne qui s'affiche dit **pourquoi** il s'est aimanté.
+    fn guides(&mut self, pt: Point) -> (Option<f64>, Option<f64>) {
+        let Some(picked) = self.edit.as_ref().and_then(|m| m.picked.as_ref()) else {
+            return (None, None);
+        };
+        let Some(drag) = picked.drag else {
+            return (None, None);
+        };
+        if drag.handle.is_some() {
+            return (None, None);
+        }
+        let (page, bbox) = (picked.page, picked.bbox);
+        let (dx, dy) = (pt.x - drag.from.x, pt.y - drag.from.y);
+        let (x0, y1) = (bbox.x0 + dx, bbox.y1 + dy);
+        let tol = 4.0;
+        let mut best_x: Option<(f64, f64)> = None;
+        let mut best_y: Option<(f64, f64)> = None;
+        for unit in self.units(page).iter() {
+            if (unit.bbox.x0 - bbox.x0).abs() < 0.01 && (unit.bbox.y1 - bbox.y1).abs() < 0.01 {
+                continue;
+            }
+            for candidate in [unit.bbox.x0, unit.bbox.x1] {
+                let d = (candidate - x0).abs();
+                if d < tol && best_x.is_none_or(|(_, b)| d < b) {
+                    best_x = Some((candidate, d));
+                }
+            }
+            for candidate in [unit.bbox.y1, unit.bbox.y0] {
+                let d = (candidate - y1).abs();
+                if d < tol && best_y.is_none_or(|(_, b)| d < b) {
+                    best_y = Some((candidate, d));
+                }
+            }
+        }
+        (best_x.map(|(v, _)| v), best_y.map(|(v, _)| v))
     }
 
     /// Ouvre un paragraphe existant, curseur au point cliqué.
@@ -616,6 +874,40 @@ impl Viewer {
         window: &mut dyn WindowHandle,
     ) {
         let hit = self.page_at(x, y);
+        // Un geste sur la sélection l'emporte sur tout le reste.
+        let dragging_pick = self
+            .edit
+            .as_ref()
+            .and_then(|e| e.picked.as_ref())
+            .is_some_and(|p| p.drag.is_some());
+        if dragging && dragging_pick {
+            if let Some((_, pt)) = hit {
+                self.drag_to(pt);
+                window.request_redraw();
+            }
+            return;
+        }
+        if !dragging {
+            // Survol des poignées : le pointeur dit ce qu'on peut saisir.
+            let over = self
+                .picked_view_rect()
+                .and_then(|v| objects_ui::handle_at(v, f64::from(x), f64::from(y), self.dpi_scale));
+            let changed = self
+                .edit
+                .as_ref()
+                .and_then(|e| e.picked.as_ref())
+                .is_some_and(|p| p.hover != over);
+            if let Some(p) = self.edit.as_mut().and_then(|e| e.picked.as_mut()) {
+                p.hover = over;
+            }
+            if changed {
+                window.request_redraw();
+            }
+            if over.is_some() {
+                window.set_cursor(Cursor::Move);
+                return;
+            }
+        }
         if dragging {
             if let (Some((page, pt)), Some(a)) =
                 (hit, self.edit.as_mut().and_then(|e| e.active.as_mut()))
@@ -672,6 +964,124 @@ impl Viewer {
     pub(super) fn edit_mouse_up(&mut self) {
         if let Some(a) = self.edit.as_mut().and_then(|e| e.active.as_mut()) {
             a.selecting = false;
+        }
+        self.finish_drag();
+    }
+
+    /// Fin du geste : le bloc est réécrit dans sa nouvelle boîte.
+    fn finish_drag(&mut self) {
+        let Some(picked) = self.edit.as_mut().and_then(|e| e.picked.as_mut()) else {
+            return;
+        };
+        let Some(drag) = picked.drag.take() else {
+            return;
+        };
+        let moved = (drag.result.x0 - picked.bbox.x0).abs() > 0.5
+            || (drag.result.y1 - picked.bbox.y1).abs() > 0.5
+            || (drag.result.width() - picked.bbox.width()).abs() > 0.5;
+        if !moved {
+            return;
+        }
+        // La boîte d'écriture suit la boîte visible : même décalage, même
+        // largeur. Le texte s'y recompose, donc élargir reflue les lignes.
+        let mut to = picked.frame.clone();
+        to.x0 += drag.result.x0 - picked.bbox.x0;
+        to.baseline += drag.result.y1 - picked.bbox.y1;
+        to.width = (picked.frame.width + drag.result.width() - picked.bbox.width()).max(to.size);
+        // Le bloc reste dans la page : un texte poussé dehors ne se
+        // retrouverait plus, et ne s'imprimerait pas.
+        if let Some(crop) = self
+            .loaded
+            .as_ref()
+            .and_then(|l| l.pages.get(picked.page).map(|p| p.crop_box(&l.doc)))
+        {
+            to.width = to.width.min(crop.width());
+            to.x0 = to.x0.clamp(crop.x0, (crop.x1 - to.width).max(crop.x0));
+            to.baseline = to
+                .baseline
+                .clamp(crop.y0 + to.size, crop.y1 - to.size * 0.2);
+        }
+        let (page, from, expected, text) = (
+            picked.page,
+            picked.frame.clone(),
+            picked.drawn.clone(),
+            picked.text.clone(),
+        );
+        self.apply_move(page, &from, &to, &expected, &text);
+    }
+
+    /// Écrit le bloc déplacé dans le document, et l'inscrit à l'historique.
+    fn apply_move(
+        &mut self,
+        page: usize,
+        from: &ParagraphFrame,
+        to: &ParagraphFrame,
+        expected: &str,
+        text: &str,
+    ) {
+        let scale = self.scale();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let key_scale = (scale * 1000.0).round() as u32;
+        let Some(l) = self.loaded.as_mut() else {
+            return;
+        };
+        let Some(page_ref) = l.pages.get(page).cloned() else {
+            return;
+        };
+        match move_paragraph(&l.doc, &page_ref, from, to, expected, text) {
+            Ok(map) => {
+                if let Some(w) = &mut l.worker {
+                    w.edit(EditOp::Paragraph {
+                        page,
+                        frame: from.clone(),
+                        to: Some(to.clone()),
+                        expected: expected.to_string(),
+                        text: text.to_string(),
+                    });
+                }
+                l.history.push(EditOp::Paragraph {
+                    page,
+                    frame: from.clone(),
+                    to: Some(to.clone()),
+                    expected: expected.to_string(),
+                    text: text.to_string(),
+                });
+                l.redo.clear();
+                l.modified = true;
+                if let Ok(pages) = collect_pages(&l.doc) {
+                    l.pages = pages;
+                    l.page_index = PageIndex::new(&l.pages);
+                }
+                l.texts.remove(&page);
+                l.cache.retain(|(p, _), _| *p != page);
+                let bbox = map.bounds().unwrap_or_else(|| {
+                    Rect::new(to.x0, to.baseline - to.size, to.x0 + to.width, to.baseline)
+                });
+                if let Some(picked) = self.edit.as_mut().and_then(|e| e.picked.as_mut()) {
+                    picked.frame = to.clone();
+                    picked.bbox = bbox;
+                    picked.drawn = normalized(text);
+                }
+                if let Some(mode) = &mut self.edit {
+                    mode.units.remove(&page);
+                    // Le survol pointait sur l'ancienne place du bloc.
+                    mode.hover = None;
+                }
+                // Rendu immédiat : sans lui, la page clignoterait en blanc
+                // le temps que le fil de rendu rattrape.
+                if let Some(p) = l.pages.get(page) {
+                    let options = RenderOptions {
+                        annotations: true,
+                        time_budget: Some(Duration::from_secs(5)),
+                        background: Some(Color::WHITE),
+                        ..RenderOptions::default()
+                    };
+                    let bitmap = render_page(&l.doc, p, scale, &options).bitmap;
+                    l.cache.insert((page, key_scale), bitmap);
+                }
+                self.title_dirty = true;
+            }
+            Err(e) => self.set_notice(format!("déplacement impossible : {e}")),
         }
     }
 
@@ -856,6 +1266,7 @@ impl Viewer {
                         w.edit(EditOp::Paragraph {
                             page: a.page,
                             frame: a.frame.clone(),
+                            to: None,
                             expected: a.drawn.clone(),
                             text: a.buffer.text.clone(),
                         });
@@ -867,6 +1278,7 @@ impl Viewer {
                     let op = EditOp::Paragraph {
                         page: a.page,
                         frame: a.frame.clone(),
+                        to: None,
                         expected: a.original.clone(),
                         text: a.buffer.text.clone(),
                     };
@@ -944,5 +1356,37 @@ fn tint(frame: &mut Frame<'_>, r: &Rect, color: (u8, u8, u8), alpha: u32) {
             d[1] = ((u32::from(color.1) * alpha + u32::from(d[1]) * inv) / 255) as u8;
             d[2] = ((u32::from(color.0) * alpha + u32::from(d[2]) * inv) / 255) as u8;
         }
+    }
+}
+
+/// Trait fin d'alignement, horizontal ou vertical.
+fn guide_line(frame: &mut Frame<'_>, x0: f64, y0: f64, x1: f64, y1: f64, color: (u8, u8, u8)) {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let (x0, y0, x1, y1) = (
+        x0.round() as i32,
+        y0.round() as i32,
+        x1.round() as i32,
+        y1.round() as i32,
+    );
+    if (x1 - x0).abs() >= (y1 - y0).abs() {
+        frame.fill_rect(
+            x0.min(x1),
+            y0,
+            (x1 - x0).abs().max(1),
+            1,
+            color.0,
+            color.1,
+            color.2,
+        );
+    } else {
+        frame.fill_rect(
+            x0,
+            y0.min(y1),
+            1,
+            (y1 - y0).abs().max(1),
+            color.0,
+            color.1,
+            color.2,
+        );
     }
 }

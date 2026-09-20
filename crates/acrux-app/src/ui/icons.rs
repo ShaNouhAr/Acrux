@@ -24,6 +24,8 @@ use crate::platform::Frame;
 /// Icônes disponibles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Icon {
+    /// Engrenage (paramètres).
+    Settings,
     /// Maison (accueil).
     Home,
     /// Dossier (ouvrir).
@@ -440,6 +442,22 @@ pub fn geometry(icon: Icon) -> (Path, Path) {
                 ],
             );
             polyline(&mut lines, &[(9.5, 5.0), (9.5, 19.0)]);
+        }
+        Icon::Settings => {
+            // Une roue dentée : un anneau et huit dents, dessinés au compas.
+            circle(&mut fills, 12.0, 12.0, 3.2);
+            for i in 0..8 {
+                let a = f64::from(i) * std::f64::consts::FRAC_PI_4;
+                let (s, c) = a.sin_cos();
+                polyline(
+                    &mut lines,
+                    &[
+                        (12.0 + 6.0 * c, 12.0 + 6.0 * s),
+                        (12.0 + 9.2 * c, 12.0 + 9.2 * s),
+                    ],
+                );
+            }
+            circle(&mut lines, 12.0, 12.0, 6.0);
         }
         Icon::Theme => {
             circle(&mut fills, 12.0, 12.0, 4.0);

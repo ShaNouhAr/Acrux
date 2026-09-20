@@ -18,8 +18,8 @@ use std::path::PathBuf;
 
 use acrux_document::{collect_pages, Document};
 use acrux_features::edit_text::{
-    line_at, line_unit, new_text_frame, normalized, open_paragraph, open_unit, set_paragraph_text,
-    text_frame_at, NewTextStyle, OpenedParagraph,
+    line_at, line_unit, move_paragraph, new_text_frame, normalized, open_paragraph, open_unit,
+    set_paragraph_text, text_frame_at, NewTextStyle, OpenedParagraph,
 };
 use acrux_features::text::{extract_page_text, PageText};
 
@@ -609,4 +609,67 @@ fn une_zone_neuve_se_tape_au_milieu_dune_page_chargee() {
     assert!(apres.contains("lemonde"), "{apres}");
     // Le texte d'origine n'a pas bougé.
     assert!(page_text(&doc, 0).contains("Cedocumentdesynthèse"));
+}
+
+#[test]
+fn un_bloc_se_deplace_et_se_redimensionne() {
+    // Déplacer : même texte, autre boîte. Redimensionner : la largeur change,
+    // le texte reflue au lieu de s'étirer.
+    let doc = Document::load(corpus("synthese/comparaison-avant.pdf")).unwrap();
+    let Some((_, _, opened)) = a_paragraph(&doc) else {
+        panic!("aucun paragraphe éditable");
+    };
+    let pages = collect_pages(&doc).unwrap();
+    let mut ailleurs = opened.frame.clone();
+    ailleurs.x0 += 30.0;
+    ailleurs.baseline -= 120.0;
+    move_paragraph(
+        &doc,
+        &pages[0],
+        &opened.frame,
+        &ailleurs,
+        &opened.drawn,
+        &opened.text,
+    )
+    .expect("le bloc doit se déplacer");
+    let pages = collect_pages(&doc).unwrap();
+    let text = extract_page_text(&doc, &pages[0]).unwrap();
+    let ligne = text
+        .lines
+        .iter()
+        .find(|l| opened.text.starts_with(&l.text()[..8.min(l.text().len())]))
+        .unwrap_or_else(|| panic!("le bloc déplacé est introuvable"));
+    assert!(
+        (ligne.baseline() - ailleurs.baseline).abs() < 1.0,
+        "ligne de base {} attendue {}",
+        ligne.baseline(),
+        ailleurs.baseline
+    );
+    assert!((ligne.bbox.x0 - ailleurs.x0).abs() < 2.0);
+
+    // Puis rétrécir la boîte de moitié : il faut plus de lignes qu'avant.
+    let avant = text
+        .lines
+        .iter()
+        .filter(|l| (l.bbox.x0 - ailleurs.x0).abs() < 2.0)
+        .count();
+    let mut etroit = ailleurs.clone();
+    etroit.width = ailleurs.width / 2.0;
+    move_paragraph(
+        &doc,
+        &pages[0],
+        &ailleurs,
+        &etroit,
+        &normalized(&opened.text),
+        &opened.text,
+    )
+    .expect("le bloc doit se recomposer plus étroit");
+    let pages = collect_pages(&doc).unwrap();
+    let text = extract_page_text(&doc, &pages[0]).unwrap();
+    let apres = text
+        .lines
+        .iter()
+        .filter(|l| (l.bbox.x0 - etroit.x0).abs() < 2.0)
+        .count();
+    assert!(apres > avant, "{apres} lignes après, {avant} avant");
 }

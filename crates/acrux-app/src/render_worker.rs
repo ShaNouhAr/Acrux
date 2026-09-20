@@ -136,6 +136,8 @@ pub enum EditOp {
         page: usize,
         /// Boîte du paragraphe, relevée à l'ouverture.
         frame: acrux_features::edit_text::ParagraphFrame,
+        /// Boîte d'arrivée, quand le bloc est déplacé ou redimensionné.
+        to: Option<acrux_features::edit_text::ParagraphFrame>,
         /// Texte dessiné avant, sans blancs.
         expected: String,
         /// Texte à écrire.
@@ -240,6 +242,7 @@ impl EditOp {
             EditOp::Paragraph {
                 page,
                 frame,
+                to,
                 expected,
                 text,
             } => {
@@ -247,7 +250,8 @@ impl EditOp {
                 let page = pages.get(*page).ok_or_else(|| {
                     acrux_core::Error::Corrupt(format!("page {} absente", page + 1))
                 })?;
-                acrux_features::edit_text::set_paragraph_text(doc, page, frame, expected, text)
+                let to = to.as_ref().unwrap_or(frame);
+                acrux_features::edit_text::move_paragraph(doc, page, frame, to, expected, text)
                     .map(|_| ())
             }
         }
@@ -371,7 +375,10 @@ enum WorkerMessage {
     /// Rendre une page.
     Render(RenderRequest),
     /// Modifier le document (les rendus demandés avant sont obsolètes).
-    Edit(EditOp),
+    ///
+    /// L'opération est encadrée : une boîte de paragraphe pèse plus de trois
+    /// cents octets, et ce message-ci circule à chaque frappe.
+    Edit(Box<EditOp>),
     /// Échelles encore utiles : les demandes des autres échelles en attente
     /// sont abandonnées (zoom changé, panneau fermé…).
     Keep(Vec<u32>),
@@ -582,7 +589,7 @@ impl RenderWorker {
     pub fn edit(&mut self, op: EditOp) {
         self.generation = self.generation.wrapping_add(1);
         self.pending.clear();
-        let _ = self.requests.send(WorkerMessage::Edit(op));
+        let _ = self.requests.send(WorkerMessage::Edit(Box::new(op)));
     }
 
     /// Oublie les demandes des échelles absentes de `keep` (leurs résultats

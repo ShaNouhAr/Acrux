@@ -3590,6 +3590,7 @@ impl Viewer {
     fn tool_action(&mut self, action: ToolAction, window: &mut dyn WindowHandle) {
         match action {
             ToolAction::Home => self.show_home(window),
+            ToolAction::Settings => self.open_settings(window),
             ToolAction::Open => {
                 if let Some(p) = window.open_file_dialog() {
                     self.open(&p, window);
