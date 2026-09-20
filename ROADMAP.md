@@ -180,7 +180,11 @@ Livrable : version 0.2, parité avec Acrobat Standard hors édition de texte.
   Le texte dessiné dans un **XObject de formulaire** se modifie comme celui de la page (son flux
   est rouvert et réécrit) ; un bloc qu'aucune opération ne laisse recomposer entier retombe sur
   **la ligne cliquée**. Un test mesure la part du corpus modifiable (94 %) et interdit qu'elle
-  baisse. À faire : blocs en biais (filigranes), opérations qui dessinent deux textes à la fois ;
+  baisse. **Déplacement et redimensionnement** : un clic sélectionne le bloc (huit poignées), on le
+  glisse ou l'on tire une poignée, le texte reflue dans la nouvelle largeur, des repères
+  l'aimantent aux blocs voisins, et il ne peut pas sortir de la page (`edit_text::move_paragraph`).
+  À faire : déplacer une image dans le même mode ; blocs en biais (filigranes), opérations qui
+  dessinent deux textes à la fois ;
   gras, italique, famille et couleur d'un bloc existant ; images dans le même mode
   (« Modifier les objets » reste un outil à part) ; texte ajouté hors WinAnsi (police standard) ;
   poignées pour élargir une zone.
