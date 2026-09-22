@@ -26,11 +26,18 @@ Options passées à `Start-App` par la table `-Env`, par exemple pour répondre 
 Start-App $pdf -Env @{ ACRUX_SAVE_DIR = "C:\temp\sortie"; ACRUX_CONFIRM = "oui" }
 ```
 
-`ACRUX_CLIPBOARD` donne au mode invisible un presse-papiers d'essai (`` et `
+`ACRUX_CLIPBOARD` donne au mode invisible un presse-papiers d'essai (`
+` et `
 ` en toutes
 lettres) : le vrai presse-papiers de la machine n'est jamais lu ni écrit.
 
-Les captures sont des PPM bruts ; `scratchpad/ppm2png.py` les convertit en PNG pour les regarder.
+Les captures sont des PPM bruts ; `tools/ppm2png.py` les convertit en PNG pour les regarder :
+`python tools/ppm2png.py capture.ppm capture.png [pas] [x,y,largeur,hauteur]` (le pas sous-échantillonne,
+le rectangle recadre).
+
+Deux variables isolent un essai des autres : `ACRUX_TEST_DIR` (dossier des captures, du journal et
+de l'instance ; par défaut `%TEMP%\acrux-tests`) et `ACRUX_EXE` (l'exécutable à lancer, par défaut
+`target\debug\acrux.exe`). Le harnais n'arrête jamais que l'instance qu'il a lancée lui-même.
 
 `Drag` trace un geste continu (bouton enfoncé, une suite de points, relâchement) : c'est ce
 qui permet de tester l'outil « remplir et signer » sans rien afficher.

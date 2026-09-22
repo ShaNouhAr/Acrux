@@ -3,7 +3,9 @@
 #
 # Usage : . .\tools\headless.ps1 ; Start-App <fichier.pdf> ; Key 0x75 ; Shot "x" ; Stop-App
 # Dossier de travail : tout ce que le harnais ecrit (journal, captures) y va.
-if (-not $script:Dir) { $script:Dir = Join-Path $env:TEMP "acrux-tests" }
+# ACRUX_TEST_DIR isole les essais : plusieurs harnais peuvent tourner en meme temps,
+# chacun avec son dossier, ses captures et son instance.
+if (-not $script:Dir) { $script:Dir = if ($env:ACRUX_TEST_DIR) { $env:ACRUX_TEST_DIR } else { Join-Path $env:TEMP "acrux-tests" } }
 if (-not (Test-Path $script:Dir)) { New-Item -ItemType Directory -Path $script:Dir | Out-Null }
 # Racine du depot : deux niveaux au-dessus de ce script.
 if (-not $script:Root) { $script:Root = Split-Path -Parent (Split-Path -Parent $PSCommandPath) }
@@ -34,8 +36,10 @@ function Update-Scale {
 
 function Start-App {
     param([string]$Pdf, [hashtable]$Env = @{})
-    Stop-Process -Name acrux -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 300
+    # On n'arrete que l'instance que ce harnais a lancee : jamais celle de la
+    # personne qui travaille, ni celle d'un autre essai en cours.
+    Stop-App
+    Start-Sleep -Milliseconds 200
     $env:ACRUX_HEADLESS = "1"
     $env:APPDATA = "$script:Dir/appdata"
     Remove-Item -Recurse -Force "$script:Dir/appdata" -ErrorAction SilentlyContinue
@@ -45,7 +49,10 @@ function Start-App {
     Remove-Item $env:ACRUX_LOG, $env:ACRUX_HWND -ErrorAction SilentlyContinue
     Remove-Item Env:ACRUX_THEME, Env:ACRUX_OPEN_FILE, Env:ACRUX_SAVE_FILE, Env:ACRUX_SAVE_DIR, Env:ACRUX_CONFIRM -ErrorAction SilentlyContinue
     foreach ($k in $Env.Keys) { Set-Item -Path "Env:$k" -Value $Env[$k] }
-    $script:Proc = Start-Process -FilePath (Join-Path $script:Root "target\debug\acrux.exe") -ArgumentList $Pdf -PassThru
+    # ACRUX_EXE designe un autre executable que celui de target\debug : une copie
+    # figee pendant qu'une compilation le remplace, par exemple.
+    $exe = if ($env:ACRUX_EXE) { $env:ACRUX_EXE } else { Join-Path $script:Root "target\debug\acrux.exe" }
+    $script:Proc = Start-Process -FilePath $exe -ArgumentList $Pdf -PassThru
     for ($i = 0; $i -lt 60; $i++) {
         Start-Sleep -Milliseconds 200
         if (Test-Path $env:ACRUX_HWND) { break }
