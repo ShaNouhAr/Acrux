@@ -188,6 +188,47 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 - Le harnais invisible a son presse-papiers d'essai (`ACRUX_CLIPBOARD`), pour
   éprouver le collage sans toucher à celui de la personne.
 
+- **Le clic droit ouvre un menu**, là où l'on travaille. Sur la page : Copier,
+  Surligner la sélection, Poser une note ici (au point du clic, pas sous le
+  menu), Tout sélectionner, Pivoter la page, Imprimer…, Propriétés du document.
+  Sur une vignette du panneau : Pivoter, Dupliquer, Extraire…, Supprimer — la
+  page **de la vignette**, pas celle qu'on regarde. Sur un onglet : Fermer,
+  Fermer les autres onglets, Copier le chemin, Ouvrir le dossier du fichier —
+  de **cet** onglet, même s'il n'est pas au premier plan. Sur un document récent
+  de l'accueil : Ouvrir, Copier le chemin, Ouvrir le dossier du fichier,
+  Retirer de la liste. Chaque élément lance la commande de la palette et
+  affiche son raccourci ; ce qui ne s'applique pas est grisé (Copier sans
+  sélection, Imprimer quand les permissions l'interdisent, Supprimer la
+  dernière page).
+- Le menu se conduit comme ceux de Windows : il s'ouvre au pointeur et bascule
+  à gauche ou en haut quand la place manque ; flèches (en boucle, grisés et
+  séparateurs sautés), Origine, Fin, Entrée, Échap ; l'initiale d'un élément
+  le choisit ; on peut enfoncer le bouton droit, glisser jusqu'à l'élément et
+  lâcher ; un clic dehors le referme sans rien faire d'autre — pas même
+  désélectionner. **La touche « menu » du clavier et Maj+F10** l'ouvrent aussi,
+  sur la page sous le pointeur ou sur la vignette qui a le focus dans le
+  panneau.
+- **Propriétés du document** (Ctrl+D, palette ou clic droit) : nom, dossier,
+  taille, nombre de pages, version PDF, puis titre, auteur, sujet, mots-clés,
+  application, convertisseur et dates, et la protection avec ce qu'elle
+  interdit — ce que dit `acr metadata`, dans une fenêtre d'information.
+- **Fermer les autres onglets** garde ceux qui ont des modifications non
+  enregistrées, et le dit : on ne perd pas un document modifié d'un seul geste.
+  **Copier le chemin du fichier** et **Ouvrir le dossier du fichier**
+  (l'Explorateur s'ouvre sur le fichier sélectionné) sont aussi dans la
+  palette. Un document de l'accueil se **retire de la liste** seul, sans vider
+  tout l'historique ; le fichier n'est pas touché.
+- **Relâcher le bouton droit n'interrompt plus un geste.** Pendant le tracé
+  d'une signature, un trait d'encre, le déplacement d'un objet ou d'une
+  signature posée, le relâchement du bouton droit terminait le geste comme
+  celui du gauche.
+- Les tailles de fichier de l'accueil s'écrivent « 1,5 Mo » en français et
+  « 1.5 MB » en anglais (c'était « 1.5 Mo » dans les deux langues).
+- Harnais invisible : `RightClick x y` et `ShiftF10`. Un lien suivi en mode
+  invisible n'ouvre plus le navigateur de la personne (le journal note
+  « adresse : … »), et « Ouvrir le dossier du fichier » n'ouvre pas
+  l'Explorateur (« dossier : … »).
+
 ## 0.22.0 — 20 septembre 2026
 
 - **Les peignes se remplissent** — BIC, IBAN, date : ces rangées de cases

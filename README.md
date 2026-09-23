@@ -242,6 +242,14 @@ lettres trouvées s'éclairent ; la liste défile avec la sélection (flèches, 
 En anglais, on cherche dans les libellés anglais. Le reste de cette section n'est donc qu'un
 aide-mémoire.
 
+**Le clic droit ouvre un menu** (ou la touche « menu » du clavier, ou `Maj+F10`) : sur la page
+(copier, surligner, poser une note ici, tout sélectionner, pivoter la page, imprimer, propriétés),
+sur une vignette (pivoter, dupliquer, extraire, supprimer **cette** page), sur un onglet (fermer,
+fermer les autres, copier le chemin, ouvrir le dossier du fichier) et sur un document récent de
+l'accueil (ouvrir, copier le chemin, ouvrir le dossier, retirer de la liste). Chaque élément lance
+la commande de la palette et affiche son raccourci ; flèches, `Entrée`, `Échap` et l'initiale d'un
+élément s'y emploient comme dans un menu de Windows.
+
 Barre d'outils : panneau latéral (vignettes et signets), ouvrir, page précédente / suivante,
 numéro de page (cliquer pour saisir), zoom −/+, ajuster à la largeur, disposition des pages,
 pivoter, enregistrer, imprimer, recherche, thème. Chaque bouton affiche au survol son nom et son
@@ -275,6 +283,7 @@ dans la barre d'outils et « page iii (3 / 240) » dans la barre d'état, et sai
 | --- | --- |
 | glisser sur le texte | sélectionner (double-clic : mot, triple-clic : ligne, `Maj+clic` : étendre) |
 | `Ctrl+C`, `Ctrl+A` | copier, tout sélectionner |
+| `Ctrl+D` | propriétés du document : fichier, taille, pages, version, métadonnées, protection |
 | `Ctrl+F` | rechercher (`Entrée` / `Maj+Entrée` : occurrence suivante / précédente) |
 | `Ctrl+H` | rechercher et remplacer (`Tab` : d'un champ à l'autre, `Entrée` : remplacer, ou « Tout remplacer ») |
 
@@ -289,7 +298,7 @@ une page par feuille, et `Ctrl+S` demande où ranger le document obtenu.
 | `R` / `Maj+R` | pivoter la page courante |
 | `Ctrl+Suppr` | supprimer la page (confirmation) |
 | `Ctrl+I` | insérer les pages d'un autre fichier avant la page courante |
-| palette | dupliquer la page, extraire la page dans un nouveau fichier |
+| palette, clic droit sur une vignette | dupliquer la page, extraire la page dans un nouveau fichier |
 | `E` | modifier le texte sélectionné (même police, la ligne se recompose) |
 | `H`, `Maj+H` | surligner la sélection, la surligner en y joignant un commentaire |
 | `N` | poser une note à la position de la souris |

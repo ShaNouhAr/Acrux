@@ -70,12 +70,14 @@ use crate::ui::video::{self as video_ui, Box2, Hit as VideoHit};
 use acrux_features::edit_objects::{self, Edit as ObjectEdit, PageObject};
 use acrux_features::fillsign::ink::{InkPoint, Nib, Pen, Stroke, Weight};
 
+mod context;
 mod dialogs;
 mod editmode;
 mod protect;
 mod three_d;
 use crate::ui::editpdf::EditTool;
 use crate::ui::modebar::ModeBar;
+use context::{ContextMenu, Target};
 use dialogs::{Asking, Then};
 use editmode::EditMode;
 use protect::OwnerThen;
@@ -819,6 +821,12 @@ pub struct Viewer {
     last_current: usize,
     /// Clé de cache des vignettes au dernier dessin.
     thumb_key: u32,
+    /// Menu du clic droit, quand il est ouvert.
+    context_menu: Option<ContextMenu>,
+    /// Ce que vise la commande en cours : la page, l'onglet ou le document
+    /// récent sur lequel on a fait un clic droit. `Target::Current` hors
+    /// d'un menu (voir `run_on`).
+    command_target: Target,
 }
 
 /// Où est le focus clavier de la carte de recherche.
@@ -1032,6 +1040,9 @@ impl Viewer {
     /// Nouveau visualiseur, avec les fichiers à ouvrir au démarrage (un
     /// onglet chacun).
     #[must_use]
+    // Un champ par ligne : l'état de départ se lit d'un seul bloc, dans
+    // l'ordre de la structure.
+    #[allow(clippy::too_many_lines)]
     pub fn new(initial: Vec<PathBuf>) -> Self {
         let prefs = Prefs::load();
         // La langue avant tout le reste : ce qui se construit ensuite peut
@@ -1133,6 +1144,8 @@ impl Viewer {
             panel: Panel::new(),
             last_current: usize::MAX,
             thumb_key: 0,
+            context_menu: None,
+            command_target: Target::Current,
         }
     }
 
@@ -2000,13 +2013,22 @@ impl Viewer {
             );
             return true;
         }
-        let Some(index) = self
-            .recent_hits
+        match self.recent_at(x, y) {
+            Some(index) => self.open_recent(index, window),
+            None => false,
+        }
+    }
+
+    /// Carte de document récent sous un point de la vue : son rang dans la
+    /// liste des récents.
+    fn recent_at(&self, x: i32, y: i32) -> Option<usize> {
+        self.recent_hits
             .iter()
             .position(|&(rx, ry, rw, rh)| x >= rx && x < rx + rw && y >= ry && y < ry + rh)
-        else {
-            return false;
-        };
+    }
+
+    /// Ouvre le document récent de rang `index` ; faux s'il n'y en a pas.
+    fn open_recent(&mut self, index: usize, window: &mut dyn WindowHandle) -> bool {
         let Some(path) = self.prefs.recent.get(index).cloned() else {
             return false;
         };
@@ -2059,9 +2081,10 @@ impl Viewer {
     ///
     /// Les dialogues, la fiche « Paramètres », « Protéger » et les invites
     /// la prennent déjà plus haut (`modal_event`) ; la liste des polices la
-    /// fait défiler, le nuancier l'avale (`edit_popup_wheel`). Un futur menu
-    /// contextuel, ou la liste déroulante d'un champ de formulaire, se
-    /// branchera ici.
+    /// fait défiler, le nuancier l'avale (`edit_popup_wheel`). Le menu du
+    /// clic droit se referme à la molette, avant d'arriver ici
+    /// (`context_menu_event`). La liste déroulante d'un champ de formulaire
+    /// se branchera ici.
     fn overlay_wheel(&mut self, delta: f32) -> bool {
         if let Some(p) = &mut self.palette {
             p.wheel(delta);
@@ -2560,7 +2583,7 @@ impl Viewer {
     fn duplicate_current(&mut self) {
         let Some(l) = &self.loaded else { return };
         let count = l.pages.len();
-        let page = self.current_page();
+        let page = self.target_page();
         let mut order: Vec<usize> = (0..count).collect();
         if page >= count {
             return;
@@ -2584,7 +2607,7 @@ impl Viewer {
             return;
         }
         let Some(l) = &self.loaded else { return };
-        let page = self.current_page();
+        let page = self.target_page();
         let stem = l.path.file_stem().map_or_else(
             || "document".to_string(),
             |s| s.to_string_lossy().into_owned(),
@@ -2690,10 +2713,7 @@ impl Viewer {
             return None;
         }
         let (mx, my) = self.last_mouse?;
-        let index = self
-            .recent_hits
-            .iter()
-            .position(|&(x, y, w, h)| mx >= x && mx < x + w && my >= y && my < y + h)?;
+        let index = self.recent_at(mx, my)?;
         let path = self.prefs.recent.get(index)?;
         let (x, y, w, h) = self.recent_hits[index];
         // Taille et date, sans le dossier : le chemin le dit déjà.
@@ -3892,7 +3912,9 @@ impl Viewer {
             Command::Home => self.show_home(window),
             Command::Settings => self.open_settings(window),
             Command::Open => {
-                if let Some(p) = window.open_file_dialog() {
+                if let Target::Recent(index) = self.command_target {
+                    self.open_recent(index, window);
+                } else if let Some(p) = window.open_file_dialog() {
                     self.open(&p, window);
                 }
             }
@@ -3905,9 +3927,18 @@ impl Viewer {
             Command::Print => self.print(window),
             Command::Export => self.export(window),
             Command::CloseTab => {
-                let active = self.active_tab;
-                self.close_tab(active, window);
+                let tab = self.target_tab();
+                self.close_tab(tab, window);
             }
+            Command::CloseOtherTabs => self.close_other_tabs(),
+            Command::CopyPath => self.copy_path(window),
+            Command::RevealInFolder => self.show_in_folder(window),
+            Command::ForgetRecent => {
+                if let Target::Recent(index) = self.command_target {
+                    self.forget_recent(index);
+                }
+            }
+            Command::Properties => self.show_properties(),
             Command::NextTab => self.cycle_tab(true),
             Command::PrevPage => self.step_row(false),
             Command::NextPage => self.step_row(true),
@@ -4124,19 +4155,21 @@ impl Viewer {
         self.replay(ops, redo, window);
     }
 
-    /// Pivote la page courante.
+    /// Pivote la page courante, ou celle d'un clic droit.
     fn rotate_current(&mut self, degrees: i32) {
         if self.loaded.is_none() {
             return;
         }
-        let page = self.current_page();
+        let page = self.target_page();
         self.apply_edit(EditOp::Rotate {
             pages: vec![page],
             degrees,
         });
     }
 
-    /// Supprime la page courante après confirmation.
+    /// Supprime la page courante, ou celle d'un clic droit, après
+    /// confirmation. La page est retenue dans la question : la réponse, qui
+    /// arrive plus tard, supprime bien celle qui était visée.
     fn delete_current(&mut self) {
         let Some(l) = &self.loaded else { return };
         if l.pages.len() <= 1 {
@@ -4150,7 +4183,7 @@ impl Viewer {
         if !self.require_right(crate::render_worker::Right::Assemble) {
             return;
         }
-        let page = self.current_page();
+        let page = self.target_page();
         self.confirm(
             &format!("Supprimer la page {} ?", page + 1),
             "La page sera retirée du document. Ctrl+Z la rétablit ; Ctrl+S enregistre.",
@@ -4745,6 +4778,20 @@ impl Viewer {
     /// Nombre d'onglets ouverts.
     fn tab_count(&self) -> usize {
         self.others.len() + usize::from(self.loaded.is_some())
+    }
+
+    /// Document de l'onglet `index`, qu'il soit actif ou non. L'onglet actif
+    /// n'est pas dans `others` : les suivants y sont décalés d'un rang.
+    fn tab_doc(&self, index: usize) -> Option<&Loaded> {
+        if index == self.active_tab {
+            return self.loaded.as_ref();
+        }
+        let at = if index > self.active_tab {
+            index - 1
+        } else {
+            index
+        };
+        self.others.get(at)
     }
 
     /// Titres des onglets, dans l'ordre d'affichage.
@@ -6855,9 +6902,15 @@ impl Viewer {
             self.swallow_space = false;
         }
         let pressing = matches!(event, Event::Key(Key::Space, _)) && !self.modal_typing();
+        // Le menu du clic droit ne survit pas à une carte modale ouverte
+        // par-dessus (une question arrivée d'un autre fil, par exemple).
+        if self.context_menu.is_some() && self.menu_blocked() {
+            self.context_menu = None;
+        }
         if self.dialog_event(&event, window)
             || self.protect_event(&event, window)
             || self.modal_event(&event, window)
+            || self.context_menu_event(&event, window)
         {
             self.swallow_space = pressing;
             if self.title_dirty {
@@ -7196,6 +7249,7 @@ impl Viewer {
                         'i' | 'I' => self.insert_pages(window),
                         'c' | 'C' => self.copy_selection(window),
                         'a' | 'A' => self.select_all(),
+                        'd' | 'D' | '\u{4}' => self.show_properties(),
                         'f' | 'F' | '\u{6}' => self.open_search(),
                         // Ctrl+G : le champ de page prend le focus, prêt à
                         // recevoir un numéro ou une étiquette.
@@ -7788,6 +7842,7 @@ impl Viewer {
         self.paint_prompt(frame);
         self.paint_settings(frame);
         self.paint_palette(frame);
+        self.paint_context_menu(frame);
         self.paint_dialog(frame);
         dump_frame(frame);
     }
@@ -7914,12 +7969,7 @@ fn describe_file(path: &Path) -> String {
     let Ok(meta) = std::fs::metadata(path) else {
         return dir;
     };
-    let size = meta.len();
-    let human = if size >= 1_048_576 {
-        format!("{:.1} Mo", size as f64 / 1_048_576.0)
-    } else {
-        format!("{} Ko", (size / 1024).max(1))
-    };
+    let human = context::size_text(meta.len(), lang::english());
     let day = meta
         .modified()
         .ok()

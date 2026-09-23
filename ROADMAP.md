@@ -273,7 +273,14 @@ Livrable : version 0.2, parité avec Acrobat Standard hors édition de texte.
 - [x] **Français et anglais** (`acrux-app/src/ui/lang.rs`) : langue du système détectée au premier
   lancement, réglable dans « Paramètres ». À faire : compléter la table (messages d'erreur,
   panneaux), et d'autres langues.
-- [ ] Menus classiques, info-bulles détaillées, personnalisation de la colonne d'outils.
+- [~] **Menus contextuels** (clic droit, touche « menu », Maj+F10 ; `ui/menu.rs`, `viewer/context.rs`) :
+  page, vignette, onglet et document récent de l'accueil, chaque élément relié à une commande de
+  la palette avec sa **cible** (la page de la vignette, l'onglet du clic) ; clavier, initiales,
+  éléments grisés, appuyer-glisser-relâcher, carte recalée dans la fenêtre. Propriétés du
+  document (Ctrl+D), fermer les autres onglets, copier le chemin, ouvrir le dossier du fichier,
+  retirer un document récent. À faire : menus des commentaires, des champs de formulaire et du
+  mode « Modifier le PDF », plusieurs vignettes à la fois ; info-bulles détaillées,
+  personnalisation de la colonne d'outils.
 
 ## Phase 5 — Édition de niveau Acrobat (le cœur du « mieux qu'Acrobat »)
 - [x] Reconstruction de paragraphes depuis le contenu, détection des colonnes et des styles (`acrux-features/text/` : blocs, paragraphes avec alignement, retrait et interligne, césures réparées, colonnes par découpe XY, en-têtes et pieds de page, listes, titres, tableaux à filets ou à colonnes alignées, styles gras / italique / couleur au glyphe près ; sorties `to_plain`, `to_markdown`, `to_html`, `to_layout`, `acr text --markdown|--html|--layout`) ; reste : ordre de lecture depuis le balisage (`/StructTreeRoot`), tableaux à cellules fusionnées, texte vertical CJK

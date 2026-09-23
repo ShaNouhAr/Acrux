@@ -13,6 +13,7 @@
 //! | `text`    | rendu de texte d'interface avec une police système    |
 //! | `theme`   | couleurs et dimensions                                |
 //! | `lang`    | langue de l'interface : français ou anglais           |
+//! | `menu`    | menu contextuel du clic droit : éléments, raccourcis, clavier |
 //! | `modal`   | modèle commun des cartes modales : carte, fondu, rangée de boutons, invite |
 //! | `input`   | champ de saisie sur une ligne                         |
 //! | `icons`   | icônes vectorielles rasterisées à la demande          |
@@ -31,7 +32,7 @@
 //! | `tools`   | barre latérale des outils, à droite                   |
 //! | `video`   | image de vidéo composée dans la page, barre de commandes |
 //!
-//! À venir : menus, info-bulles détaillées.
+//! À venir : info-bulles détaillées.
 
 pub mod anim;
 pub mod controls;
@@ -41,6 +42,7 @@ pub mod editpdf;
 pub mod icons;
 pub mod input;
 pub mod lang;
+pub mod menu;
 pub mod modal;
 pub mod modebar;
 pub mod objects;

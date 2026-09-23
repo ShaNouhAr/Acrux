@@ -77,6 +77,9 @@ pub enum Key {
     Space,
     /// Touche de fonction F1..F12.
     F(u8),
+    /// Touche « menu contextuel » du clavier, entre AltGr et Ctrl droit :
+    /// elle ouvre le menu du clic droit là où l'on travaille.
+    ContextMenu,
     /// Autre touche (code virtuel de la plateforme).
     Other(u32),
 }
@@ -382,6 +385,12 @@ pub trait WindowHandle {
     /// Ouvre une adresse `http(s)`/`mailto` dans l'application par défaut.
     /// Les autres schémas sont refusés par la plateforme.
     fn open_url(&mut self, url: &str);
+    /// Montre un fichier dans le gestionnaire de fichiers du système, son
+    /// dossier ouvert et le fichier sélectionné (son dossier seul, s'il
+    /// n'existe plus). Rien n'est exécuté : c'est le dossier qui s'ouvre.
+    fn reveal_in_folder(&mut self, path: &std::path::Path) {
+        let _ = path;
+    }
     /// Dialogue d'impression puis impression des pages choisies, chaque page
     /// ajustée à la zone imprimable en conservant ses proportions.
     fn print(&mut self, title: &str, source: &mut dyn PrintSource) -> PrintOutcome;

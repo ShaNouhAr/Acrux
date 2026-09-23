@@ -841,6 +841,26 @@ impl Panel {
         }
     }
 
+    /// Vignette sous un point du panneau, s'il y en a une : c'est ce que
+    /// vise un clic droit, qui ouvre le menu de la page.
+    #[must_use]
+    pub fn page_at(&self, x: i32, y: i32) -> Option<usize> {
+        match self.hit_at(x, y) {
+            Some(Hit::Page(p)) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Rectangle de la vignette d'une page au dernier dessin, si elle est
+    /// visible : le menu ouvert au clavier se pose dessus.
+    #[must_use]
+    pub fn page_rect(&self, page: usize) -> Option<(i32, i32, i32, i32)> {
+        self.hits
+            .iter()
+            .find(|(_, hit)| *hit == Hit::Page(page))
+            .map(|(rect, _)| *rect)
+    }
+
     /// Active la ligne sous le focus (Entrée ou Espace).
     pub fn activate_focus(&mut self, content: &PanelContent<'_>) -> PanelAction {
         match self.focus {
@@ -1257,5 +1277,22 @@ mod tests {
         assert!(p.mouse_move(50, 100, false));
         assert!(!p.mouse_move(51, 101, false));
         assert!(p.mouse_leave());
+    }
+
+    #[test]
+    fn le_clic_droit_vise_une_vignette() {
+        let mut p = Panel::new();
+        p.hits
+            .push(((0, 0, 100, 30), Hit::Tab(PanelTab::Bookmarks)));
+        p.hits.push(((0, 40, 200, 160), Hit::Page(3)));
+        assert_eq!(p.page_at(50, 100), Some(3));
+        assert_eq!(
+            p.page_at(50, 10),
+            None,
+            "un onglet du panneau n'est pas une page"
+        );
+        assert_eq!(p.page_at(50, 300), None);
+        assert_eq!(p.page_rect(3), Some((0, 40, 200, 160)));
+        assert_eq!(p.page_rect(4), None, "vignette hors de la vue");
     }
 }

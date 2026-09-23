@@ -148,6 +148,18 @@ pub enum Command {
     Protect,
     /// Retirer la protection d'un document chiffré.
     Unprotect,
+    /// Propriétés du document : fichier, taille, métadonnées, protection.
+    Properties,
+    /// Fermer tous les onglets sauf un.
+    CloseOtherTabs,
+    /// Copier le chemin du fichier dans le presse-papiers.
+    CopyPath,
+    /// Montrer le fichier dans l'Explorateur.
+    RevealInFolder,
+    /// Retirer un document de la liste des récents (le fichier n'est pas
+    /// touché). Absente de la palette : elle ne vaut que pour un document
+    /// visé, depuis le menu d'une carte de l'accueil.
+    ForgetRecent,
 }
 
 impl Command {
@@ -214,6 +226,11 @@ impl Command {
             Command::ApplyRedactions => "apply-redactions",
             Command::Protect => "protect",
             Command::Unprotect => "unprotect",
+            Command::Properties => "properties",
+            Command::CloseOtherTabs => "close-other-tabs",
+            Command::CopyPath => "copy-path",
+            Command::RevealInFolder => "reveal-in-folder",
+            Command::ForgetRecent => "forget-recent",
         }
     }
 
@@ -555,6 +572,27 @@ const ENTRIES: &[Entry] = &[
         needs_document: true,
     },
     Entry {
+        label: "Fermer les autres onglets",
+        shortcut: "",
+        keywords: "quitter fermeture documents garder seul",
+        command: Command::CloseOtherTabs,
+        needs_document: true,
+    },
+    Entry {
+        label: "Copier le chemin du fichier",
+        shortcut: "",
+        keywords: "emplacement adresse chemin presse papiers",
+        command: Command::CopyPath,
+        needs_document: true,
+    },
+    Entry {
+        label: "Ouvrir le dossier du fichier",
+        shortcut: "",
+        keywords: "explorateur emplacement montrer afficher repertoire",
+        command: Command::RevealInFolder,
+        needs_document: true,
+    },
+    Entry {
         label: "Pivoter la page à droite",
         shortcut: "R",
         keywords: "rotation tourner orientation horaire pivotement",
@@ -615,6 +653,13 @@ const ENTRIES: &[Entry] = &[
         shortcut: "Maj+M",
         keywords: "caviarder censurer expurger definitif confidentiel",
         command: Command::ApplyRedactions,
+        needs_document: true,
+    },
+    Entry {
+        label: "Propriétés du document",
+        shortcut: "Ctrl+D",
+        keywords: "proprietes infos informations metadonnees auteur titre version taille",
+        command: Command::Properties,
         needs_document: true,
     },
     Entry {
@@ -697,8 +742,9 @@ fn inside(r: Rect, x: i32, y: i32) -> bool {
 /// Un caractère donne toujours **un** caractère — `to_lowercase` peut en
 /// rendre plusieurs (« İ »), on garde le premier : le rang d'une lettre
 /// trouvée dans le texte plié reste ainsi celui de la lettre affichée, et
-/// c'est lui que le dessin met en évidence.
-fn fold_char(c: char) -> char {
+/// c'est lui que le dessin met en évidence. Les menus contextuels s'en
+/// servent aussi, pour choisir un élément à son initiale.
+pub(crate) fn fold_char(c: char) -> char {
     match c.to_lowercase().next().unwrap_or(c) {
         'à' | 'á' | 'â' | 'ä' | 'ã' => 'a',
         'é' | 'è' | 'ê' | 'ë' => 'e',
@@ -1865,5 +1911,29 @@ mod tests {
         assert_eq!(p.current(), None);
         let (cmd, close) = p.key(Key::Enter, plain());
         assert_eq!((cmd, close), (None, true));
+    }
+
+    #[test]
+    fn les_commandes_des_menus_contextuels_se_trouvent_aussi_ici() {
+        assert_eq!(top("propr"), Some(Command::Properties));
+        assert_eq!(top("metadonnees"), Some(Command::Properties));
+        assert_eq!(top("dossier"), Some(Command::RevealInFolder));
+        assert_eq!(top("chemin"), Some(Command::CopyPath));
+        assert_eq!(top("autres onglets"), Some(Command::CloseOtherTabs));
+        let properties = ENTRIES
+            .iter()
+            .find(|e| e.command == Command::Properties)
+            .map(|e| (e.label, e.shortcut));
+        assert_eq!(properties, Some(("Propriétés du document", "Ctrl+D")));
+    }
+
+    #[test]
+    fn retirer_un_recent_ne_se_lance_pas_depuis_la_palette() {
+        // Elle vise une carte précise de l'accueil : sans cible, elle n'a
+        // pas de sens, et la palette ne la propose donc pas.
+        assert!(!ENTRIES.iter().any(|e| e.command == Command::ForgetRecent));
+        assert_eq!(Command::from_key(Command::ForgetRecent.key()), None);
+        let all = commands(&palette());
+        assert!(!all.contains(&Command::ForgetRecent));
     }
 }

@@ -110,6 +110,31 @@ function Click($x, $y) {
     Start-Sleep -Milliseconds 500
 }
 
+# Clic droit en (x, y) : survol, appui, relachement, comme la vraie souris.
+# Le menu contextuel s'ouvre a l'appui ; le relachement sur place ne choisit
+# rien (il faut bouger, ou cliquer un element).
+function RightClick($x, $y) {
+    [W.HL]::PostMessage($script:Hwnd, 0x0200, [IntPtr]0, (LParam $x $y)) | Out-Null
+    Start-Sleep -Milliseconds 100
+    [W.HL]::PostMessage($script:Hwnd, 0x0204, [IntPtr]2, (LParam $x $y)) | Out-Null
+    Start-Sleep -Milliseconds 100
+    [W.HL]::PostMessage($script:Hwnd, 0x0205, [IntPtr]0, (LParam $x $y)) | Out-Null
+    Start-Sleep -Milliseconds 500
+}
+
+# Maj+F10 : l'autre facon d'ouvrir le menu contextuel au clavier (la touche
+# << menu >> du clavier est Key 0x5D). F10 est une touche systeme : elle
+# arrive en WM_SYSKEYDOWN, pas en WM_KEYDOWN.
+function ShiftF10 {
+    [W.HL]::PostMessage($script:Hwnd, 0x0100, [IntPtr]0x10, [IntPtr]1) | Out-Null
+    Start-Sleep -Milliseconds 60
+    [W.HL]::PostMessage($script:Hwnd, 0x0104, [IntPtr]0x79, [IntPtr]1) | Out-Null
+    Start-Sleep -Milliseconds 90
+    [W.HL]::PostMessage($script:Hwnd, 0x0105, [IntPtr]0x79, $script:KeyUp) | Out-Null
+    [W.HL]::PostMessage($script:Hwnd, 0x0101, [IntPtr]0x10, $script:KeyUp) | Out-Null
+    Start-Sleep -Milliseconds 350
+}
+
 # Survol seul : le pointeur se pose en (x, y) sans rien cliquer. Sert a voir
 # l'etat survole d'un bouton, ou a placer la souris avant une touche (la note
 # se pose la ou est le pointeur).

@@ -187,6 +187,13 @@ impl Tabs {
         changed
     }
 
+    /// Onglet sous un point, croix comprise : c'est ce que vise un clic
+    /// droit, qui ouvre le menu de l'onglet.
+    #[must_use]
+    pub fn tab_at(&self, x: i32, y: i32) -> Option<usize> {
+        Self::at(&self.hits, x, y)
+    }
+
     /// Clic : la croix l'emporte sur l'onglet.
     #[must_use]
     pub fn mouse_down(&self, x: i32, y: i32) -> TabAction {
@@ -218,6 +225,14 @@ mod tests {
         assert_eq!(t.mouse_down(186, 14), TabAction::Close(1));
         assert_eq!(t.mouse_down(500, 14), TabAction::None);
         assert_eq!(t.mouse_down(20, 90), TabAction::None);
+    }
+
+    #[test]
+    fn le_clic_droit_vise_l_onglet_croix_comprise() {
+        let t = placed();
+        assert_eq!(t.tab_at(20, 14), Some(0));
+        assert_eq!(t.tab_at(186, 14), Some(1), "sur la croix, c'est l'onglet");
+        assert_eq!(t.tab_at(500, 14), None);
     }
 
     #[test]

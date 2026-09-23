@@ -21,7 +21,7 @@
 
 use std::ffi::c_void;
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
 
 use crate::ui::cursors::{self, Shape};
@@ -269,6 +269,8 @@ const WM_NCDESTROY: UINT = 0x0082;
 const WM_KEYDOWN: UINT = 0x0100;
 const WM_KEYUP: UINT = 0x0101;
 const WM_CHAR: UINT = 0x0102;
+const WM_SYSKEYDOWN: UINT = 0x0104;
+const WM_SYSKEYUP: UINT = 0x0105;
 const WM_MOUSEMOVE: UINT = 0x0200;
 const WM_LBUTTONDOWN: UINT = 0x0201;
 const WM_LBUTTONUP: UINT = 0x0202;
@@ -583,6 +585,37 @@ fn open_url(hwnd: HWND, url: &str) {
     }
 }
 
+/// Ouvre l'Explorateur sur le dossier d'un fichier, le fichier sélectionné.
+///
+/// `explorer.exe /select,"chemin"` est la seule forme qu'il comprenne, et il
+/// ne lit pas un argument cité en entier : la ligne de commande est donc
+/// passée telle quelle (`raw_arg`), sans passer par un interpréteur. Un
+/// chemin ne contient jamais de guillemet sous Windows ; on le refuse quand
+/// même, pour que rien ne puisse sortir de l'argument. L'Explorateur est pris
+/// dans le dossier du système, jamais cherché dans le `PATH`.
+fn reveal_in_folder(path: &Path) {
+    use std::os::windows::process::CommandExt;
+    let text = path.display().to_string();
+    if text.contains('"') {
+        return;
+    }
+    let explorer = std::env::var_os("SystemRoot")
+        .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from)
+        .join("explorer.exe");
+    let argument = if path.exists() {
+        format!("/select,\"{text}\"")
+    } else if let Some(dir) = path.parent().filter(|d| d.is_dir()) {
+        format!("\"{}\"", dir.display())
+    } else {
+        return;
+    };
+    // Un échec (Explorateur absent, session sans bureau) n'a rien à dire de
+    // plus que l'absence de fenêtre.
+    let _ = std::process::Command::new(explorer)
+        .raw_arg(argument)
+        .spawn();
+}
+
 /// Journal de débogage partagé avec le visualiseur (`ACRUX_LOG`) : une ligne
 /// par WM_PAINT avec la couleur d'un pixel relue dans le DC, pour distinguer
 /// un défaut de peinture d'un défaut de présentation (DWM, capture).
@@ -656,6 +689,8 @@ struct WindowStateActions {
     cursor: Option<Cursor>,
     clipboard: Option<String>,
     url: Option<String>,
+    /// Fichier à montrer dans l'Explorateur.
+    reveal: Option<PathBuf>,
     fullscreen: Option<bool>,
     frame_theme: Option<FrameTheme>,
 }
@@ -772,6 +807,10 @@ impl WindowHandle for Handle<'_> {
 
     fn open_url(&mut self, url: &str) {
         self.state.url = Some(url.to_string());
+    }
+
+    fn reveal_in_folder(&mut self, path: &Path) {
+        self.state.reveal = Some(path.to_path_buf());
     }
 
     fn print(&mut self, title: &str, source: &mut dyn PrintSource) -> PrintOutcome {
@@ -1214,6 +1253,8 @@ fn key_from_vk(vk: u32) -> Key {
         0x09 => Key::Tab,
         0x20 => Key::Space,
         0x70..=0x7B => Key::F((vk - 0x70 + 1) as u8),
+        // VK_APPS : la touche « menu » du clavier.
+        0x5D => Key::ContextMenu,
         other => Key::Other(other),
     }
 }
@@ -1269,7 +1310,21 @@ fn deliver(state: &mut WindowState, event: Event) {
         }
     }
     if let Some(u) = actions.url {
-        open_url(state.hwnd, &u);
+        if state.headless {
+            // Un essai qui suit un lien n'ouvre pas le navigateur de la
+            // personne qui travaille : le journal dit l'adresse visée.
+            debug_log(&format!("adresse : {u}"));
+        } else {
+            open_url(state.hwnd, &u);
+        }
+    }
+    if let Some(path) = actions.reveal {
+        if state.headless {
+            // Pas d'Explorateur qui surgit pendant un essai invisible.
+            debug_log(&format!("dossier : {}", path.display()));
+        } else {
+            reveal_in_folder(&path);
+        }
     }
     if let Some((dark, caption, text)) = actions.frame_theme {
         apply_frame_theme(state.hwnd, dark, caption, text);
@@ -1541,6 +1596,17 @@ fn handle_message(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRES
             note_simulated(wparam as u32, false);
             0
         }
+        // F10 est une touche « système » : Windows l'envoie à part, pour
+        // activer la barre de menus. Maj+F10 est l'autre façon d'ouvrir le
+        // menu du clic droit au clavier ; elle est livrée comme une touche
+        // ordinaire. Tout le reste (Alt+F4, Alt seul…) suit son cours.
+        WM_SYSKEYDOWN if wparam == 0x79 && modifiers().shift => {
+            deliver(state, Event::Key(Key::F(10), modifiers()));
+            0
+        }
+        // Son relâchement ne doit pas, lui non plus, activer la barre de
+        // menus que cette fenêtre n'a pas.
+        WM_SYSKEYUP if wparam == 0x79 && modifiers().shift => 0,
         WM_CHAR => {
             // Ctrl+lettre arrive comme caractère de contrôle 1..=26 : on le
             // normalise en lettre minuscule avec le modificateur Ctrl, pour que

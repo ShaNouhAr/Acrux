@@ -91,13 +91,26 @@ impl Dialog {
         }
     }
 
-    /// Un message avec un seul bouton.
+    /// Un message d'erreur avec un seul bouton.
     #[must_use]
     pub fn alert(title: &str, message: &str) -> Self {
+        Self::single(title, message, Tone::Error)
+    }
+
+    /// Un renseignement avec un seul bouton : l'icône d'information, pas
+    /// celle d'une erreur — les propriétés d'un document ne sont pas une
+    /// mauvaise nouvelle.
+    #[must_use]
+    pub fn info(title: &str, message: &str) -> Self {
+        Self::single(title, message, Tone::Info)
+    }
+
+    /// Un message et « OK », qu'Entrée comme Échap referment.
+    fn single(title: &str, message: &str, tone: Tone) -> Self {
         Self::new(
             title,
             message,
-            Tone::Error,
+            tone,
             vec![Button {
                 label: crate::ui::lang::tr("OK").into(),
                 primary: true,

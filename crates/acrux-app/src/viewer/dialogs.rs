@@ -81,6 +81,16 @@ impl Viewer {
         });
     }
 
+    /// Affiche un renseignement (les propriétés du document, par exemple).
+    pub(super) fn inform(&mut self, title: &str, message: &str) {
+        log_line(&format!("information : {title} — {message}"));
+        self.ask(Asking {
+            dialog: Dialog::info(title, message),
+            kind: Kind::Alert,
+            then: Then::Nothing,
+        });
+    }
+
     /// Pose une question à plusieurs réponses ; le dernier bouton annule.
     pub(super) fn push_choice(&mut self, title: &str, message: &str, labels: &[&str], then: Then) {
         self.ask(Asking {
@@ -110,16 +120,7 @@ impl Viewer {
         // Ce qui est tapé n'est pas encore au document : sans cela, on
         // fermerait un onglet réputé intact en perdant la saisie.
         self.close_active();
-        let modified = if index == self.active_tab {
-            self.loaded.as_ref().is_some_and(|l| l.modified)
-        } else {
-            let at = if index > self.active_tab {
-                index - 1
-            } else {
-                index
-            };
-            self.others.get(at).is_some_and(|l| l.modified)
-        };
+        let modified = self.tab_doc(index).is_some_and(|l| l.modified);
         if !modified {
             self.close_tab_now(index);
             return;

@@ -56,6 +56,20 @@ Les coordonnées se donnent **comme on les lit sur la capture** : le harnais cal
 entre le tampon dessiné et les coordonnées des messages de souris (la fenêtre n'étant jamais
 montrée, les deux diffèrent quand l'écran n'est pas à 100 %).
 
+Le clic droit et le menu contextuel au clavier ont les leurs :
+
+```powershell
+RightClick 450 344   # clic droit (survol, appui, relâchement) : le menu s'ouvre à l'appui
+ShiftF10             # Maj+F10 ; la touche « menu » du clavier est Key 0x5D
+```
+
+Le relâchement sur place ne choisit rien, comme sous Windows : on choisit ensuite au clavier
+(`Key 0x28` puis `Key 0x0D`), par l'initiale (`Typing "c"`) ou d'un `Click` sur l'élément. En mode
+invisible, rien ne sort de la fenêtre : « Copier » et « Copier le chemin » écrivent dans le journal
+(`presse-papiers : …`) au lieu du presse-papiers, un lien suivi note `adresse : …` au lieu d'ouvrir
+le navigateur, et « Ouvrir le dossier du fichier » note `dossier : …` au lieu d'ouvrir
+l'Explorateur.
+
 La molette et Ctrl+touche ont leurs fonctions :
 
 ```powershell
