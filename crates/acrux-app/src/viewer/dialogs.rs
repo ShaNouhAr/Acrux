@@ -390,6 +390,21 @@ impl Viewer {
         true
     }
 
+    /// Vrai si la carte qui reçoit le clavier a le focus dans un champ de
+    /// saisie : la barre d'espace y écrit, elle ne presse rien. On suit
+    /// l'ordre du routage — question, « Protéger », fiche, invite.
+    pub(super) fn modal_typing(&self) -> bool {
+        if !self.dialogs.is_empty() || self.settings.is_some() {
+            return false;
+        }
+        if let Some(p) = &self.protect {
+            return p.typing();
+        }
+        self.prompt
+            .as_ref()
+            .is_some_and(|p| p.card.focus == crate::ui::modal::PromptFocus::Field)
+    }
+
     /// La fiche « Paramètres » : même routage que l'invite.
     fn settings_event(&mut self, event: &Event, window: &mut dyn WindowHandle) -> bool {
         let state = Self::settings_state(

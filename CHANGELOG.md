@@ -113,6 +113,13 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 - Les titres et libellés des invites, et la question « Enregistrer les
   modifications ? » à la fermeture d'un onglet, suivent la langue de
   l'interface.
+- La barre d'espace qui presse le bouton d'une carte ne va plus, ensuite, au
+  document : valider à l'espace l'invite d'un champ de formulaire la rouvrait
+  aussitôt, l'espace réactivant le champ qui avait le focus. La fiche
+  « Paramètres » garde aussi la même hauteur quand on change la recherche des
+  mises à jour, au lieu de sauter de quelques pixels sous le pointeur. Le
+  harnais invisible relâche ses touches comme le vrai clavier : il tapait deux
+  espaces pour une barre d'espace.
 
 - **Les lignes à remplir se reconnaissent** — « Nom : ____________ ». Dans
   « Remplir et signer » (et là seulement), la place du texte s'encadre

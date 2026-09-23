@@ -254,6 +254,13 @@ impl ProtectDialog {
         self.appear.animating()
     }
 
+    /// Vrai si le focus est dans un champ : la barre d'espace y écrit une
+    /// espace, au lieu de presser ou de cocher.
+    #[must_use]
+    pub fn typing(&self) -> bool {
+        matches!(self.focus, Target::Field(_))
+    }
+
     /// Titre de la fenêtre, en français (traduit au dessin).
     #[must_use]
     pub fn title(&self) -> &'static str {
@@ -1075,6 +1082,14 @@ mod tests {
         assert_eq!(d.title(), "Changer la protection");
         let d = ProtectDialog::from_current(Permissions::all(), false);
         assert!(d.require_open && d.permissions().is_all());
+    }
+
+    #[test]
+    fn space_types_only_in_a_field() {
+        let mut d = ProtectDialog::new();
+        assert!(d.typing(), "au départ, le mot de passe d'ouverture");
+        d.focus = Target::Cancel;
+        assert!(!d.typing(), "sur un bouton, l'espace le presse");
     }
 
     #[test]

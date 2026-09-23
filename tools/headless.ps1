@@ -75,10 +75,15 @@ function LParam($x, $y) {
     [IntPtr](($sy -shl 16) -bor ($sx -band 0xFFFF))
 }
 
+# Le relachement porte les bits 30 et 31 de lParam (touche deja enfoncee, puis
+# relachee), comme le vrai clavier : sans eux, TranslateMessage le prend pour un
+# second appui et fabrique un second WM_CHAR (deux espaces pour une barre d'espace).
+$script:KeyUp = [IntPtr]0xC0000001L
+
 function Key($vk) {
     [W.HL]::PostMessage($script:Hwnd, 0x0100, [IntPtr]$vk, [IntPtr]1) | Out-Null
     Start-Sleep -Milliseconds 90
-    [W.HL]::PostMessage($script:Hwnd, 0x0101, [IntPtr]$vk, [IntPtr]1) | Out-Null
+    [W.HL]::PostMessage($script:Hwnd, 0x0101, [IntPtr]$vk, $script:KeyUp) | Out-Null
     Start-Sleep -Milliseconds 350
 }
 
@@ -140,7 +145,7 @@ function Chord($letter, [switch]$Shift) {
     $code = [int][char]$letter.ToUpper() - 64
     [W.HL]::PostMessage($script:Hwnd, 0x0102, [IntPtr]$code, [IntPtr]1) | Out-Null
     Start-Sleep -Milliseconds 120
-    if ($Shift) { [W.HL]::PostMessage($script:Hwnd, 0x0101, [IntPtr]0x10, [IntPtr]1) | Out-Null }
-    [W.HL]::PostMessage($script:Hwnd, 0x0101, [IntPtr]0x11, [IntPtr]1) | Out-Null
+    if ($Shift) { [W.HL]::PostMessage($script:Hwnd, 0x0101, [IntPtr]0x10, $script:KeyUp) | Out-Null }
+    [W.HL]::PostMessage($script:Hwnd, 0x0101, [IntPtr]0x11, $script:KeyUp) | Out-Null
     Start-Sleep -Milliseconds 400
 }

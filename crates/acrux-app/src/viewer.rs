@@ -702,6 +702,9 @@ pub struct Viewer {
     three_d: Option<three_d::Active3d>,
     /// Fiche « Paramètres », ouverte par-dessus tout.
     settings: Option<SettingsSheet>,
+    /// La barre d'espace vient de presser un bouton de carte : le caractère
+    /// qu'elle envoie ensuite n'est plus à personne (voir `handle_event`).
+    swallow_space: bool,
     /// Issue de la dernière recherche de mise à jour : `Ok` si Acrux est à
     /// jour, l'erreur sinon (une version trouvée va dans `update_found`).
     update_outcome: Option<Result<(), String>>,
@@ -1026,7 +1029,6 @@ fn paint_search_card(
 }
 
 impl Viewer {
-    /// Nouveau visualiseurimpl Viewer {
     /// Nouveau visualiseur, avec les fichiers à ouvrir au démarrage (un
     /// onglet chacun).
     #[must_use]
@@ -1089,6 +1091,7 @@ impl Viewer {
             media: None,
             three_d: None,
             settings: None,
+            swallow_space: false,
             update_outcome: None,
             update_rx: None,
             update_found: None,
@@ -6785,10 +6788,27 @@ impl Viewer {
             self.apply_frame_theme(window);
         }
         log_event(&event);
+        // Windows envoie la barre d'espace deux fois : en touche, qui presse
+        // le bouton d'une carte, puis en caractère. Ce caractère n'a plus de
+        // destinataire — la carte est souvent fermée — et irait au document,
+        // où l'espace active le champ de formulaire qui a le focus : valider
+        // à l'espace l'invite d'un champ la rouvrait aussitôt. Il est donc
+        // écarté, sauf quand la touche arrivait dans un champ de saisie, où
+        // c'est une espace à écrire.
+        if let Event::Char(c, _) = event {
+            if std::mem::take(&mut self.swallow_space) && c == ' ' {
+                return;
+            }
+        }
+        if matches!(event, Event::Key(..)) {
+            self.swallow_space = false;
+        }
+        let pressing = matches!(event, Event::Key(Key::Space, _)) && !self.modal_typing();
         if self.dialog_event(&event, window)
             || self.protect_event(&event, window)
             || self.modal_event(&event, window)
         {
+            self.swallow_space = pressing;
             if self.title_dirty {
                 self.update_title(window);
             }
@@ -6993,12 +7013,15 @@ impl Viewer {
                 window.request_redraw();
             }
             // Sur un bouton de la carte, Entrée et Espace le pressent.
-            Event::Key(Key::Enter | Key::Space, _)
+            Event::Key(key @ (Key::Enter | Key::Space), _)
                 if self
                     .search
                     .as_ref()
                     .is_some_and(|s| matches!(s.focus, SearchFocus::Button(_))) =>
             {
+                // Le caractère de l'espace ne doit pas finir dans le champ
+                // qui reprendrait le focus une fois tout remplacé.
+                self.swallow_space = key == Key::Space;
                 if self.search.as_ref().map(|s| s.focus) == Some(SearchFocus::Button(0)) {
                     log_line("recherche : remplacer (clavier)");
                     self.replace_current();

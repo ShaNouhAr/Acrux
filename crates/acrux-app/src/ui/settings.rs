@@ -351,12 +351,21 @@ impl SettingsSheet {
         let footer_h = s(modal::BUTTON_H);
         // Ce que fait la recherche automatique, dit une fois pour toutes :
         // qu'Acrux contacte le réseau, et que rien ne s'installe sans accord.
+        let on_hint = tr("Acrux cherche une version plus récente au démarrage, au plus une fois par jour. Rien n'est installé sans votre accord.");
+        let off_hint =
+            tr("La recherche automatique est désactivée : Acrux ne contacte rien au démarrage.");
         let hint = if state.auto_updates {
-            tr("Acrux cherche une version plus récente au démarrage, au plus une fois par jour. Rien n'est installé sans votre accord.")
+            on_hint
         } else {
-            tr("La recherche automatique est désactivée : Acrux ne contacte rien au démarrage.")
+            off_hint
         };
         let hint_lines = modal::wrap(text, small, hint, inner as f32);
+        // La place réservée est celle de la plus longue des deux : sans cela,
+        // la fiche changeait de hauteur au clic sur « Jamais », et tout ce
+        // qu'elle contient sautait de quelques pixels sous le pointeur.
+        let hint_rows = modal::wrap(text, small, on_hint, inner as f32)
+            .len()
+            .max(modal::wrap(text, small, off_hint, inner as f32).len());
         let hint_h = (small * 1.45) as i32;
         // Trois sections (intitulé et groupe), ce que fait la recherche,
         // son état et ses boutons, puis le pied.
@@ -366,7 +375,7 @@ impl SettingsSheet {
             + 3 * (caption_h + seg_h)
             + 2 * section_gap
             + s(8.0)
-            + hint_h * hint_lines.len() as i32
+            + hint_h * hint_rows as i32
             + s(6.0)
             + line_h
             + s(6.0)
@@ -441,12 +450,12 @@ impl SettingsSheet {
             Stop::Auto,
         );
         cy += s(8.0);
-        for line in &hint_lines {
-            let baseline = (cy + hint_h) as f32 - (hint_h as f32 - text.ascent(small)) / 2.0;
+        for (i, line) in hint_lines.iter().enumerate() {
+            let top = cy + hint_h * i as i32;
+            let baseline = (top + hint_h) as f32 - (hint_h as f32 - text.ascent(small)) / 2.0;
             text.draw(frame, left as f32, baseline, small, line, theme.text_dim);
-            cy += hint_h;
         }
-        cy += s(6.0);
+        cy += hint_h * hint_rows as i32 + s(6.0);
 
         // L'état de la recherche : la version installée, puis ce qu'on sait.
         let installed = trf("Version installée : {}.", &[state.version]);
