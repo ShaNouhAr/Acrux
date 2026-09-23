@@ -203,17 +203,73 @@ impl TextRenderer {
     ) -> f32 {
         let mut pen = x;
         for c in text.chars() {
-            let gid = self.gid(c);
-            let Some(g) = self.glyph(gid, size_px) else {
-                continue;
+            pen = self.draw_char(frame, pen, baseline_y, size_px, c, color);
+        }
+        pen
+    }
+
+    /// Dessine un caractère à la plume `pen` et rend la plume avancée.
+    fn draw_char(
+        &mut self,
+        frame: &mut Frame<'_>,
+        pen: f32,
+        baseline_y: f32,
+        size_px: f32,
+        c: char,
+        color: (u8, u8, u8),
+    ) -> f32 {
+        let gid = self.gid(c);
+        let Some(g) = self.glyph(gid, size_px) else {
+            return pen;
+        };
+        let (gx, gy) = (
+            (pen.round() as i32) + g.left,
+            (baseline_y.round() as i32) + g.top,
+        );
+        blend_coverage(frame, gx, gy, g.width, g.height, &g.coverage, color);
+        pen + g.advance
+    }
+
+    /// Comme [`TextRenderer::draw_clipped`], mais les caractères dont le
+    /// rang figure dans `marks` prennent `mark_color` : ce sont les lettres
+    /// qu'une recherche a trouvées, que l'œil doit retrouver d'un coup.
+    ///
+    /// Les rangs se comptent en caractères, pas en octets (« Première » a
+    /// neuf caractères et dix octets). Le « … » d'un texte tronqué garde la
+    /// couleur ordinaire. Rien n'est alloué : c'est dessiné à chaque image.
+    pub fn draw_marked(
+        &mut self,
+        frame: &mut Frame<'_>,
+        x: f32,
+        baseline_y: f32,
+        size_px: f32,
+        text: &str,
+        color: (u8, u8, u8),
+        mark_color: (u8, u8, u8),
+        marks: &[usize],
+        max_width: f32,
+    ) -> f32 {
+        let fits = self.measure(size_px, text) <= max_width;
+        let ellipsis = if fits {
+            0.0
+        } else {
+            self.measure(size_px, "…")
+        };
+        let mut pen = x;
+        for (index, c) in text.chars().enumerate() {
+            if !fits {
+                let gid = self.gid(c);
+                let adv = self.glyph(gid, size_px).map_or(0.0, |g| g.advance);
+                if pen - x + adv + ellipsis > max_width {
+                    return self.draw_char(frame, pen, baseline_y, size_px, '…', color);
+                }
+            }
+            let tint = if marks.contains(&index) {
+                mark_color
+            } else {
+                color
             };
-            #[allow(clippy::cast_possible_truncation)]
-            let (gx, gy) = (
-                (pen.round() as i32) + g.left,
-                (baseline_y.round() as i32) + g.top,
-            );
-            blend_coverage(frame, gx, gy, g.width, g.height, &g.coverage, color);
-            pen += g.advance;
+            pen = self.draw_char(frame, pen, baseline_y, size_px, c, tint);
         }
         pen
     }
@@ -317,6 +373,51 @@ mod tests {
             16.0,
             "Un texte beaucoup trop long pour tenir",
             (255, 255, 255),
+            60.0,
+        );
+        assert!(clipped <= 62.0, "{clipped}");
+    }
+
+    #[test]
+    fn draw_marked_advances_like_draw_and_tints_only_the_marks() {
+        let Some(mut tr) = TextRenderer::system() else {
+            return; // machine sans police : rien à tester
+        };
+        let sample = "Première page";
+        let mut pixels = vec![0u8; 300 * 40 * 4];
+        let mut frame = Frame::new(300, 40, &mut pixels);
+        frame.clear(0, 0, 0);
+        let plain = tr.draw(&mut frame, 4.0, 28.0, 16.0, sample, (255, 255, 255));
+        frame.clear(0, 0, 0);
+        // Les huit premiers caractères en rouge pur, le reste en vert pur :
+        // « Première » a neuf caractères mais dix octets.
+        let marks: Vec<usize> = (0..8).collect();
+        let marked = tr.draw_marked(
+            &mut frame,
+            4.0,
+            28.0,
+            16.0,
+            sample,
+            (0, 255, 0),
+            (255, 0, 0),
+            &marks,
+            1000.0,
+        );
+        assert!((marked - plain).abs() < 0.01, "{marked} contre {plain}");
+        // Le tampon est BGRA : l'octet 2 est le rouge, l'octet 1 le vert.
+        let red = frame.pixels.chunks_exact(4).filter(|p| p[2] > 128).count();
+        let green = frame.pixels.chunks_exact(4).filter(|p| p[1] > 128).count();
+        assert!(red > 50 && green > 50, "rouge {red}, vert {green}");
+        // Tronqué, il s'arrête avant la largeur permise, « … » compris.
+        let clipped = tr.draw_marked(
+            &mut frame,
+            0.0,
+            28.0,
+            16.0,
+            "Un texte beaucoup trop long pour tenir",
+            (255, 255, 255),
+            (255, 0, 0),
+            &[0, 1],
             60.0,
         );
         assert!(clipped <= 62.0, "{clipped}");

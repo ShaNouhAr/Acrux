@@ -16,6 +16,13 @@ $sig = @'
 public struct RECT { public int Left, Top, Right, Bottom; }
 '@
 if (-not ("W.HL" -as [type])) { Add-Type -MemberDefinition $sig -Name HL -Namespace W | Out-Null }
+# Un type a part pour la molette : un type deja charge dans une session ne se
+# redefinit pas, et W.HL a pu l'etre par une version plus ancienne du harnais.
+$sig2 = @'
+[DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
+public struct POINT { public int X, Y; }
+'@
+if (-not ("W.HL2" -as [type])) { Add-Type -MemberDefinition $sig2 -Name HL2 -Namespace W | Out-Null }
 
 # Echelle entre les pixels de la capture et ceux des messages de souris.
 # En mode invisible la fenetre n'est jamais montree : elle garde la taille
@@ -124,6 +131,31 @@ function Drag($points) {
     $last = $points[$points.Length - 1]
     [W.HL]::PostMessage($script:Hwnd, 0x0202, [IntPtr]0, (LParam $last[0] $last[1])) | Out-Null
     Start-Sleep -Milliseconds 300
+}
+
+# Molette : $notches crans (negatif vers le bas) avec le pointeur en (x, y),
+# coordonnees lues sur la capture. WM_MOUSEWHEEL porte des coordonnees
+# d'ECRAN, a la difference des autres messages de souris : le harnais applique
+# l'echelle, puis convertit le point client en point d'ecran, comme le ferait
+# Windows.
+function Wheel($x, $y, $notches) {
+    $p = New-Object W.HL2+POINT
+    $p.X = [int][Math]::Round($x * $script:Scale)
+    $p.Y = [int][Math]::Round($y * $script:Scale)
+    [W.HL2]::ClientToScreen($script:Hwnd, [ref]$p) | Out-Null
+    $w = [IntPtr][int64]((([int]$notches * 120) -band 0xFFFF) * 65536)
+    $l = [IntPtr][int64]((($p.Y -band 0xFFFF) * 65536) -bor ($p.X -band 0xFFFF))
+    [W.HL]::PostMessage($script:Hwnd, 0x020A, $w, $l) | Out-Null
+    Start-Sleep -Milliseconds 350
+}
+
+# Touche avec Ctrl enfonce (Ctrl+Fin : 0x23, Ctrl+Origine : 0x24).
+function KeyCtrl($vk) {
+    [W.HL]::PostMessage($script:Hwnd, 0x0100, [IntPtr]0x11, [IntPtr]1) | Out-Null
+    Start-Sleep -Milliseconds 60
+    Key $vk
+    [W.HL]::PostMessage($script:Hwnd, 0x0101, [IntPtr]0x11, $script:KeyUp) | Out-Null
+    Start-Sleep -Milliseconds 200
 }
 
 function Shot($name) {

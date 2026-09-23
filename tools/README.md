@@ -56,6 +56,19 @@ Les coordonnées se donnent **comme on les lit sur la capture** : le harnais cal
 entre le tampon dessiné et les coordonnées des messages de souris (la fenêtre n'étant jamais
 montrée, les deux diffèrent quand l'écran n'est pas à 100 %).
 
+La molette et Ctrl+touche ont leurs fonctions :
+
+```powershell
+Wheel 815 540 -3   # trois crans vers le bas, pointeur en (815, 540)
+KeyCtrl 0x23       # Ctrl+Fin (0x24 : Ctrl+Origine)
+```
+
+`WM_MOUSEWHEEL` est le seul message de souris dont la position est en coordonnées
+**d'écran** : `Wheel` applique l'échelle puis convertit le point (`ClientToScreen`), comme le
+fait Windows, et l'application le reconvertit. Poster à la main un `WM_MOUSEWHEEL` avec des
+coordonnées client viserait donc à côté. Le journal (`Journal "Wheel"`) montre la position
+reçue, en coordonnées de la capture.
+
 Codes de touches utiles : `0x73` F4, `0x74` F5, `0x75` F6, `0x7A` F11, `0x0D` Entrée, `0x1B` Échap,
 `0x09` Tab, `0x20` Espace, `0x25` à `0x28` flèches gauche, haut, droite, bas, `0x21`/`0x22` page
 précédente et suivante, `0x24`/`0x23` Origine et Fin.

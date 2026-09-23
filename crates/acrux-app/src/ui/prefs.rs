@@ -158,6 +158,12 @@ pub const MAX_RECENT: usize = 10;
 /// dessine plus vite la bonne qu'on ne la retrouve.
 pub const MAX_SIGNATURES: usize = 3;
 
+/// Nombre de commandes de la palette retenues comme récentes.
+///
+/// Cinq : ce sont les lignes que l'on voit d'un coup d'œil en tête de la
+/// palette, avant l'ordre habituel, sans la faire défiler.
+pub const MAX_RECENT_COMMANDS: usize = 5;
+
 /// Réglages persistants.
 // Plusieurs booléens indépendants : ce sont des cases à cocher de l'interface,
 // les regrouper dans un type dédié n'apporterait rien au lecteur.
@@ -204,6 +210,11 @@ pub struct Prefs {
     pub sign_color: u8,
     /// Documents ouverts récemment, du plus récent au plus ancien.
     pub recent: Vec<PathBuf>,
+    /// Commandes lancées depuis la palette, de la plus récente à la plus
+    /// ancienne, sous leur clé stable (`toggle-theme`, `save-as`…). La
+    /// palette ignore une clé qu'elle ne connaît pas : un fichier écrit par
+    /// une version future reste lisible.
+    pub recent_commands: Vec<String>,
 }
 
 impl Default for Prefs {
@@ -227,6 +238,7 @@ impl Default for Prefs {
             sign_weight: 1,
             sign_color: 0,
             recent: Vec::new(),
+            recent_commands: Vec::new(),
         }
     }
 }
@@ -334,6 +346,13 @@ impl Prefs {
                 "recent" if !value.is_empty() && p.recent.len() < MAX_RECENT => {
                     p.recent.push(PathBuf::from(value));
                 }
+                "commande-recente"
+                    if !value.is_empty()
+                        && p.recent_commands.len() < MAX_RECENT_COMMANDS
+                        && !p.recent_commands.iter().any(|k| k == value) =>
+                {
+                    p.recent_commands.push(value.to_string());
+                }
                 _ => {}
             }
         }
@@ -371,6 +390,9 @@ impl Prefs {
         for path in self.recent.iter().take(MAX_RECENT) {
             let _ = writeln!(out, "recent={}", path.display());
         }
+        for key in self.recent_commands.iter().take(MAX_RECENT_COMMANDS) {
+            let _ = writeln!(out, "commande-recente={key}");
+        }
         out
     }
 
@@ -390,6 +412,14 @@ impl Prefs {
         self.recent.retain(|p| p != &path);
         self.recent.insert(0, path);
         self.recent.truncate(MAX_RECENT);
+    }
+
+    /// Place une commande de la palette en tête des récentes (sans doublon,
+    /// liste bornée).
+    pub fn push_recent_command(&mut self, key: &str) {
+        self.recent_commands.retain(|k| k != key);
+        self.recent_commands.insert(0, key.to_string());
+        self.recent_commands.truncate(MAX_RECENT_COMMANDS);
     }
 }
 
@@ -419,6 +449,7 @@ mod tests {
             sign_weight: 0,
             sign_color: 3,
             recent: vec![PathBuf::from(r"C:\docs\a.pdf"), PathBuf::from(r"C:\b.pdf")],
+            recent_commands: vec!["toggle-theme".into(), "print".into()],
         };
         p.push_recent(Path::new(r"C:\b.pdf"));
         assert_eq!(p.recent[0], PathBuf::from(r"C:\b.pdf"));
@@ -457,6 +488,38 @@ mod tests {
         assert_eq!(p.recent[0], PathBuf::from("C:/f14.pdf"));
         let back = Prefs::parse(&p.to_text());
         assert_eq!(back.recent.len(), MAX_RECENT);
+    }
+
+    #[test]
+    fn recent_commands_round_trip_and_are_bounded() {
+        let mut p = Prefs::default();
+        for key in [
+            "open",
+            "save",
+            "print",
+            "search",
+            "fill-sign",
+            "edit-pdf",
+            "save",
+        ] {
+            p.push_recent_command(key);
+        }
+        assert_eq!(
+            p.recent_commands,
+            ["save", "edit-pdf", "fill-sign", "search", "print"],
+            "la plus récente en tête, sans doublon, cinq au plus"
+        );
+        let back = Prefs::parse(&p.to_text());
+        assert_eq!(back.recent_commands, p.recent_commands);
+        // Une ligne vide et un doublon sont ignorés ; une clé inconnue est
+        // gardée telle quelle, c'est la palette qui l'écarte.
+        let odd = Prefs::parse(
+            "commande-recente=\n\
+             commande-recente=print\n\
+             commande-recente=print\n\
+             commande-recente=une-commande-de-demain\n",
+        );
+        assert_eq!(odd.recent_commands, ["print", "une-commande-de-demain"]);
     }
 
     #[test]

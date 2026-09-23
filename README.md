@@ -234,8 +234,13 @@ L'application graphique : `acrux.exe fichier.pdf` (ou Ctrl+O, ou déposer un fic
 
 **Ctrl+Maj+P ouvre la palette de commandes.** Elle liste tout ce que l'application sait faire
 avec le raccourci de chaque entrée, se filtre en tapant (sans accents, et « rotation » trouve
-« Pivoter la page »), et remplace la barre de menus que ce logiciel n'a pas. Le reste de cette
-section n'est donc qu'un aide-mémoire.
+« Pivoter la page »), et remplace la barre de menus que ce logiciel n'a pas. Les commandes y
+suivent l'ordre de l'usage — ouvrir, enregistrer, rechercher, imprimer, remplir et signer… —,
+précédées des cinq dernières lancées depuis la palette, retenues d'une séance à l'autre. Les
+lettres trouvées s'éclairent ; la liste défile avec la sélection (flèches, `PgUp` / `PgDn`,
+`Ctrl+Origine` / `Ctrl+Fin`, molette, ascenseur), et Entrée lance toujours la ligne que l'on voit.
+En anglais, on cherche dans les libellés anglais. Le reste de cette section n'est donc qu'un
+aide-mémoire.
 
 Barre d'outils : panneau latéral (vignettes et signets), ouvrir, page précédente / suivante,
 numéro de page (cliquer pour saisir), zoom −/+, ajuster à la largeur, disposition des pages,
@@ -249,7 +254,7 @@ dans la barre d'outils et « page iii (3 / 240) » dans la barre d'état, et sai
 | --- | --- |
 | `Ctrl+PgDn` / `Ctrl+PgUp` | page suivante / précédente |
 | `Origine` / `Fin` | première / dernière page |
-| molette, bouton du milieu, glisser hors du texte | défiler, déplacer |
+| molette, bouton du milieu, glisser hors du texte | défiler, déplacer (la molette fait défiler ce qui est sous le pointeur — panneau, colonne d'outils —, et jamais le document sous une palette, une invite ou un sélecteur ouverts) |
 | clic sur un lien | destination interne, ou adresse dans le navigateur |
 | `F4` | panneau latéral : pages (glisser pour réordonner), signets, notes, calques, fichiers joints |
 | `Ctrl+G` | aller à une page par son numéro **ou son étiquette** (« iv », « Annexe-A ») |

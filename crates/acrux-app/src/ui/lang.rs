@@ -81,9 +81,22 @@ pub fn english() -> bool {
 /// traduction n'est connue.
 #[must_use]
 pub fn tr(french: &'static str) -> &'static str {
-    if !english() {
-        return french;
+    if english() {
+        to_english(french)
+    } else {
+        french
     }
+}
+
+/// Traduction anglaise d'un texte, quelle que soit la langue effective ; le
+/// texte d'origine si la table ne le connaît pas.
+///
+/// C'est le cœur de [`tr`], sans l'état global : la palette de commandes s'en
+/// sert pour chercher dans les libellés de la langue qu'elle a lue à son
+/// ouverture, et ses épreuves ne dépendent pas de celles d'ici, qui changent
+/// la langue de tout le programme pendant qu'elles tournent.
+#[must_use]
+pub fn to_english(french: &'static str) -> &'static str {
     match TABLE.binary_search_by(|(fr, _)| (*fr).cmp(french)) {
         Ok(i) => TABLE[i].1,
         Err(_) => french,
@@ -125,11 +138,16 @@ static TABLE: &[(&str, &str)] = &[
     ("Acrux cherche une version plus récente au démarrage, au plus une fois par jour. Rien n'est installé sans votre accord.", "Acrux looks for a newer version at startup, at most once a day. Nothing is installed without your consent."),
     ("Acrux est à jour.", "Acrux is up to date."),
     ("Acrux {} est disponible.", "Acrux {} is available."),
+    ("Afficher la page entière", "Show the whole page"),
     ("Ajouter", "Add"),
     ("Ajouter du texte", "Add text"),
     ("Ajouter une signature", "Add a signature"),
+    ("Ajustement automatique", "Automatic fit"),
     ("Ajuster", "Adjust"),
+    ("Ajuster à la largeur", "Fit width"),
+    ("Aller à une page (numéro ou étiquette)", "Go to a page (number or label)"),
     ("Annuler", "Cancel"),
+    ("Annuler la dernière action", "Undo the last action"),
     ("Annuler le trait", "Undo stroke"),
     ("Apparence", "Appearance"),
     ("Appliquer", "Apply"),
@@ -137,10 +155,15 @@ static TABLE: &[(&str, &str)] = &[
     ("Appliquer les biffures ?", "Apply redactions?"),
     ("Assembler (pages, signets)", "Assemble (pages, bookmarks)"),
     ("Aucun document — Ctrl+O pour ouvrir, ou déposez un PDF ici", "No document — Ctrl+O to open, or drop a PDF here"),
+    ("Aucune commande", "No matching command"),
+    ("Barre des outils", "Tools pane"),
     ("Basse résolution", "Low resolution"),
     ("Biffer", "Redact"),
+    ("Biffure : appliquer définitivement", "Redaction: apply permanently"),
+    ("Biffure : marquer la sélection", "Redaction: mark the selection"),
     ("Bleu", "Blue"),
     ("Bon", "Good"),
+    ("Calques (afficher ou masquer le contenu optionnel)", "Layers (show or hide optional content)"),
     ("Ce document est déjà protégé", "This document is already protected"),
     ("Ce mot de passe lève les restrictions ; lui seul permet de changer la protection.", "This password lifts the restrictions; only it can change the protection."),
     ("Ce n'est pas le mot de passe des permissions", "This is not the permissions password"),
@@ -157,12 +180,15 @@ static TABLE: &[(&str, &str)] = &[
     ("Commentaire :", "Comment:"),
     ("Commenter", "Comment"),
     ("Confirmez", "Confirm"),
+    ("Copier la sélection", "Copy the selection"),
     ("Copier le texte et les images", "Copy text and images"),
     ("Couleur", "Colour"),
     ("Croix", "Cross"),
     ("Créer un paraphe", "Create initials"),
     ("Créer une signature", "Create a signature"),
+    ("Dernière page", "Last page"),
     ("Dessiner", "Draw"),
+    ("Disposition des pages", "Page layout"),
     ("Document", "Document"),
     ("Document protégé", "Protected document"),
     ("Document protégé : {}", "Protected document: {}"),
@@ -175,15 +201,19 @@ static TABLE: &[(&str, &str)] = &[
     ("Enregistrement impossible", "Could not save"),
     ("Enregistrer", "Save"),
     ("Enregistrer les modifications ?", "Save changes?"),
+    ("Enregistrer sous", "Save as"),
     ("Entrée : suivante · Maj+Entrée : précédente", "Enter: next · Shift+Enter: previous"),
     ("Exiger un mot de passe pour ouvrir le document", "Require a password to open the document"),
     ("Export interdit", "Export not allowed"),
     ("Exporter", "Export"),
+    ("Exporter (page web, Word, Excel, images, texte)", "Export (web page, Word, Excel, images, text)"),
     ("Extraction interdite", "Extraction not allowed"),
     ("Extraction pour l'accessibilité", "Extraction for accessibility"),
     ("Extraire la page", "Extract page"),
+    ("Extraire la page dans un fichier", "Extract the page to a file"),
     ("Faible", "Weak"),
     ("Fermer", "Close"),
+    ("Fermer l'onglet", "Close the tab"),
     ("Feutre", "Marker"),
     ("Fichier introuvable", "File not found"),
     ("Fin", "Thin"),
@@ -199,8 +229,10 @@ static TABLE: &[(&str, &str)] = &[
     ("Imprimer", "Print"),
     ("Installer", "Install"),
     ("Insérer des pages", "Insert pages"),
+    ("Insérer les pages d'un fichier", "Insert pages from a file"),
     ("Jamais", "Never"),
     ("Joindre un fichier", "Attach a file"),
+    ("Joindre un fichier au document", "Attach a file to the document"),
     ("La liste des documents récents sera effacée. Les fichiers eux-mêmes ne sont pas touchés.", "The list of recent documents will be cleared. The files themselves are not touched."),
     ("La page sera retirée du document. Ctrl+Z la rétablit ; Ctrl+S enregistre.", "The page will be removed from the document. Ctrl+Z brings it back; Ctrl+S saves."),
     ("La recherche automatique est désactivée : Acrux ne contacte rien au démarrage.", "Automatic checking is off: Acrux contacts nothing at startup."),
@@ -216,9 +248,11 @@ static TABLE: &[(&str, &str)] = &[
     ("Mises à jour", "Updates"),
     ("Modification interdite", "Change not allowed"),
     ("Modifier", "Edit"),
+    ("Modifier : objets de la page", "Edit: page objects"),
     ("Modifier le PDF", "Edit PDF"),
     ("Modifier le contenu", "Change the content"),
     ("Modifier le texte", "Edit text"),
+    ("Modifier le texte sélectionné", "Edit the selected text"),
     ("Modifier les objets", "Edit objects"),
     ("Modèle 3D ({} triangles) — glisser pour tourner, molette pour zoomer, Échap pour refermer", "3D model ({} triangles) — drag to rotate, wheel to zoom, Esc to close"),
     ("Mot de passe", "Password"),
@@ -236,17 +270,29 @@ static TABLE: &[(&str, &str)] = &[
     ("Nécessaire pour changer la protection :", "Needed to change the protection:"),
     ("Nécessaire pour retirer la protection :", "Needed to remove the protection:"),
     ("OK", "OK"),
+    ("Onglet suivant", "Next tab"),
+    ("Outil biffure", "Redaction tool"),
+    ("Outil note", "Note tool"),
+    ("Outil surligneur", "Highlighter tool"),
     ("Ouvrir un document", "Open a document"),
     ("Ouvrir un document…", "Open a document…"),
+    ("Page précédente", "Previous page"),
+    ("Page suivante", "Next page"),
     ("Pages", "Pages"),
+    ("Panneau latéral (vignettes, signets)", "Side panel (thumbnails, bookmarks)"),
     ("Paramètres", "Settings"),
     ("Paramètres…", "Settings…"),
     ("Paraphe", "Initials"),
     ("Permissions", "Permissions"),
     ("Pivoter", "Rotate"),
+    ("Pivoter la page à droite", "Rotate the page clockwise"),
+    ("Pivoter la page à gauche", "Rotate the page counter-clockwise"),
+    ("Pièces jointes du document", "Document attachments"),
+    ("Plein écran", "Full screen"),
     ("Plume", "Fountain pen"),
     ("Point", "Dot"),
     ("Poser une note", "Add a note"),
+    ("Première page", "First page"),
     ("Protection impossible", "Could not protect the document"),
     ("Protéger", "Protect"),
     ("Protéger par mot de passe", "Protect with a password"),
@@ -254,6 +300,7 @@ static TABLE: &[(&str, &str)] = &[
     ("Recherche en cours…", "Checking…"),
     ("Rechercher dans le document", "Search the document"),
     ("Rechercher et remplacer", "Find and replace"),
+    ("Rechercher les mises à jour", "Check for updates"),
     ("Rechercher maintenant", "Check now"),
     ("Refaire", "Redo it"),
     ("Remplacer", "Replace"),
@@ -265,6 +312,7 @@ static TABLE: &[(&str, &str)] = &[
     ("Retirer la protection", "Remove the protection"),
     ("Rond", "Circle"),
     ("Rouge", "Red"),
+    ("Rétablir l'action annulée", "Redo the undone action"),
     ("Saisir le mot de passe", "Enter the password"),
     ("Saisissez le mot de passe d'ouverture", "Enter the password to open the document"),
     ("Signature", "Signature"),
@@ -276,16 +324,20 @@ static TABLE: &[(&str, &str)] = &[
     ("Supprimer la page", "Delete page"),
     ("Surligner", "Highlight"),
     ("Surligner et commenter", "Highlight and comment"),
+    ("Surligner la sélection", "Highlight the selection"),
     ("Système", "System"),
     ("Système ({})", "System ({})"),
     ("Taille", "Size"),
     ("Taper", "Type"),
+    ("Tapez une commande", "Type a command"),
     ("Terminer", "Done"),
     ("Texte", "Text"),
     ("Texte de la note (page {}) :", "Note text (page {}):"),
     ("Texte à répartir dans les {} cases :", "Text to spread over the {} boxes:"),
+    ("Thème clair / sombre", "Light / dark theme"),
     ("Tout enregistrer", "Save all"),
     ("Tout remplacer", "Replace all"),
+    ("Tout sélectionner", "Select all"),
     ("Tracer", "Draw"),
     ("Tracez votre signature ici — Ctrl+Z défait le dernier trait", "Draw your signature here — Ctrl+Z undoes the last stroke"),
     ("Tracez à main levée", "Draw freehand"),
@@ -301,6 +353,9 @@ static TABLE: &[(&str, &str)] = &[
     ("Votre paraphe", "Your initials"),
     ("Votre remarque", "Your remark"),
     ("Votre signature", "Your signature"),
+    ("Zoom 100 %", "Zoom 100%"),
+    ("Zoom arrière", "Zoom out"),
+    ("Zoom avant", "Zoom in"),
     ("accueil", "home"),
     ("assemblage interdit", "assembly not allowed"),
     ("au-delà de 127 octets, la fin du mot de passe est ignorée", "beyond 127 bytes, the end of the password is ignored"),
@@ -374,6 +429,18 @@ mod tests {
                 pair[1].0
             );
         }
+    }
+
+    #[test]
+    fn to_english_ne_depend_pas_de_la_langue_choisie() {
+        // Aucun `seul()` : la fonction ne lit pas l'état global, elle rend la
+        // même chose pendant qu'une autre épreuve le change.
+        assert_eq!(to_english("Terminer"), "Done");
+        assert_eq!(to_english("Enregistrer sous"), "Save as");
+        assert_eq!(
+            to_english("Phrase absente de la table"),
+            "Phrase absente de la table"
+        );
     }
 
     #[test]

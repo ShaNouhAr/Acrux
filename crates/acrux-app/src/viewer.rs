@@ -2030,6 +2030,51 @@ impl Viewer {
         true
     }
 
+    /// Ouvre la palette de commandes, les dernières employées en tête.
+    fn open_palette(&mut self) {
+        let recent: Vec<Command> = self
+            .prefs
+            .recent_commands
+            .iter()
+            .filter_map(|key| Command::from_key(key))
+            .collect();
+        self.palette = Some(Palette::new(self.loaded.is_some(), &recent));
+    }
+
+    /// Lance une commande choisie dans la palette, et la retient parmi les
+    /// récentes. Elle est retenue **avant** de s'exécuter : « Fermer
+    /// l'onglet » ou « Accueil » changent l'état, mais doivent compter aussi.
+    /// La colonne d'outils et la barre passent par `run_command` sans ce
+    /// détour : un clic sur un outil n'est pas un usage de la palette.
+    fn palette_pick(&mut self, command: Command, window: &mut dyn WindowHandle) {
+        self.prefs.push_recent_command(command.key());
+        self.save_prefs();
+        self.run_command(command, window);
+    }
+
+    /// Molette, quand quelque chose est ouvert par-dessus le document ; vrai
+    /// si elle a été prise. Une palette ou un sélecteur ouvert ne laisse
+    /// **jamais** défiler ni zoomer (Ctrl+molette) le document derrière
+    /// lui : la molette va à sa liste s'il en a une, sinon elle s'arrête là.
+    ///
+    /// Les dialogues, la fiche « Paramètres », « Protéger » et les invites
+    /// la prennent déjà plus haut (`modal_event`) ; la liste des polices la
+    /// fait défiler, le nuancier l'avale (`edit_popup_wheel`). Un futur menu
+    /// contextuel, ou la liste déroulante d'un champ de formulaire, se
+    /// branchera ici.
+    fn overlay_wheel(&mut self, delta: f32) -> bool {
+        if let Some(p) = &mut self.palette {
+            p.wheel(delta);
+            return true;
+        }
+        // La fenêtre de capture d'une signature : on y dessine, la page
+        // derrière ne doit pas bouger d'un pixel.
+        if self.capture.is_some() || !self.dialogs.is_empty() || self.prompt.is_some() {
+            return true;
+        }
+        self.edit_popup_wheel(f64::from(delta))
+    }
+
     /// Dessine la palette de commandes par-dessus tout le reste.
     fn paint_palette(&mut self, frame: &mut Frame<'_>) {
         if self.palette.is_none() {
@@ -2724,14 +2769,20 @@ impl Viewer {
     /// Colle le presse-papiers dans le champ de saisie qui a la main, s'il y
     /// en a un. Rend vrai si le collage le concernait.
     fn paste_into_field(&mut self, window: &mut dyn WindowHandle) -> bool {
-        let has_field = self.edit_menu_open() || (self.search.is_some() && !self.editing_text());
+        let has_field = self.palette.is_some()
+            || self.edit_menu_open()
+            || (self.search.is_some() && !self.editing_text());
         if !has_field {
             return false;
         }
         let Some(text) = window.clipboard_text().filter(|t| !t.is_empty()) else {
             return true;
         };
-        if self.edit_menu_open() {
+        // La palette recouvre tout : c'est son champ qui reçoit, pas la
+        // recherche restée ouverte dessous.
+        if let Some(p) = &mut self.palette {
+            p.paste(&text);
+        } else if self.edit_menu_open() {
             // La recherche d'une police, le code d'une couleur : caractère
             // par caractère, comme une frappe.
             for c in text.chars().filter(|c| !c.is_control()) {
@@ -6854,8 +6905,9 @@ impl Viewer {
                 x,
                 y,
             } => {
-                if self.edit_popup_wheel(f64::from(delta)) {
-                    // La liste des polices déroulée a pris la molette.
+                if self.overlay_wheel(delta) {
+                    // Une palette ou un sélecteur ouvert a pris la molette :
+                    // rien ne défile derrière lui.
                     window.request_redraw();
                 } else if self.three_d_wheel(x, y, f64::from(delta), window) {
                     // Le modèle 3D a pris la molette : on s'approche de lui,
@@ -6894,13 +6946,13 @@ impl Viewer {
                 self.clamp_scroll();
             }
             Event::Key(key, m) if self.palette.is_some() => {
-                let result = self.palette.as_mut().map(|p| p.key(key, m.shift));
+                let result = self.palette.as_mut().map(|p| p.key(key, m));
                 if let Some((command, close)) = result {
                     if close {
                         self.palette = None;
                     }
                     if let Some(c) = command {
-                        self.run_command(c, window);
+                        self.palette_pick(c, window);
                     }
                 }
             }
@@ -7124,7 +7176,7 @@ impl Viewer {
                         'y' | 'Y' => self.redo_edit(window),
                         'p' | 'P' => {
                             if m.shift {
-                                self.palette = Some(Palette::new(self.loaded.is_some()));
+                                self.open_palette();
                             } else {
                                 self.print(window);
                             }
@@ -7355,7 +7407,19 @@ impl Viewer {
                 let chosen = self.palette.as_mut().and_then(|p| p.mouse_up(x, y));
                 if let Some(command) = chosen {
                     self.palette = None;
-                    self.run_command(command, window);
+                    self.palette_pick(command, window);
+                }
+            }
+            // La palette recouvre tout : ni l'outil en cours, ni le modèle 3D,
+            // ni les objets de la page ne voient passer le pointeur — sans
+            // quoi tenir l'ascenseur de la palette ferait tourner le modèle.
+            Event::MouseMove { x, y, dragging } if self.palette.is_some() => {
+                if self
+                    .palette
+                    .as_mut()
+                    .is_some_and(|p| p.mouse_move(x, y, dragging))
+                {
+                    window.request_redraw();
                 }
             }
             // Un bouton de la carte de recherche enfoncé agit au relâchement,
@@ -7445,12 +7509,6 @@ impl Viewer {
                 let _ = dragging;
             }
             Event::MouseMove { x, y, dragging } => {
-                if let Some(p) = &mut self.palette {
-                    if p.mouse_move(x, y) {
-                        window.request_redraw();
-                    }
-                    return;
-                }
                 let bar = Toolbar::height(&self.theme, self.dpi_scale as f32);
                 let mut hover_changed = self.toolbar.mouse_move(x, y);
                 if let Some(mode) = &mut self.edit {

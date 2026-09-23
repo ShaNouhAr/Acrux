@@ -340,6 +340,7 @@ extern "system" {
     fn SetWindowLongPtrW(hwnd: HWND, index: i32, value: LONG_PTR) -> LONG_PTR;
     fn GetWindowLongPtrW(hwnd: HWND, index: i32) -> LONG_PTR;
     fn GetWindowRect(hwnd: HWND, rect: *mut RECT) -> BOOL;
+    fn ScreenToClient(hwnd: HWND, point: *mut POINT) -> BOOL;
     fn MonitorFromWindow(hwnd: HWND, flags: DWORD) -> *mut c_void;
     fn GetMonitorInfoW(monitor: *mut c_void, info: *mut MONITORINFO) -> BOOL;
     fn GetKeyState(key: i32) -> i16;
@@ -1561,12 +1562,27 @@ fn handle_message(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRES
         }
         WM_MOUSEWHEEL => {
             let delta = f32::from((wparam >> 16) as u16 as i16) / 120.0;
+            // La molette est le seul message de souris dont la position est
+            // en coordonnées d'ÉCRAN : sans conversion, les essais « sur le
+            // panneau », « sur la colonne d'outils » ou « sur le modèle 3D »
+            // visaient à côté dès que la fenêtre n'était pas collée au coin
+            // de l'écran, et c'est le document qui défilait.
+            let mut point = POINT {
+                x: low_i16(lparam),
+                y: high_i16(lparam),
+            };
+            // SAFETY : `hwnd` est la fenêtre qui reçoit le message, donc
+            // valide ; `point` est une variable locale, vivante pendant
+            // l'appel. En cas d'échec, le point reste tel quel.
+            unsafe {
+                ScreenToClient(hwnd, &raw mut point);
+            }
             deliver(
                 state,
                 Event::Wheel {
                     delta,
-                    x: low_i16(lparam),
-                    y: high_i16(lparam),
+                    x: point.x,
+                    y: point.y,
                     modifiers: modifiers(),
                 },
             );

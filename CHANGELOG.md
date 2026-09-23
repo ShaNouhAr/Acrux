@@ -121,6 +121,47 @@ c'est la section correspondante de ce fichier qui devient la page de version.
   harnais invisible relâche ses touches comme le vrai clavier : il tapait deux
   espaces pour une barre d'espace.
 
+- **La palette de commandes défile, et Entrée ne lance plus une commande que
+  l'on ne voit pas.** Elle n'affichait que douze lignes d'une liste de
+  cinquante-cinq : la flèche descendait plus bas que la carte, et Entrée lançait
+  une commande invisible. La liste suit désormais la sélection ; un ascenseur fin
+  dit où l'on est et se saisit à la souris ; la molette la fait défiler, trois
+  lignes par cran ; Page préc. / Page suiv. avancent d'un écran ; Ctrl+Origine
+  et Ctrl+Fin (Origine et Fin seules quand le champ est vide) vont aux deux
+  bouts. Dans une fenêtre basse, la carte tient dans la fenêtre.
+- **Les commandes dans l'ordre de l'usage**, comme dans Acrobat : Ouvrir,
+  Enregistrer, Rechercher, Imprimer, Remplir et signer, Modifier le PDF, Poser
+  une note… — « Protéger » et « Retirer la protection » ouvraient la liste, et
+  « Paramètres » la ferme maintenant. **Les cinq dernières commandes lancées
+  depuis la palette viennent en tête**, séparées du reste par un trait, et sont
+  retenues d'une séance à l'autre (`commande-recente=` dans les préférences).
+- **Les lettres trouvées s'éclairent** dans la couleur d'accent : taper « enrs »
+  montre pourquoi « Enregistrer sous » est là. Les synonymes, qu'on ne voit pas,
+  ne se trouvent plus que d'un seul tenant : « enrs » faisait monter vingt
+  commandes, dont « Accueil » et « Aller à une page », parce que leurs synonymes
+  contenaient ces lettres dans l'ordre ; il en reste deux. Le champ ne saute
+  plus à chaque frappe : la carte raccourcit par le bas.
+- **La palette parle anglais.** Quarante libellés restaient en français dans
+  l'interface anglaise, avec le texte d'invite, « Aucune commande » et les
+  raccourcis (« Ctrl+Maj+S » s'écrit « Ctrl+Shift+S »). On cherche dans ce qui
+  est affiché — « open » trouve « Open a document » —, et le libellé français se
+  trouve encore. « Annuler » et « Rétablir » deviennent « Annuler la dernière
+  action » et « Rétablir l'action annulée » : le même mot servait aux boutons
+  « Annuler » (« Cancel »). Les info-bulles de la barre et de la colonne
+  d'outils, qui reprennent ces textes, suivent.
+- **La molette ne fait plus défiler le document derrière la palette**, ni ne le
+  zoome (Ctrl+molette), ni derrière la fenêtre de capture d'une signature : elle
+  va à la liste de la palette, comme elle allait déjà à la liste des polices.
+- **La molette vise ce qui est sous le pointeur.** Windows donne sa position en
+  coordonnées d'écran, qu'Acrux prenait pour une position dans la fenêtre : dès
+  que la fenêtre n'était pas collée au coin de l'écran, la molette sur le
+  panneau des vignettes, sur la colonne d'outils ou sur un modèle 3D faisait
+  défiler le document.
+- Ctrl+V colle dans le champ de la palette ; il collait dans la recherche restée
+  ouverte dessous, ou nulle part.
+- Harnais invisible : `Wheel x y crans` (la molette, en coordonnées d'écran
+  comme le vrai Windows) et `KeyCtrl` (Ctrl+Fin, Ctrl+Origine).
+
 - **Les lignes à remplir se reconnaissent** — « Nom : ____________ ». Dans
   « Remplir et signer » (et là seulement), la place du texte s'encadre
   au-dessus de la ligne survolée ; un clic y ouvre la saisie, **sans avoir à
