@@ -67,7 +67,10 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   d'objets dépliés), `document` (cache, flux d'objets, réparation automatique, offsets décalés).
 - `filters` (chaînage `/Filter` + `/DecodeParms`, délègue à `acrux-codecs`).
 - `crypt` : gestionnaire standard R2 à R6, RC4, AES-128/256, MD5, SHA-2 ; mots de passe
-  utilisateur et propriétaire. Depuis les signatures, ce module abrite aussi `bigint`
+  utilisateur et propriétaire, `/Perms` vérifié (algorithme 13). `random` : aléa
+  cryptographique — ChaCha20 (RFC 8439) semé par l'entropie que std tire du système
+  (`RandomState` sur plusieurs fils) et, dans l'application, par `BCryptGenRandom`
+  (`set_os_source`) ; `ChaCha20Rng` à graine explicite pour les tests. Depuis les signatures, ce module abrite aussi `bigint`
   (entiers de grande taille, multiplication de Montgomery, échelle à temps constant pour les
   exposants secrets), `rsa` (EMSA, `RSASSA-PKCS1-v1_5` en signature et vérification,
   `RSASSA-PSS` en vérification, MGF1, lecture PKCS#1 / PKCS#8 / SPKI, génération de clés par
@@ -394,6 +397,9 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   vignettes tant que l'outil est ouvert). Il montre les signatures enregistrées — aperçus dessinés
   par le code qui écrit dans le PDF —, permet d'en ajouter, d'en refaire et d'en retirer, et tient
   ce qu'on ajoute (texte, stylo, marques) et l'encre. Le viewer y répond par `sign_panel_action`.
+- `ui/protect` : fenêtre « Protéger par mot de passe » — état pur (clavier, clics, validation)
+  qui rend une `Action` ; `viewer/protect` chiffre, demande le mot de passe des permissions et
+  tient les droits du document ouvert (`rights`, `require_right`, `EditOp::required_right`).
 - `ui/sign` : outil « remplir et signer » — éléments posables (signature, paraphe, texte,
   stylo, cinq marques), palette d'encre (`INKS`) et fenêtre de capture
   (tracer, taper, importer) ; l'aperçu est dessiné par le **même** code que le PDF

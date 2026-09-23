@@ -70,11 +70,13 @@ use acrux_features::fillsign::ink::{InkPoint, Nib, Pen, Stroke, Weight};
 
 mod dialogs;
 mod editmode;
+mod protect;
 mod three_d;
 use crate::ui::editpdf::EditTool;
 use crate::ui::modebar::ModeBar;
 use dialogs::{Asking, Then};
 use editmode::EditMode;
+use protect::OwnerThen;
 
 /// Rectangle semi-transparent (alpha 0..255) composé sur le tampon.
 // Position, taille, couleur, alpha : primitive de dessin à coordonnées courtes.
@@ -468,9 +470,10 @@ enum PromptKind {
         doc: Document,
         pages: Vec<Page>,
     },
-    /// Mot de passe qui protégera le document. La seconde saisie confirme
-    /// la première : un mot de passe masqué mal tapé enfermerait le document.
-    Protect { confirm: Option<String> },
+    /// Mot de passe des permissions d'un document ouvert avec le seul mot
+    /// de passe d'ouverture ; accepté, il donne tous les droits, puis
+    /// `then` reprend ce qui l'a demandé.
+    OwnerPassword { then: OwnerThen },
     /// Texte d'une note à poser sur `page` au point `(x, y)` (espace page).
     Note { page: usize, x: f64, y: f64 },
     /// Valeur d'un champ de formulaire.
@@ -579,6 +582,9 @@ struct Prompt {
 struct PrintPages<'a> {
     doc: &'a Document,
     pages: &'a [Page],
+    /// Résolution plafond : un document qui ne permet que l'impression en
+    /// basse résolution est rendu à celle-ci, puis agrandi par le pilote.
+    max_dpi: Option<f64>,
 }
 
 impl PrintSource for PrintPages<'_> {
@@ -599,6 +605,7 @@ impl PrintSource for PrintPages<'_> {
 
     fn render(&mut self, index: usize, dpi: f64) -> Option<(u32, u32, Vec<u8>)> {
         let page = self.pages.get(index)?;
+        let dpi = self.max_dpi.map_or(dpi, |max| dpi.min(max));
         let options = RenderOptions {
             annotations: true,
             time_budget: Some(std::time::Duration::from_secs(60)),
@@ -739,6 +746,9 @@ pub struct Viewer {
     live_edit: Option<usize>,
     /// Fenêtre de capture d'une signature, ouverte par-dessus tout.
     capture: Option<Capture>,
+    /// Fenêtre « Protéger par mot de passe », ouverte par-dessus tout. Elle
+    /// vise le document actif : elle se ferme dès qu'il change.
+    protect: Option<crate::ui::protect::ProtectDialog>,
     /// Signature enregistrée, conservée entre deux sessions.
     signatures: Vec<Saved>,
     /// Paraphe enregistré.
@@ -1050,6 +1060,7 @@ impl Viewer {
             carrying: false,
             live_edit: None,
             capture: None,
+            protect: None,
             signatures,
             initials,
             notice: None,
@@ -1870,6 +1881,7 @@ impl Viewer {
             self.annot_tool = None;
             self.sign_panel = None;
             self.capture = None;
+            self.protect = None;
             self.wake_anim();
             self.set_notice(lang::tr("Accueil").into());
         }
@@ -2122,6 +2134,7 @@ impl Viewer {
                                 return;
                             };
                             self.finish_open(path, doc, pages, Some(pw), window);
+                            self.announce_restrictions();
                         } else {
                             prompt.error = Some("Mot de passe incorrect".to_string());
                             prompt.input.clear();
@@ -2173,30 +2186,9 @@ impl Viewer {
                             });
                         }
                     }
-                    PromptKind::Protect { confirm } => {
-                        let confirm = confirm.clone();
-                        match confirm {
-                            // Première saisie : on la redemande.
-                            None if !value.is_empty() => {
-                                self.prompt = None;
-                                self.ask_password(Some(value));
-                            }
-                            None => {
-                                prompt.error = Some(
-                                    crate::ui::lang::tr("un mot de passe vide ne protège rien")
-                                        .into(),
-                                );
-                            }
-                            Some(first) if first == value => {
-                                self.prompt = None;
-                                self.protect_with(&value, window);
-                            }
-                            Some(_) => {
-                                prompt.error =
-                                    Some(crate::ui::lang::tr("les deux saisies diffèrent").into());
-                                prompt.input.clear();
-                            }
-                        }
+                    PromptKind::OwnerPassword { then } => {
+                        let then = *then;
+                        self.owner_password_entered(&value, then, window);
                     }
                     PromptKind::Note { page, x, y } => {
                         let (page, x, y) = (*page, *x, *y);
@@ -2519,7 +2511,8 @@ impl Viewer {
 
     /// Insère, avant la page courante, toutes les pages d'un autre PDF.
     fn insert_pages(&mut self, window: &mut dyn WindowHandle) {
-        if self.loaded.is_none() {
+        // Le droit se vérifie avant de faire choisir un fichier pour rien.
+        if self.loaded.is_none() || !self.require_right(crate::render_worker::Right::Assemble) {
             return;
         }
         let Some(path) = window.open_file_dialog() else {
@@ -2583,6 +2576,15 @@ impl Viewer {
     /// dialogue. La conversion elle-même est faite par le fil de rendu — une
     /// centaine de pages en PNG prendrait plusieurs secondes.
     fn export(&mut self, window: &mut dyn WindowHandle) {
+        // Convertir, c'est extraire le contenu : ce que la permission de
+        // copie refuse, l'export le refuse aussi.
+        if self.loaded.is_some() && !self.rights().copy {
+            self.refuse(
+                lang::tr("Export interdit"),
+                lang::tr("Les permissions de ce document interdisent d'en extraire le contenu. Le mot de passe des permissions lève cette restriction."),
+            );
+            return;
+        }
         let Some(l) = &self.loaded else { return };
         let stem = l.path.file_stem().map_or_else(
             || "document".to_string(),
@@ -2956,6 +2958,7 @@ impl Viewer {
                     });
                 } else {
                     self.finish_open(path.to_path_buf(), doc, pages, None, window);
+                    self.announce_restrictions();
                 }
             }
             Err(e) => {
@@ -3066,6 +3069,8 @@ impl Viewer {
         window: &mut dyn WindowHandle,
     ) {
         let worker = RenderWorker::start(path.clone(), password.clone(), window.waker());
+        // La fenêtre « Protéger » visait le document que celui-ci remplace.
+        self.protect = None;
         let page_index = PageIndex::new(&pages);
         let fields = list_fields(&doc).unwrap_or_default();
         let comments = collect_comments(&doc, &pages);
@@ -3182,6 +3187,10 @@ impl Viewer {
         }
         if self.annot_tool == Some(tool) {
             self.annot_tool = None;
+            window.request_redraw();
+            return;
+        }
+        if !self.require_right(crate::render_worker::Right::Annotate) {
             window.request_redraw();
             return;
         }
@@ -3437,7 +3446,10 @@ impl Viewer {
 
     /// Vrai si quelque chose bouge encore.
     fn animating(&self) -> bool {
-        self.scroll_goal_y.is_some() || self.left_anim.running() || self.tools_anim.running()
+        self.scroll_goal_y.is_some()
+            || self.left_anim.running()
+            || self.tools_anim.running()
+            || self.dialog_opening()
     }
 
     /// Met en route (ou arrête) le fil qui réveille la fenêtre pendant les
@@ -3880,12 +3892,7 @@ impl Viewer {
             Command::ToggleTheme => self.toggle_theme(window),
             Command::Search => self.open_search(),
             Command::Replace => self.open_replace(),
-            Command::Copy => {
-                let text = self.selected_text();
-                if !text.is_empty() {
-                    window.set_clipboard_text(&text);
-                }
-            }
+            Command::Copy => self.copy_selection(window),
             Command::SelectAll => self.select_all(),
             Command::RotateRight => self.rotate_current(90),
             Command::RotateLeft => self.rotate_current(-90),
@@ -3919,96 +3926,13 @@ impl Viewer {
         }
     }
 
-    /// « Protéger par mot de passe » : sur un document déjà protégé, on
-    /// demande d'abord ce qu'on veut en faire.
-    fn protect_command(&mut self) {
-        let protected = self.loaded.as_ref().is_some_and(|l| l.password.is_some());
-        if !protected {
-            self.ask_password(None);
-            return;
-        }
-        self.push_choice(
-            crate::ui::lang::tr("Ce document est déjà protégé"),
-            crate::ui::lang::tr("Changer son mot de passe, ou retirer la protection ?"),
-            &[
-                crate::ui::lang::tr("Changer le mot de passe"),
-                crate::ui::lang::tr("Retirer la protection"),
-                crate::ui::lang::tr("Annuler"),
-            ],
-            crate::viewer::dialogs::Then::Protection,
-        );
-    }
-
-    /// Demande le mot de passe qui protégera le document.
-    ///
-    /// Comme dans Acrobat, on le saisit deux fois : masqué, une faute de
-    /// frappe enfermerait le document pour de bon.
-    fn ask_password(&mut self, first: Option<String>) {
-        if self.loaded.is_none() {
-            return;
-        }
-        let again = first.is_some();
-        let mut input = TextInput::new("");
-        input.masked = true;
-        self.prompt = Some(Prompt {
-            title: crate::ui::lang::tr("Protéger par mot de passe").into(),
-            label: if again {
-                crate::ui::lang::tr("Confirmez le mot de passe").into()
-            } else {
-                crate::ui::lang::tr("Mot de passe d'ouverture du document").into()
-            },
-            input,
-            error: None,
-            kind: PromptKind::Protect { confirm: first },
-        });
-    }
-
-    /// Chiffre le document avec ce mot de passe, puis l'enregistre.
-    ///
-    /// Le chiffrement ne vaut que sur le fichier : il faut donc réécrire le
-    /// document **en entier**, et non y ajouter une mise à jour.
-    fn protect_with(&mut self, password: &str, window: &mut dyn WindowHandle) {
-        let Some(l) = &mut self.loaded else { return };
-        let bytes = password.as_bytes();
-        let permissions = acrux_document::protect::Permissions::all();
-        if let Err(e) = l.doc.protect(bytes, bytes, permissions) {
-            self.set_notice(format!("protection impossible : {e}"));
-            return;
-        }
-        l.password = Some(bytes.to_vec());
-        l.modified = true;
-        l.full_save = true;
-        self.title_dirty = true;
-        self.set_notice(
-            crate::ui::lang::tr("document protégé : le mot de passe sera demandé à l'ouverture")
-                .into(),
-        );
-        // Un chiffrement qui reste en mémoire ne protège rien : on écrit.
-        self.save(false, window);
-    }
-
-    /// Retire la protection d'un document chiffré.
-    fn remove_protection(&mut self) {
-        let Some(l) = &mut self.loaded else { return };
-        if l.password.is_none() {
-            self.set_notice(crate::ui::lang::tr("ce document n'est pas protégé").into());
-            return;
-        }
-        if let Err(e) = l.doc.unprotect() {
-            self.set_notice(format!("retrait impossible : {e}"));
-            return;
-        }
-        l.password = None;
-        l.modified = true;
-        l.full_save = true;
-        self.title_dirty = true;
-        self.set_notice(
-            crate::ui::lang::tr("protection retirée : enregistrez pour l'appliquer").into(),
-        );
-    }
-
     /// Applique une modification au document (et à la copie du fil de rendu).
     fn apply_edit(&mut self, op: EditOp) {
+        // Un document protégé ne se modifie que dans la limite de ses
+        // permissions (le propriétaire les a toutes).
+        if self.loaded.is_some() && !self.require_right(op.required_right()) {
+            return;
+        }
         let Some(l) = &mut self.loaded else { return };
         if let Err(e) = op.apply(&l.doc) {
             self.alert("Modification impossible", &format!("{e}"));
@@ -4230,6 +4154,12 @@ impl Viewer {
 
     /// Imprime le document (dialogue système).
     fn print(&mut self, window: &mut dyn WindowHandle) {
+        if self.loaded.is_none() {
+            return;
+        }
+        let Some(level) = self.print_level_or_refuse() else {
+            return;
+        };
         let Some(l) = &self.loaded else { return };
         let title = l
             .path
@@ -4238,6 +4168,8 @@ impl Viewer {
         let mut source = PrintPages {
             doc: &l.doc,
             pages: &l.pages,
+            max_dpi: (level == acrux_document::protect::PrintLevel::Low)
+                .then_some(protect::LOW_PRINT_DPI),
         };
         match window.print(&title, &mut source) {
             PrintOutcome::Printed(n) => log_line(&format!("imprimé : {n} page(s)")),
@@ -4793,6 +4725,8 @@ impl Viewer {
 
     /// Remet à zéro ce qui dépend du document affiché.
     fn reset_view_state(&mut self) {
+        // La fenêtre « Protéger » visait l'ancien document actif.
+        self.protect = None;
         self.scroll_x = 0.0;
         self.scroll_y = 0.0;
         self.anchor = 0;
@@ -5151,7 +5085,7 @@ impl Viewer {
         if self.objects.is_some() {
             self.objects = None;
             self.set_notice("modification des objets : terminé".into());
-        } else if self.loaded.is_some() {
+        } else if self.loaded.is_some() && self.require_right(crate::render_worker::Right::Modify) {
             let page = self.current_page();
             self.load_objects(page);
             let count = self.objects.as_ref().map_or(0, |t| t.objects.len());
@@ -5450,7 +5384,7 @@ impl Viewer {
             self.capture = None;
             self.wake_anim();
             self.set_notice("remplir et signer : terminé".into());
-        } else {
+        } else if self.require_right(crate::render_worker::Right::Annotate) {
             self.sign_panel = Some(self.new_sign_panel());
             self.wake_anim();
             self.pick_sign_item(SignItem::Move);
@@ -6767,7 +6701,7 @@ impl App for Viewer {
             self.apply_frame_theme(window);
         }
         log_event(&event);
-        if self.dialog_event(&event, window) {
+        if self.dialog_event(&event, window) || self.protect_event(&event, window) {
             if self.title_dirty {
                 self.update_title(window);
             }
@@ -7069,12 +7003,7 @@ impl App for Viewer {
                         'e' | 'E' if m.shift => self.enter_edit(EditTool::Select, window),
                         'e' | 'E' => self.export(window),
                         'i' | 'I' => self.insert_pages(window),
-                        'c' | 'C' => {
-                            let text = self.selected_text();
-                            if !text.is_empty() {
-                                window.set_clipboard_text(&text);
-                            }
-                        }
+                        'c' | 'C' => self.copy_selection(window),
                         'a' | 'A' => self.select_all(),
                         'f' | 'F' | '\u{6}' => self.open_search(),
                         // Ctrl+G : le champ de page prend le focus, prêt à
@@ -7655,6 +7584,7 @@ impl App for Viewer {
             self.paint_status(frame);
         }
         self.paint_capture(frame);
+        self.paint_protect(frame);
         self.paint_prompt(frame);
         self.paint_tip(frame);
         self.paint_palette(frame);
@@ -7829,6 +7759,7 @@ fn system_lang() -> Lang {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic)] // tests
 mod tests {
     use super::*;
 
@@ -7849,6 +7780,33 @@ mod tests {
         // Avec couverture : page 1 seule, puis des paires.
         assert_eq!(page_rows(5, true, true), vec![(0, 0), (1, 2), (3, 4)]);
         assert_eq!(page_rows(2, true, true), vec![(0, 0), (1, 1)]);
+    }
+
+    /// Un document qui ne permet que l'impression en basse résolution est
+    /// rendu à 150 ppp au plus, quelle que soit l'imprimante.
+    #[test]
+    fn low_resolution_printing_is_capped() {
+        let Ok(doc) =
+            acrux_features::create::new_document(&acrux_features::create::PageSetup::default())
+        else {
+            panic!("document A4");
+        };
+        let Ok(pages) = collect_pages(&doc) else {
+            panic!("pages");
+        };
+        let width_at = |max_dpi: Option<f64>| {
+            let mut source = PrintPages {
+                doc: &doc,
+                pages: &pages,
+                max_dpi,
+            };
+            source.render(0, 600.0).map_or(0, |(w, _, _)| w)
+        };
+        // A4 : 595 pt, soit 8,26 pouces.
+        let free = width_at(None);
+        let capped = width_at(Some(protect::LOW_PRINT_DPI));
+        assert!((4900..=5000).contains(&free), "{free}");
+        assert!((1230..=1250).contains(&capped), "{capped}");
     }
 
     #[test]

@@ -9,6 +9,57 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 
 ## 0.23.0 — non publiée
 
+- **Sécurité : la clé d'un document protégé ne se devine plus.** Jusqu'ici, la
+  clé AES-256, les sels et `/Perms` sortaient d'un générateur semé par « taille
+  du fichier ^ heure » : qui connaissait l'heure d'enregistrement retrouvait la
+  clé sans le mot de passe. Ils viennent maintenant d'un générateur
+  cryptographique écrit ici, **ChaCha20** (RFC 8439, vecteurs officiels
+  vérifiés), semé par l'entropie du système — celle que la bibliothèque
+  standard tire de Windows, recueillie sur plusieurs fils, et, dans
+  l'application, `BCryptGenRandom` en renfort. Même générateur pour les IV,
+  l'identifiant `/ID` et la génération de clés RSA
+  (`acrux_document::crypt::random`). Deux protections du même fichier ne
+  partagent plus rien.
+- **Protéger par mot de passe : deux mots de passe et de vraies permissions.**
+  La fenêtre (palette : « Protéger par mot de passe ») demande un mot de passe
+  **d'ouverture**, facultatif, et un mot de passe **des permissions** ; chacun se
+  tape deux fois, et une jauge dit sa force (faible, moyen, bon, fort) pendant
+  la frappe. On y règle l'impression (non, basse résolution, haute
+  résolution), la modification, la copie, les commentaires, le remplissage des
+  formulaires, l'extraction pour l'accessibilité et l'assemblage. Avant, un
+  seul mot de passe servait aux deux : quiconque ouvrait le document avait tous
+  les droits.
+- **Les permissions d'un document protégé sont respectées.** Ouvert avec le seul
+  mot de passe d'ouverture, un document dit à l'ouverture ce qu'il interdit ;
+  l'impression refusée ne s'ouvre pas, la « basse résolution » imprime à
+  150 ppp, la copie et l'export sont refusés sans la permission de copier, et
+  chaque modification exige son droit (assembler pour pivoter ou supprimer une
+  page, commenter pour annoter, remplir pour les champs, modifier pour le
+  reste). Chaque refus propose de saisir le mot de passe des permissions, qui
+  lève tout.
+- **Seul le mot de passe des permissions change ou retire la protection**, dans
+  l'application comme avec `acr unprotect` : un simple lecteur ne peut plus
+  retirer les restrictions en reprotégeant le document. Les fichiers protégés
+  par les versions précédentes (même mot de passe pour tout) s'ouvrent toujours
+  avec tous les droits.
+- Un `/P` retouché à la main pour s'accorder des droits est repéré :
+  `/Perms`, scellé par la clé, est vérifié (algorithme 13) et c'est la valeur la
+  plus stricte qui s'applique.
+- **`acr protect`** : `--print none|low|high`, `--no-fill`,
+  `--no-accessibility` et `--no-assemble` rejoignent les options, et affiche
+  la force des mots de passe. **Changement** : chaque option ne retire plus que
+  sa permission — `--no-copy` laisse l'extraction pour l'accessibilité,
+  `--no-modify` laisse l'assemblage, `--no-annotate` laisse le remplissage (à
+  retirer avec `--no-fill`). Des restrictions sans `--owner` distinct de
+  `--user` sont refusées : elles ne protégeraient rien.
+- **`acr info`** dit le chiffrement (« AES-256 (R6) »), l'accès (propriétaire
+  ou utilisateur), les permissions et le niveau d'impression, et l'identifiant
+  de version. `--password` donne enfin les droits du propriétaire sur un
+  document qui s'ouvre sans mot de passe (`acr unprotect` échouait).
+- Les questions d'Acrux finissent d'apparaître d'elles-mêmes : ouvertes au
+  clavier, elles pouvaient rester à demi transparentes jusqu'au prochain
+  mouvement de la souris.
+
 - **Les lignes à remplir se reconnaissent** — « Nom : ____________ ». Dans
   « Remplir et signer » (et là seulement), la place du texte s'encadre
   au-dessus de la ligne survolée ; un clic y ouvre la saisie, **sans avoir à

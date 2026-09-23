@@ -143,6 +143,36 @@ pub fn shadow(
     }
 }
 
+/// Trait lissé d'épaisseur `width`, aux bouts arrondis, de `(x0, y0)` à
+/// `(x1, y1)` (pixels, à virgule).
+///
+/// Même principe que les rectangles : la distance de chaque pixel au
+/// segment donne sa couverture. Sert aux petits dessins de l'interface — la
+/// coche d'une case — qui n'ont pas besoin du rastériseur des pages.
+pub fn line(frame: &mut Frame<'_>, x0: f32, y0: f32, x1: f32, y1: f32, width: f32, color: Rgb) {
+    let half = width / 2.0;
+    let (dx, dy) = (x1 - x0, y1 - y0);
+    let len2 = dx * dx + dy * dy;
+    let pad = half + 1.0;
+    let left = (x0.min(x1) - pad).floor() as i32;
+    let right = (x0.max(x1) + pad).ceil() as i32;
+    let top = (y0.min(y1) - pad).floor() as i32;
+    let bottom = (y0.max(y1) + pad).ceil() as i32;
+    for py in top.max(0)..bottom.min(frame.height as i32) {
+        for px in left.max(0)..right.min(frame.width as i32) {
+            let (cx, cy) = (px as f32 + 0.5, py as f32 + 0.5);
+            // Point du segment le plus proche du centre du pixel.
+            let t = if len2 > 0.0 {
+                (((cx - x0) * dx + (cy - y0) * dy) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let d = (cx - (x0 + t * dx)).hypot(cy - (y0 + t * dy));
+            blend(frame, px, py, color, (half + 0.5 - d).clamp(0.0, 1.0));
+        }
+    }
+}
+
 /// Ce qu'un bouton a à dire de lui-même pour être dessiné.
 // Quatre états indépendants, qui se combinent : un bouton principal peut
 // être survolé et avoir le focus. Une énumération les multiplierait.
@@ -268,6 +298,19 @@ mod tests {
         assert_eq!(at(30, 30), 255, "l'intérieur n'est pas assombri");
         assert!(at(30, 44) < 255, "le dessous l'est");
         assert_eq!(at(59, 59), 255, "le lointain ne l'est pas");
+    }
+
+    #[test]
+    fn un_trait_couvre_son_segment_et_rien_dautre() {
+        let mut buf = vec![0_u8; 20 * 20 * 4];
+        let mut f = frame(&mut buf, 20, 20);
+        line(&mut f, 2.0, 10.0, 18.0, 10.0, 2.0, (255, 255, 255));
+        let at = |x: usize, y: usize| buf[(y * 20 + x) * 4 + 1];
+        assert!(at(10, 10) > 250, "le milieu du trait est plein");
+        assert_eq!(at(10, 3), 0, "loin du trait, rien");
+        // Un trait hors du cadre ne déborde pas.
+        let mut f = frame(&mut buf, 20, 20);
+        line(&mut f, -30.0, -30.0, -10.0, -5.0, 3.0, (0, 0, 0));
     }
 
     #[test]

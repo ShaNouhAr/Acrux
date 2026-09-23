@@ -5,7 +5,7 @@
 //! | Module    | Rôle                                                  |
 //! |-----------|-------------------------------------------------------|
 //! | `anim`    | valeurs animées et horloge : panneaux, fondus, défilement |
-//! | `controls` | contrôles composés : creux, segments, pastilles     |
+//! | `controls` | contrôles composés : creux, segments, pastilles, cases, jauge |
 //! | `cursors` | pointeurs dessinés : texte ajouté, surligneur, note… |
 //! | `dialog`  | fenêtres de dialogue dessinées : question, boutons    |
 //! | `editpdf` | mode « Modifier le PDF » : saisie et barre du mode    |
@@ -18,6 +18,7 @@
 //! | `toolbar` | barre d'outils (boutons, champ de page, zoom)         |
 //! | `panel`   | panneau latéral (vignettes, signets)                  |
 //! | `prefs`   | réglages persistants et modes d'affichage             |
+//! | `protect` | fenêtre « Protéger par mot de passe » : deux mots de passe, permissions |
 //! | `tabs`    | barre d'onglets (un par document ouvert)              |
 //! | `paint`   | coins arrondis, ombres douces, aplats translucides    |
 //! | `palette` | palette de commandes filtrable (Ctrl+Maj+P)           |
@@ -45,6 +46,7 @@ pub mod palette;
 pub mod panel;
 pub mod pickers;
 pub mod prefs;
+pub mod protect;
 pub mod sign;
 pub mod signpanel;
 pub mod tabs;

@@ -26,6 +26,11 @@ pub struct Theme {
     /// Fond d'une info-bulle (légèrement détaché des barres pour se lire
     /// par-dessus n'importe quel fond).
     pub tip_bg: Rgb,
+    /// Teinte d'une erreur ou d'un danger (mot de passe faible, saisie
+    /// refusée), lisible sur le fond des barres.
+    pub danger: Rgb,
+    /// Teinte d'une mise en garde, entre le danger et l'accent.
+    pub warning: Rgb,
     /// Hauteur de la barre d'état (px logiques).
     pub status_height: u32,
     /// Hauteur de la barre d'outils (px logiques).
@@ -50,6 +55,8 @@ impl Theme {
             accent: (0x4C, 0x8B, 0xF5),
             hover: (0x3E, 0x40, 0x45),
             tip_bg: (0x1B, 0x1C, 0x1E),
+            danger: (0xE5, 0x53, 0x53),
+            warning: (0xE0, 0xA1, 0x3A),
             status_height: 26,
             toolbar_height: 40,
             tab_height: 30,
@@ -70,6 +77,8 @@ impl Theme {
             accent: (0x2F, 0x6F, 0xE0),
             hover: (0xDE, 0xDF, 0xE3),
             tip_bg: (0xFF, 0xFF, 0xFF),
+            danger: (0xC6, 0x28, 0x28),
+            warning: (0xB0, 0x6A, 0x00),
             status_height: 26,
             toolbar_height: 40,
             tab_height: 30,

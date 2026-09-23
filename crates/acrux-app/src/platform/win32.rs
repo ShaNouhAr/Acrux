@@ -394,6 +394,36 @@ pub fn system_language() -> String {
     }
 }
 
+#[link(name = "bcrypt")]
+extern "system" {
+    fn BCryptGenRandom(algorithm: *mut c_void, buffer: *mut u8, size: u32, flags: u32) -> i32;
+}
+
+/// `BCRYPT_USE_SYSTEM_PREFERRED_RNG` : le générateur par défaut du système,
+/// sans ouvrir d'algorithme.
+const BCRYPT_USE_SYSTEM_PREFERRED_RNG: u32 = 0x0000_0002;
+
+/// Octets du générateur cryptographique du système (`BCryptGenRandom`).
+/// Rend faux s'il n'a rien fourni.
+pub fn system_random(out: &mut [u8]) -> bool {
+    let Ok(len) = u32::try_from(out.len()) else {
+        return false;
+    };
+    // SAFETY : `out` est un tampon valide et inscriptible de `len` octets ;
+    // sans poignée d'algorithme, le drapeau désigne le générateur du
+    // système, que l'appel remplit sans rien retenir du tampon.
+    let status = unsafe {
+        BCryptGenRandom(
+            null_mut(),
+            out.as_mut_ptr(),
+            len,
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+        )
+    };
+    // NTSTATUS : 0 vaut STATUS_SUCCESS.
+    status == 0
+}
+
 #[link(name = "dwmapi")]
 extern "system" {
     fn DwmSetWindowAttribute(

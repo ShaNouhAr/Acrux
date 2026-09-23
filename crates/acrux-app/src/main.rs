@@ -8,6 +8,10 @@
 use std::path::PathBuf;
 
 fn main() {
+    // Les clés de chiffrement (protection par mot de passe) mêlent à leur
+    // graine le générateur du système, que seule la couche plate-forme
+    // peut appeler.
+    let _ = acrux_document::crypt::random::set_os_source(acrux_app::platform::system_random);
     // Tous les arguments sont des documents à ouvrir (un onglet chacun).
     let initial: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
     // Taille et état de la fenêtre de la session précédente (pixels

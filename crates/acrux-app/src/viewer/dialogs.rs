@@ -31,8 +31,11 @@ pub(super) enum Then {
     Settings,
     /// Réglages des mises à jour.
     Updates,
-    /// Document déjà protégé : changer le mot de passe, ou le retirer.
+    /// Document déjà protégé : changer sa protection, ou la retirer.
     Protection,
+    /// Une action refusée par les permissions : saisir le mot de passe des
+    /// permissions, qui les lève.
+    OwnerPassword,
     /// Vider la liste des documents récents.
     ClearRecent,
 }
@@ -60,10 +63,22 @@ pub(super) struct Asking {
 }
 
 impl Viewer {
+    /// Pose une question. Elle apparaît en fondu : l'horloge des animations
+    /// est réveillée pour que la fenêtre se repeigne pendant ce temps-là.
+    fn ask(&mut self, asking: Asking) {
+        self.dialogs.push(asking);
+        self.wake_anim();
+    }
+
+    /// Vrai tant que la question du dessus apparaît.
+    pub(super) fn dialog_opening(&self) -> bool {
+        self.dialogs.last().is_some_and(|a| a.dialog.opening())
+    }
+
     /// Affiche un message d'erreur.
     pub(super) fn alert(&mut self, title: &str, message: &str) {
         log_line(&format!("message : {title} — {message}"));
-        self.dialogs.push(Asking {
+        self.ask(Asking {
             dialog: Dialog::alert(title, message),
             kind: Kind::Alert,
             then: Then::Nothing,
@@ -72,7 +87,7 @@ impl Viewer {
 
     /// Pose une question à plusieurs réponses ; le dernier bouton annule.
     pub(super) fn push_choice(&mut self, title: &str, message: &str, labels: &[&str], then: Then) {
-        self.dialogs.push(Asking {
+        self.ask(Asking {
             dialog: Dialog::choice(title, message, Tone::Question, labels),
             kind: Kind::Choice,
             then,
@@ -82,7 +97,7 @@ impl Viewer {
     /// Demande confirmation d'une action : `verb` nomme le bouton qui la
     /// lance.
     pub(super) fn confirm(&mut self, title: &str, message: &str, verb: &str, then: Then) {
-        self.dialogs.push(Asking {
+        self.ask(Asking {
             dialog: Dialog::choice(title, message, Tone::Question, &[verb, "Annuler"]),
             kind: Kind::Confirm,
             then,
@@ -115,7 +130,7 @@ impl Viewer {
         }
         self.select_tab(index);
         let name = self.document_name();
-        self.dialogs.push(Asking {
+        self.ask(Asking {
             dialog: Dialog::choice(
                 "Enregistrer les modifications ?",
                 &format!(
@@ -171,7 +186,7 @@ impl Viewer {
         } else {
             tr("Tout enregistrer")
         };
-        self.dialogs.push(Asking {
+        self.ask(Asking {
             dialog: Dialog::choice(
                 "Enregistrer les modifications ?",
                 &message,
@@ -256,10 +271,13 @@ impl Viewer {
                 },
                 Then::Updates => self.updates_answer(index, window),
                 Then::Protection => match index {
-                    0 => self.ask_password(None),
+                    0 => self.protect_change(),
                     1 => self.remove_protection(),
                     _ => {}
                 },
+                Then::OwnerPassword if index == 0 => {
+                    self.ask_owner_password(super::OwnerThen::Unlock);
+                }
                 _ => {}
             }
             return;
@@ -280,7 +298,12 @@ impl Viewer {
         }
         match asking.then.clone() {
             // Rien à faire : un message, ou un choix déjà appliqué.
-            Then::Nothing | Then::Language | Then::Settings | Then::Updates | Then::Protection => {}
+            Then::Nothing
+            | Then::Language
+            | Then::Settings
+            | Then::Updates
+            | Then::Protection
+            | Then::OwnerPassword => {}
             Then::CloseTab => {
                 let active = self.active_tab;
                 self.close_tab_now(active);

@@ -323,6 +323,12 @@ impl Viewer {
         if self.loaded.is_none() {
             return;
         }
+        // Le mode écrit le document sans passer par `apply_edit` : le droit
+        // se vérifie donc à l'entrée.
+        if self.edit.is_none() && !self.require_right(crate::render_worker::Right::Modify) {
+            window.request_redraw();
+            return;
+        }
         self.leave_home();
         if let Some(mode) = &mut self.edit {
             if mode.bar.tool == tool {

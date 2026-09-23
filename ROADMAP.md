@@ -230,12 +230,18 @@ Livrable : version 0.2, parité avec Acrobat Standard hors édition de texte.
   reconnaissance, et la confiance rendue avec chaque ligne le dit.
   À faire : en-têtes minuscules (moins de 20 px de corps), écriture manuscrite, pages de travers
   (redressement), tableaux.
-- [x] **Protéger un document par mot de passe** depuis l'application (`Command::Protect`) : le mot
-  de passe est demandé deux fois, masqué — une faute de frappe enfermerait le document —, le
-  document est chiffré (`Document::protect`, AES) puis réécrit en entier, et le mot de passe est
-  redemandé à l'ouverture. Sur un document déjà protégé, la même entrée propose de changer le mot
-  de passe ou de retirer la protection. Le chiffrement existait dans la bibliothèque et en ligne
-  de commande ; il manquait à l'interface.
+- [x] **Protéger un document par mot de passe** depuis l'application (`Command::Protect`,
+  `ui/protect.rs`, `viewer/protect.rs`) : mot de passe d'ouverture (facultatif) et mot de passe
+  des permissions, chacun saisi deux fois, masqué, avec une jauge de force ; impression non /
+  basse / haute résolution et six permissions (modifier, copier, commenter, remplir,
+  accessibilité, assembler). Le document est chiffré (`Document::protect`, AES-256 R6) puis
+  réécrit en entier. Sur un document déjà protégé, la même entrée propose de changer la
+  protection (fenêtre pré-remplie) ou de la retirer — ce que seul le mot de passe des
+  permissions autorise.
+- [x] **Permissions appliquées par le lecteur** : un document ouvert avec le seul mot de passe
+  d'ouverture annonce ses restrictions ; impression refusée ou plafonnée à 150 ppp, copie et
+  export refusés, chaque modification soumise à son droit (`EditOp::required_right`), et
+  chaque refus propose le mot de passe des permissions.
 - [x] **Les questions d'Acrux sont dessinées par Acrux** (`acrux-app/src/ui/dialog.rs`,
   `acrux-app/src/viewer/dialogs.rs`) : plus de boîte du système. Les boutons nomment l'action
   (« Enregistrer », « Ne pas enregistrer », « Annuler »), la fenêtre ne bloque pas le programme —
@@ -408,12 +414,13 @@ Livrable : version 0.3, édition au moins équivalente à Acrobat Pro sur le cor
   accepte notre enveloppe et `X509Chain` valide nos certificats sans erreur.
   À faire : horodatage RFC 3161, révocation OCSP / CRL, LTV (`/DSS`, PAdES B-LT et
   B-LTA), `/DocMDP` en écriture et évaluation des modifications autorisées, ECDSA,
-  PKCS#12, signature d'un document chiffré, aléa du système pour les vraies clés
+  PKCS#12, signature d'un document chiffré, identité auto-signée (la génération de clés
+  accepte maintenant l'aléa du système, `SystemRandom`)
 - [ ] Certification de document, sceaux
 Livrable : version 0.4.
 
 ## Phase 7 — Sécurité, conformité, prépresse
-- [~] Mots de passe et permissions (écriture) : `Document::protect/unprotect` (AES-256 R6, `Permissions`), `acr protect/unprotect`, `--password` ; chiffrement par certificat à faire
+- [~] Mots de passe et permissions (écriture) : `Document::protect/unprotect` (AES-256 R6, `Permissions`, niveaux d'impression, permissions normalisées), clé, sels, `/Perms`, IV et `/ID` tirés d'un générateur ChaCha20 semé par le système (`crypt/random.rs`, vecteurs RFC 8439), propriétaire seul autorisé à changer ou retirer la protection, `/Perms` vérifié à la lecture (algorithme 13), estimation de la force des mots de passe, `acr protect --print none|low|high --no-fill --no-assemble…`, `acr info` (chiffrement, accès, permissions), `--password` ; chiffrement par certificat et SASLprep des mots de passe à faire
 - [x] Biffure définitive (`acrux-features/redact.rs`, `acr redact/sanitize`) : marques `/Redact` (§12.5.6.23) avec `/QuadPoints`, `/IC`, `/OverlayText`, `/RO` et aperçu en cadre rouge ; recherche par motif écrite à la main (littéral, courriel, téléphone, IBAN modulo 97, carte bancaire Luhn, sécurité sociale, date, IP) ; application par **réécriture du flux de contenu** (codes des glyphes couverts retirés des `Tj`/`TJ` avec correction du positionnement, XObjects de formulaire réécrits récursivement, pixels couverts des images XObject et en ligne mis à zéro, tracés entièrement couverts supprimés, annotations touchées retirées) ; nettoyage des données cachées (métadonnées, pièces jointes, JavaScript, calques désactivés, commentaires, formulaires, texte invisible, objets inatteignables, révisions antérieures) ; corpus `synthese/biffure-avant-application.pdf`. À faire : polices à sous-ensemble réduites aux glyphes restants, biffure de motifs sur un corpus réel, aperçu interactif dans l'application
 - [~] Accessibilité (`acrux-features/accessibility.rs`, `acr check-a11y/autotag`) : lecture de l'arbre de structure (`/StructTreeRoot` §14.7 : types après `/RoleMap`, texte retrouvé par les `/MCID` des marques `BDC … EMC`, `/Alt`, `/ActualText`, `/Lang`, `/T`, attributs `/A`, `/OBJR`, rattachement page par page via `/Pg` et `/ParentTree`) ; **vérificateur PDF/UA-1** avec 17 règles testées (document balisé, langue du document et des passages, titre et `/DisplayDocTitle`, figures sans `/Alt`, liens sans texte de substitution, ordre de lecture comparé à la découpe XY, titres sans saut de niveau, tableaux sans `TH` / `/Scope` / `/Headers`, listes `L > LI > LBody`, contraste WCAG 4,5:1 et 3:1 calculé contre les aplats du contenu, page image sans texte extractible, polices sans équivalent Unicode, champs sans `/TU`, contenu non balisé) ; **balisage automatique** : arbre construit depuis la mise en page de `text` (titres renumérotés, paragraphes, listes, tableaux, figures), marques `BDC /P <</MCID n>> … EMC` insérées dans le flux réécrit octet pour octet, `/Artifact` sur le décor et les en-têtes courants, `/ParentTree`, `/MarkInfo`, `/Lang` déduit du texte ; corpus `synthese/accessibilite-problemes.pdf`, note `spec-notes/pdf-14.7-structure-et-balisage.md`. À faire : `Lbl` séparé du `LBody`, alt-text suggéré par l'IA locale, panneau de balises dans l'application
 - [~] Contrôle en amont (`acrux-features/preflight.rs`, `acr preflight/separations`) : profils PDF/A-1b, A-2b, A-3b, PDF/X-1a, PDF/X-4 et PDF/UA-1 ; règles vérifiées (version du fichier, chiffrement, polices incorporées et programme lisible, `/OutputIntent` présent et cohérent, transparence, JavaScript et `/Launch`, pièces jointes, flux externes `/F`, espaces dépendants du périphérique sans intention de sortie, `/Interpolate`, `/TrimBox`, surimpression, XMP cohérent avec `/Info`, accessibilité pour PDF/UA) ; **correctifs** : générateur XMP maison (RDF/XML, `pdfaid`/`pdfuaid`/`pdfxid`), intention de sortie sRVB avec un **profil ICC matriciel/TRC engendré par nous** et relu par `acrux-graphics`, incorporation des polices depuis les polices système, retrait du JavaScript et des pièces jointes, `/DisplayDocTitle`, `/Interpolate false`, `/TrimBox`, balisage automatique pour PDF/UA ; **aperçu de sortie** : `separations` (quatre plaques CMJN issues du rendu, plaques CMJN directes pour les couleurs posées en `k`, plaques nommées des tons directs) et `ink_coverage` (taux d'encre total maximal, alerte au-delà de 300 %) ; corpus `synthese/pdfa-1b-conforme.pdf`. À faire : aplatissement de la transparence, conversion colorimétrique, PDF/A niveau A, profils de destination autres que sRVB

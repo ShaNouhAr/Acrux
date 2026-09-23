@@ -122,6 +122,14 @@ impl Dialog {
         )
     }
 
+    /// Vrai pendant l'apparition (et un peu après, pour peindre l'état
+    /// final) : tant qu'elle dure, il faut repeindre sans attendre
+    /// d'événement, sans quoi la fenêtre resterait figée à demi transparente.
+    #[must_use]
+    pub fn opening(&self) -> bool {
+        self.opened.elapsed().as_secs_f64() < 0.2
+    }
+
     /// Bouton sous un point, s'il y en a un.
     #[must_use]
     pub fn button_at(&self, x: i32, y: i32) -> Option<usize> {

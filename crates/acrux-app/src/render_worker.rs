@@ -172,7 +172,61 @@ pub enum EditOp {
     },
 }
 
+/// Droit qu'exige une modification d'un document protégé (§7.6.4.2,
+/// table 22). Le propriétaire les a tous ; l'utilisateur, ceux que les
+/// permissions lui laissent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Right {
+    /// Modifier le contenu (bit 4) : texte, objets, biffures, pièces jointes.
+    Modify,
+    /// Commenter (bit 6) : annotations, marques, remplir et signer.
+    Annotate,
+    /// Remplir les champs de formulaire (bit 9, ou 6).
+    FillForms,
+    /// Assembler (bit 11) : pivoter, supprimer, insérer, réordonner des pages.
+    Assemble,
+}
+
+impl Right {
+    /// Vrai si ces permissions accordent ce droit. Commenter comprend le
+    /// remplissage des formulaires (bit 6 de la table 22).
+    #[must_use]
+    pub fn allowed_by(self, p: acrux_document::protect::Permissions) -> bool {
+        match self {
+            Right::Modify => p.modify,
+            Right::Annotate => p.annotate,
+            Right::FillForms => p.fill_forms || p.annotate,
+            Right::Assemble => p.assemble,
+        }
+    }
+}
+
 impl EditOp {
+    /// Droit que la modification exige d'un document protégé. C'est le
+    /// point unique où le visualiseur décide si un utilisateur qui n'a que
+    /// le mot de passe d'ouverture peut la faire.
+    #[must_use]
+    pub fn required_right(&self) -> Right {
+        match self {
+            EditOp::Rotate { .. }
+            | EditOp::Delete { .. }
+            | EditOp::Insert { .. }
+            | EditOp::Reorder { .. } => Right::Assemble,
+            EditOp::Annotate { .. }
+            | EditOp::Mark { .. }
+            | EditOp::FillSign { .. }
+            | EditOp::PlacedRect { .. } => Right::Annotate,
+            EditOp::SetField { .. } => Right::FillForms,
+            EditOp::EditText { .. }
+            | EditOp::ReplaceAll { .. }
+            | EditOp::EditObject { .. }
+            | EditOp::ApplyRedactions
+            | EditOp::Attach { .. }
+            | EditOp::Detach { .. }
+            | EditOp::Paragraph { .. } => Right::Modify,
+        }
+    }
+
     /// Applique la modification.
     ///
     /// # Errors
@@ -672,4 +726,126 @@ pub fn replace_all(doc: &Document, find: &str, with: &str) -> acrux_core::Result
     let count = edits.len();
     apply_edits(doc, &edits)?;
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use acrux_document::protect::Permissions;
+
+    #[test]
+    fn each_edit_requires_its_right() {
+        let cases = [
+            (
+                EditOp::Rotate {
+                    pages: vec![0],
+                    degrees: 90,
+                },
+                Right::Assemble,
+            ),
+            (EditOp::Delete { pages: vec![0] }, Right::Assemble),
+            (
+                EditOp::Insert {
+                    path: PathBuf::from("x.pdf"),
+                    password: None,
+                    pages: Vec::new(),
+                    at: 0,
+                },
+                Right::Assemble,
+            ),
+            (EditOp::Reorder { order: vec![1, 0] }, Right::Assemble),
+            (
+                EditOp::Annotate {
+                    page: 0,
+                    annotation: NewAnnotation::Note {
+                        x: 0.0,
+                        y: 0.0,
+                        contents: "note".into(),
+                        color: [1.0, 0.85, 0.0],
+                    },
+                    author: None,
+                },
+                Right::Annotate,
+            ),
+            (EditOp::Mark { marks: Vec::new() }, Right::Annotate),
+            (
+                EditOp::PlacedRect {
+                    page: 0,
+                    index: 0,
+                    rect: acrux_core::Rect::new(0.0, 0.0, 1.0, 1.0),
+                },
+                Right::Annotate,
+            ),
+            (
+                EditOp::SetField {
+                    name: "nom".into(),
+                    value: FieldValue::Text("x".into()),
+                },
+                Right::FillForms,
+            ),
+            (
+                EditOp::EditText {
+                    page: 0,
+                    line: 0,
+                    start: 0,
+                    end: 1,
+                    text: "x".into(),
+                },
+                Right::Modify,
+            ),
+            (
+                EditOp::ReplaceAll {
+                    find: "a".into(),
+                    with: "b".into(),
+                },
+                Right::Modify,
+            ),
+            (
+                EditOp::EditObject {
+                    page: 0,
+                    edits: Vec::new(),
+                },
+                Right::Modify,
+            ),
+            (EditOp::ApplyRedactions, Right::Modify),
+            (
+                EditOp::Attach {
+                    name: "a.txt".into(),
+                    data: Vec::new(),
+                    description: None,
+                },
+                Right::Modify,
+            ),
+            (
+                EditOp::Detach {
+                    name: "a.txt".into(),
+                },
+                Right::Modify,
+            ),
+        ];
+        for (op, right) in cases {
+            assert_eq!(op.required_right(), right, "{op:?}");
+        }
+    }
+
+    #[test]
+    fn rights_follow_the_permissions() {
+        let all = Permissions::all();
+        for right in [
+            Right::Modify,
+            Right::Annotate,
+            Right::FillForms,
+            Right::Assemble,
+        ] {
+            assert!(right.allowed_by(all));
+        }
+        let mut p = all;
+        p.fill_forms = false;
+        // Commenter comprend remplir.
+        assert!(Right::FillForms.allowed_by(p));
+        p.annotate = false;
+        assert!(!Right::FillForms.allowed_by(p) && !Right::Annotate.allowed_by(p));
+        p.assemble = false;
+        assert!(!Right::Assemble.allowed_by(p) && Right::Modify.allowed_by(p));
+    }
 }

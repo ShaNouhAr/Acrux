@@ -120,9 +120,12 @@ en WOFF) ou refluée, document Word `.docx` et classeur Excel `.xlsx` des tablea
 `text` extrait le texte dans l'ordre de lecture (paragraphes, colonnes,
 tableaux, en-têtes et pieds de page ; `--markdown` et `--html` conservent titres, gras, italique,
 listes et tableaux, `--layout` garde le texte positionné comme sur la page) ; `annots` et `annotate` listent et
-ajoutent des annotations ; `protect` chiffre en AES-256 (mots de passe utilisateur /
-propriétaire, permissions `--no-print`, `--no-copy`, `--no-modify`, `--no-annotate`) et
-`unprotect` retire le chiffrement ; `redact` biffe définitivement (`--rect`, `--find`, `--pattern email,iban,carte…`, texte de remplacement `--text`) en retirant vraiment le texte et les pixels du fichier, et `sanitize` supprime les données cachées (`--metadata`, `--attachments`, `--javascript`, `--layers`, `--comments`, `--forms`, `--invisible-text`, `--all`) ; `links` et `outline` listent les liens et les signets ;
+ajoutent des annotations ; `protect` chiffre en AES-256 avec une clé tirée d'un générateur
+cryptographique (mot de passe d'ouverture `--user`, mot de passe des permissions `--owner`,
+permissions `--print none|low|high`, `--no-modify`, `--no-copy`, `--no-annotate`, `--no-fill`,
+`--no-accessibility`, `--no-assemble` ; force des mots de passe affichée) et `unprotect` retire le
+chiffrement avec le mot de passe des permissions ; `info` dit le chiffrement, l'accès et les
+permissions d'un document protégé ; `redact` biffe définitivement (`--rect`, `--find`, `--pattern email,iban,carte…`, texte de remplacement `--text`) en retirant vraiment le texte et les pixels du fichier, et `sanitize` supprime les données cachées (`--metadata`, `--attachments`, `--javascript`, `--layers`, `--comments`, `--forms`, `--invisible-text`, `--all`) ; `links` et `outline` listent les liens et les signets ;
 `attachments` liste les **pièces jointes** (nom, taille, type, page, description), `attach` en
 incorpore une (flux compressé en Flate, `/Params` avec taille, dates et somme MD5 ; `--description`,
 `--page N` pose en plus une icône de trombone sur la page) et `detach` en extrait une en vérifiant
@@ -303,7 +306,14 @@ une page par feuille, et `Ctrl+S` demande où ranger le document obtenu.
 L'export est fait par le fil de rendu : une centaine de pages en images ne fige pas la fenêtre,
 et la barre d'état annonce la fin. Le titre porte « * » tant que des modifications ne sont pas
 enregistrées. Les documents chiffrés
-demandent leur mot de passe à l'ouverture.
+demandent leur mot de passe à l'ouverture, et ce qu'ils interdisent est dit dans la barre d'état.
+
+« Protéger par mot de passe » (palette, ou colonne d'outils) pose un mot de passe d'ouverture et
+un mot de passe des permissions, chacun saisi deux fois avec une jauge de force, et règle
+l'impression (non, basse, haute résolution), la modification, la copie, les commentaires, les
+formulaires, l'accessibilité et l'assemblage. Un document ouvert avec le seul mot de passe
+d'ouverture n'accorde que ses permissions ; chaque refus propose le mot de passe des permissions,
+qui seul permet aussi de changer ou de retirer la protection.
 
 Les réglages (thème, disposition, zoom, panneau, taille de fenêtre, fichiers récents) sont
 conservés dans `%APPDATA%\Acrux\prefs.txt`, un fichier texte `clé=valeur` lisible et

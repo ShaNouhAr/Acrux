@@ -421,6 +421,25 @@ pub fn system_language() -> String {
     }
 }
 
+/// Remplit `out` d'octets du générateur cryptographique du système ; faux
+/// s'il n'y en a pas.
+///
+/// L'aléa des clés de chiffrement (`acrux_document::crypt::random`) vient de
+/// la bibliothèque standard, faute de pouvoir appeler le système hors de ce
+/// module ; l'application le renforce en y branchant celui-ci au démarrage.
+#[must_use]
+pub fn system_random(out: &mut [u8]) -> bool {
+    #[cfg(windows)]
+    {
+        win32::system_random(out)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = out;
+        false
+    }
+}
+
 /// Application pilotée par la plateforme.
 pub trait App {
     /// Traite un événement.
@@ -449,5 +468,16 @@ pub fn run(
     {
         let _ = (title, width, height, maximised, app);
         Err("plateforme non prise en charge pour l'instant (Windows uniquement)".into())
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    /// Le générateur du système répond, et deux tirages diffèrent.
+    #[test]
+    fn system_random_fills_differently() {
+        let (mut a, mut b) = ([0u8; 32], [0u8; 32]);
+        assert!(super::system_random(&mut a) && super::system_random(&mut b));
+        assert_ne!(a, b);
     }
 }
