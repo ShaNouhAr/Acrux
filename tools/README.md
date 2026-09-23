@@ -13,6 +13,7 @@ Start-App "tests\corpus\reels\chrome-skia-2pages-texte-tableau-svg.pdf"
 Key 0x73          # F4 : panneau latéral
 Key 0x75          # F6 : zone suivante
 Click 300 85      # clic en coordonnées client
+Hover 300 85      # survol seul, sans clic (état survolé, position d'une note)
 Typing "bonjour"  # saisie de texte
 Chord "h"         # raccourci Ctrl+H (Chord "p" -Shift : Ctrl+Maj+P)
 Shot "avant"      # copie du tampon dans scratchpad/avant.ppm
@@ -40,7 +41,9 @@ de l'instance ; par défaut `%TEMP%\acrux-tests`) et `ACRUX_EXE` (l'exécutable 
 `target\debug\acrux.exe`). Le harnais n'arrête jamais que l'instance qu'il a lancée lui-même.
 
 `Drag` trace un geste continu (bouton enfoncé, une suite de points, relâchement) : c'est ce
-qui permet de tester l'outil « remplir et signer » sans rien afficher.
+qui permet de tester l'outil « remplir et signer » sans rien afficher. C'est aussi l'épreuve
+du « on se ravise » : les boutons des cartes n'agissent qu'au relâchement, pointeur dessus, et
+un `Drag` qui part d'un bouton pour finir dehors ne doit rien déclencher.
 
 ```powershell
 Typing "s"                                    # ouvre « remplir et signer »

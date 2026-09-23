@@ -1189,7 +1189,7 @@ impl ColorPicker {
                 primary: true,
                 hovered: self.hover_ok,
                 focused: false,
-                disabled: false,
+                ..ButtonLook::default()
             },
         );
         let lw = text.measure(size, "OK");

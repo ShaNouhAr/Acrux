@@ -138,7 +138,7 @@ impl ModeBar {
                 primary: true,
                 hovered: self.hover,
                 focused: false,
-                disabled: false,
+                ..ButtonLook::default()
             },
         );
         let lw = text.measure(size, label);

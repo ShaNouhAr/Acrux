@@ -811,7 +811,7 @@ impl EditBar {
                     primary: true,
                     hovered: self.hover == Some(index),
                     focused: false,
-                    disabled: false,
+                    ..crate::ui::paint::ButtonLook::default()
                 },
             );
             let lw = text.measure(size, label);

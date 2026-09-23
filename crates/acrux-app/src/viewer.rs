@@ -50,13 +50,15 @@ use crate::selection::{SelectableText, Selection, TextPos};
 use crate::ui::anim::{ease_out, Anim, Clock};
 use crate::ui::input::{InputAction, TextInput};
 use crate::ui::lang::{self, Lang};
+use crate::ui::modal::{ButtonRow, PromptAct, PromptCard, PromptContent, PromptFocus, RowButton};
 use crate::ui::objects::{self as objects_ui, Handle, ViewRect};
 use crate::ui::paint::{round_rect, round_rect_alpha, round_rect_outline, shadow};
-use crate::ui::palette::{Command, Palette};
+use crate::ui::palette::{Command, Palette, PaletteDown};
 use crate::ui::panel::{
     AttachmentRow, CommentRow, OutlineRow, Panel, PanelAction, PanelContent, PanelTab,
 };
 use crate::ui::prefs::{Fit, Prefs, ViewMode};
+use crate::ui::settings::{SettingsAction, SettingsSheet, SettingsState, UpdateLine};
 use crate::ui::sign::{self, Capture, Item as SignItem, Saved};
 use crate::ui::signpanel::{Action as SignAction, SignPanel};
 use crate::ui::tabs::{TabAction, TabInfo, Tabs};
@@ -576,6 +578,22 @@ struct Prompt {
     input: TextInput,
     error: Option<String>,
     kind: PromptKind,
+    /// La carte commune : boutons, focus, apparition.
+    card: PromptCard,
+}
+
+impl Prompt {
+    /// Invite neuve, le focus dans le champ.
+    fn new(title: &str, label: String, input: TextInput, kind: PromptKind) -> Self {
+        Self {
+            title: title.to_string(),
+            label,
+            input,
+            error: None,
+            kind,
+            card: PromptCard::new(),
+        }
+    }
 }
 
 /// Pages du document courant vues par l'impression.
@@ -682,9 +700,11 @@ pub struct Viewer {
     media: Option<MediaView>,
     /// Modèle 3D activé, s'il y en a un.
     three_d: Option<three_d::Active3d>,
-    /// Boutons de l'invite modale, relevés au dernier dessin : rectangle et
-    /// « c'est le bouton qui valide ».
-    prompt_buttons: Vec<(i32, i32, i32, i32, bool)>,
+    /// Fiche « Paramètres », ouverte par-dessus tout.
+    settings: Option<SettingsSheet>,
+    /// Issue de la dernière recherche de mise à jour : `Ok` si Acrux est à
+    /// jour, l'erreur sinon (une version trouvée va dans `update_found`).
+    update_outcome: Option<Result<(), String>>,
     /// Résultat de la recherche de mise à jour en cours, s'il y en a une.
     update_rx: Option<std::sync::mpsc::Receiver<Result<crate::update::Release, String>>>,
     /// Version plus récente trouvée, en attente que l'utilisateur en décide.
@@ -798,15 +818,30 @@ pub struct Viewer {
     thumb_key: u32,
 }
 
+/// Où est le focus clavier de la carte de recherche.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SearchFocus {
+    /// Le champ « rechercher ».
+    Find,
+    /// Le champ « remplacer par ».
+    With,
+    /// Un bouton : 0 remplace l'occurrence courante, 1 les remplace toutes.
+    Button(usize),
+}
+
 /// État de la recherche dans le document.
 struct Search {
     input: TextInput,
     /// Champ « remplacer par », quand on l'a demandé (Ctrl+H).
     replace: Option<TextInput>,
-    /// Le clavier va au champ de remplacement.
-    on_replace: bool,
-    /// Boutons dessinés au dernier tour, pour les cliquer.
-    buttons: Vec<SearchTarget>,
+    /// Élément qui a le focus clavier.
+    focus: SearchFocus,
+    /// Champs dessinés au dernier tour, pour les cliquer.
+    fields: Vec<SearchTarget>,
+    /// « Remplacer », « Tout remplacer » : la rangée commune des cartes.
+    row: ButtonRow,
+    /// Rectangle de la carte au dernier dessin (repère de la vue).
+    card: (i32, i32, i32, i32),
     /// Occurrences : (page, boîte en espace PDF).
     hits: Vec<(usize, Rect)>,
     /// Occurrence courante.
@@ -831,82 +866,112 @@ fn is_image(data: &[u8]) -> bool {
         || data.starts_with(b"MM *")
 }
 
-/// Un rectangle cliquable du bandeau de recherche : sa position, sa taille,
-/// et ce qu'il fait.
-type SearchTarget = (i32, i32, i32, i32, ReplaceButton);
+impl Search {
+    /// Carte neuve : le champ « rechercher » seul, qui a le focus.
+    fn new() -> Self {
+        Self {
+            input: TextInput::new(lang::tr("Rechercher dans le document")),
+            replace: None,
+            focus: SearchFocus::Find,
+            fields: Vec::new(),
+            row: ButtonRow::default(),
+            card: (0, 0, 0, 0),
+            hits: Vec::new(),
+            current: 0,
+            last_query: String::new(),
+            scanned: 0,
+        }
+    }
 
-/// Ce que l'on touche en cliquant dans le bandeau de recherche.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReplaceButton {
-    /// Le champ « rechercher ».
-    Find,
-    /// Le champ « remplacer par ».
-    With,
-    /// Remplacer l'occurrence courante et passer à la suivante.
-    One,
-    /// Remplacer toutes les occurrences du document.
-    All,
+    /// Le clavier va au champ de remplacement.
+    fn on_replace(&self) -> bool {
+        self.focus == SearchFocus::With
+    }
+
+    /// Place le focus ; seul le champ qui l'a montre son caret.
+    fn set_focus(&mut self, focus: SearchFocus) {
+        self.focus = focus;
+        self.input.focused = focus == SearchFocus::Find;
+        if let Some(r) = &mut self.replace {
+            r.focused = focus == SearchFocus::With;
+        }
+    }
+
+    /// Tab (ou Maj+Tab) : rechercher → remplacer → les boutons, s'il y a de
+    /// quoi remplacer → rechercher.
+    fn tab(&mut self, back: bool) {
+        let mut stops = vec![SearchFocus::Find];
+        if self.replace.is_some() {
+            stops.push(SearchFocus::With);
+            if !self.hits.is_empty() {
+                stops.push(SearchFocus::Button(0));
+                stops.push(SearchFocus::Button(1));
+            }
+        }
+        let n = stops.len();
+        let at = stops.iter().position(|s| *s == self.focus).unwrap_or(0);
+        let next = if back { (at + n - 1) % n } else { (at + 1) % n };
+        self.set_focus(stops[next]);
+    }
 }
 
-/// Dessine le bandeau de recherche : une carte flottante en haut à droite,
-/// avec le champ, le champ de remplacement s'il est ouvert, le compteur et
-/// les boutons. Rend les rectangles cliquables.
+/// Un champ cliquable de la carte de recherche : sa position, sa taille,
+/// et lequel c'est.
+type SearchTarget = (i32, i32, i32, i32, SearchFocus);
+
+/// Ce que l'on touche en cliquant dans la carte de recherche.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SearchPart {
+    /// Un champ.
+    Field(SearchFocus),
+    /// Un bouton de la rangée.
+    Button(usize),
+    /// Le reste de la carte : le clic s'arrête là, il ne va pas à la page.
+    Card,
+}
+
+/// Dessine la carte de recherche, flottante en haut à droite : le champ, le
+/// champ de remplacement s'il est ouvert, le compteur et les boutons.
 ///
-/// Les boutons ne sont rendus que s'il y a quelque chose à remplacer :
-/// grisés, ils ne répondent pas au clic.
-#[allow(clippy::too_many_lines)] // une mise en page, lue de haut en bas
+/// C'est la carte commune (`modal::card` : même rayon, même ombre), mais
+/// sans titre ni voile : elle n'est pas modale, on lit la page à côté, comme
+/// avec la barre de recherche de Windows ou d'Acrobat — un titre lui
+/// volerait de la hauteur au-dessus du document.
+///
+/// Les boutons ne répondent que s'il y a quelque chose à remplacer.
+#[allow(clippy::many_single_char_names)] // une carte : x, y, s(…), thème
 fn paint_search_card(
     frame: &mut Frame<'_>,
     text: &mut TextRenderer,
-    search: &Search,
+    search: &mut Search,
     theme: &Theme,
     dpi: f32,
     page_count: usize,
-) -> Vec<SearchTarget> {
+) {
     let t = theme;
     let s = |v: f32| (v * dpi).round() as i32;
     let size = t.font_size * dpi;
-    let (card_w, pad, field_h, gap, footer_h) = (s(340.0), s(10.0), s(32.0), s(8.0), s(30.0));
+    let (card_w, pad, field_h, gap, footer_h) = (s(340.0), s(12.0), s(32.0), s(8.0), s(30.0));
     let rows = if search.replace.is_some() { 2 } else { 1 };
     let card_h = pad * 2 + field_h * rows + gap * rows + footer_h;
     let x = frame.width as i32 - card_w - s(12.0);
     let y = s(12.0);
-    let radius = 12.0 * dpi;
-    shadow(
-        frame,
-        x,
-        y + s(4.0),
-        card_w,
-        card_h,
-        radius,
-        22.0 * dpi,
-        0.35,
-    );
-    round_rect(frame, x, y, card_w, card_h, radius, t.bar);
-    round_rect_outline(
-        frame,
-        x,
-        y,
-        card_w,
-        card_h,
-        radius,
-        dpi.max(1.0),
-        t.separator,
-    );
+    crate::ui::modal::card(frame, t, dpi, x, y, card_w, card_h, 1.0);
+    search.card = (x, y, card_w, card_h);
 
-    let mut targets = Vec::new();
+    search.fields.clear();
     let (fx, fw) = (x + pad, card_w - 2 * pad);
     let mut fy = y + pad;
     search.input.draw(frame, text, t, dpi, fx, fy, fw, field_h);
-    targets.push((fx, fy, fw, field_h, ReplaceButton::Find));
+    search.fields.push((fx, fy, fw, field_h, SearchFocus::Find));
     fy += field_h + gap;
     if let Some(r) = &search.replace {
         r.draw(frame, text, t, dpi, fx, fy, fw, field_h);
-        targets.push((fx, fy, fw, field_h, ReplaceButton::With));
+        search.fields.push((fx, fy, fw, field_h, SearchFocus::With));
         fy += field_h + gap;
     }
 
-    // Le pied : le compteur à gauche, les boutons à droite.
+    // Le pied : le compteur à gauche, les boutons groupés à droite.
     let scanning = search.scanned < page_count;
     let counter = if search.input.value.is_empty() {
         lang::tr("Entrée : suivante · Maj+Entrée : précédente").to_string()
@@ -923,42 +988,31 @@ fn paint_search_card(
     let baseline = fy as f32 + f32::midpoint(footer_h as f32, text.ascent(size)) - 1.0;
     let mut right = fx + fw;
     if search.replace.is_some() {
+        // Dans l'ordre de Windows : l'action principale d'abord.
         let usable = !search.hits.is_empty();
-        for (label, what, primary) in [
-            (lang::tr("Remplacer"), ReplaceButton::One, true),
-            (lang::tr("Tout remplacer"), ReplaceButton::All, false),
-        ] {
-            let bw = (text.measure(size, label) + 24.0 * dpi) as i32;
-            let bx = right - bw;
-            let ink = crate::ui::paint::button(
-                frame,
-                bx,
-                fy,
-                bw,
-                footer_h,
-                dpi,
-                t,
-                crate::ui::paint::ButtonLook {
-                    primary,
-                    hovered: false,
-                    focused: false,
-                    disabled: !usable,
-                },
-            );
-            let lw = text.measure(size, label);
-            text.draw(
-                frame,
-                bx as f32 + (bw as f32 - lw) / 2.0,
-                baseline,
-                size,
-                label,
-                ink,
-            );
-            if usable {
-                targets.push((bx, fy, bw, footer_h, what));
-            }
-            right = bx - gap;
-        }
+        search.row.buttons = vec![
+            RowButton {
+                label: lang::tr("Remplacer").into(),
+                primary: true,
+                enabled: usable,
+            },
+            RowButton {
+                label: lang::tr("Tout remplacer").into(),
+                primary: false,
+                enabled: usable,
+            },
+        ];
+        right = search
+            .row
+            .layout_right(text, size, dpi, fx + fw, fy, footer_h)
+            - gap;
+        let focus = match search.focus {
+            SearchFocus::Button(i) => Some(i),
+            _ => None,
+        };
+        search.row.paint(frame, text, t, dpi, focus);
+    } else {
+        search.row.buttons.clear();
     }
     text.draw_clipped(
         frame,
@@ -969,10 +1023,10 @@ fn paint_search_card(
         t.text_dim,
         (right - fx - s(8.0)).max(0) as f32,
     );
-    targets
 }
 
 impl Viewer {
+    /// Nouveau visualiseurimpl Viewer {
     /// Nouveau visualiseur, avec les fichiers à ouvrir au démarrage (un
     /// onglet chacun).
     #[must_use]
@@ -1034,7 +1088,8 @@ impl Viewer {
             objects: None,
             media: None,
             three_d: None,
-            prompt_buttons: Vec::new(),
+            settings: None,
+            update_outcome: None,
             update_rx: None,
             update_found: None,
             update_asked: false,
@@ -1229,16 +1284,15 @@ impl Viewer {
                         }
                     )
                 };
-                let mut input = TextInput::new("Valeur");
+                let mut input = TextInput::new(lang::tr("Valeur"));
                 input.value = current;
                 input.caret = input.value.chars().count();
-                self.prompt = Some(Prompt {
-                    title: "Champ de formulaire".into(),
+                self.prompt = Some(Prompt::new(
+                    lang::tr("Champ de formulaire"),
                     label,
                     input,
-                    error: None,
-                    kind: PromptKind::Field { name, kind },
-                });
+                    PromptKind::Field { name, kind },
+                ));
             }
             FieldType::Button | FieldType::Signature | FieldType::Unknown => {}
         }
@@ -1753,114 +1807,114 @@ impl Viewer {
         Some(if at >= self.active_tab { at + 1 } else { at })
     }
 
-    /// Ouvre les paramètres : un menu, puisqu'il y a plus d'un réglage.
+    /// Ouvre la fiche « Paramètres ».
     fn open_settings(&mut self, window: &mut dyn WindowHandle) {
-        let langue = Lang::from_key(&self.prefs.language);
-        let auto = if self.prefs.check_updates {
-            lang::tr("activée")
+        self.settings = Some(SettingsSheet::new());
+        log_line("paramètres : ouverts");
+        window.request_redraw();
+    }
+
+    /// Applique ce que la fiche « Paramètres » demande. La langue et le thème
+    /// changent sur-le-champ : la fiche, repeinte, les montre aussitôt.
+    fn settings_action(&mut self, action: SettingsAction, window: &mut dyn WindowHandle) {
+        match action {
+            SettingsAction::Close => {
+                self.settings = None;
+                log_line("paramètres : fermés");
+            }
+            SettingsAction::Language(choice) => {
+                if Lang::from_key(&self.prefs.language) != choice {
+                    self.set_language(choice, window);
+                }
+                log_line(&format!("réglage : langue {}", choice.key()));
+            }
+            SettingsAction::Dark(dark) => {
+                if dark != (self.theme.canvas == Theme::dark().canvas) {
+                    self.toggle_theme(window);
+                }
+                log_line(if dark {
+                    "réglage : thème sombre"
+                } else {
+                    "réglage : thème clair"
+                });
+            }
+            SettingsAction::AutoUpdates(on) => {
+                self.set_auto_updates(on);
+                log_line(if on {
+                    "réglage : mises à jour au démarrage"
+                } else {
+                    "réglage : mises à jour jamais"
+                });
+            }
+            SettingsAction::CheckNow => self.check_updates(true, window),
+            SettingsAction::Install => {
+                // La confirmation passe par-dessus la fiche, qu'on referme :
+                // on ne revient pas à des réglages après avoir installé.
+                self.settings = None;
+                self.install_update(window);
+            }
+        }
+        window.request_redraw();
+    }
+
+    /// Recherche des mises à jour au démarrage, ou jamais.
+    fn set_auto_updates(&mut self, on: bool) {
+        if self.prefs.check_updates == on {
+            return;
+        }
+        self.prefs.check_updates = on;
+        self.prefs.save();
+        self.set_notice(if on {
+            lang::tr("mises à jour : recherche au démarrage").into()
         } else {
-            lang::tr("désactivée")
+            lang::tr("mises à jour : recherche désactivée").into()
+        });
+    }
+
+    /// Les réglages en vigueur, tels que la fiche les montre. Ils sont lus
+    /// champ par champ : la fiche, elle, reste libre d'être empruntée.
+    fn settings_state<'a>(
+        prefs: &'a Prefs,
+        theme: &Theme,
+        checking: bool,
+        found: Option<&'a crate::update::Release>,
+        outcome: Option<&'a Result<(), String>>,
+    ) -> SettingsState<'a> {
+        let update = if checking {
+            UpdateLine::Checking
+        } else if let Some(release) = found {
+            UpdateLine::Available(&release.version)
+        } else {
+            match outcome {
+                Some(Ok(())) => UpdateLine::UpToDate,
+                Some(Err(why)) => UpdateLine::Failed(why),
+                None => UpdateLine::Idle,
+            }
         };
-        let message = lang::trf(
-            "Acrux {} — langue : {} · recherche de mises à jour : {}.",
-            &[env!("CARGO_PKG_VERSION"), lang::tr(langue.label()), auto],
-        );
-        self.push_choice(
-            lang::tr("Paramètres"),
-            &message,
-            &[
-                lang::tr("Langue"),
-                lang::tr("Mises à jour"),
-                lang::tr("Fermer"),
-            ],
-            Then::Settings,
-        );
-        window.request_redraw();
+        SettingsState {
+            language: Lang::from_key(&prefs.language),
+            system: system_lang(),
+            dark: theme.canvas == Theme::dark().canvas,
+            auto_updates: prefs.check_updates,
+            update,
+            version: env!("CARGO_PKG_VERSION"),
+        }
     }
 
-    /// Choix de la langue.
-    fn open_language(&mut self, window: &mut dyn WindowHandle) {
-        let current = Lang::from_key(&self.prefs.language);
-        let system = system_lang();
-        let message = lang::trf(
-            "Acrux suit la langue du système ({}). Vous pouvez en imposer une autre ; le choix est retenu.",
-            &[lang::tr(system.label())],
+    /// Peint la fiche « Paramètres », par-dessus la page.
+    fn paint_settings(&mut self, frame: &mut Frame<'_>) {
+        let (theme, dpi) = (self.theme, self.dpi_scale as f32);
+        let state = Self::settings_state(
+            &self.prefs,
+            &self.theme,
+            self.update_rx.is_some(),
+            self.update_found.as_ref(),
+            self.update_outcome.as_ref(),
         );
-        let choice = lang::trf("Choix actuel : {}.", &[lang::tr(current.label())]);
-        self.push_choice(
-            lang::tr("Langue de l'interface"),
-            &format!(
-                "{message}
-{choice}"
-            ),
-            &[
-                lang::tr("Système"),
-                lang::tr("Français"),
-                lang::tr("English"),
-                lang::tr("Annuler"),
-            ],
-            Then::Language,
-        );
-        window.request_redraw();
-    }
-
-    /// Réglages des mises à jour : état, vérification, installation.
-    fn open_updates(&mut self, window: &mut dyn WindowHandle) {
-        let mut message = lang::trf("Version installée : {}.", &[env!("CARGO_PKG_VERSION")]);
-        match &self.update_found {
-            Some(release) => {
-                message.push(' ');
-                message.push_str(&lang::trf(
-                    "Acrux {} est disponible.",
-                    &[release.version.as_str()],
-                ));
-            }
-            None if self.prefs.last_update_check > 0 => {
-                message.push(' ');
-                message.push_str(lang::tr("Aucune version plus récente n'a été trouvée."));
-            }
-            None => {}
-        }
-        message.push('\n');
-        message.push_str(if self.prefs.check_updates {
-            lang::tr("Acrux cherche une version plus récente au démarrage, au plus une fois par jour. Rien n'est installé sans votre accord.")
-        } else {
-            lang::tr("La recherche automatique est désactivée : Acrux ne contacte rien au démarrage.")
-        });
-        let mut labels: Vec<&str> = vec![lang::tr("Rechercher maintenant")];
-        if self.update_found.is_some() {
-            labels.push(lang::tr("Installer"));
-        }
-        labels.push(if self.prefs.check_updates {
-            lang::tr("Ne plus chercher")
-        } else {
-            lang::tr("Chercher au démarrage")
-        });
-        labels.push(lang::tr("Fermer"));
-        self.push_choice(lang::tr("Mises à jour"), &message, &labels, Then::Updates);
-        window.request_redraw();
-    }
-
-    /// Réponse au menu des mises à jour.
-    fn updates_answer(&mut self, index: usize, window: &mut dyn WindowHandle) {
-        // Les boutons dépendent de l'état : on les renomme ici plutôt que de
-        // retenir leur rang.
-        let has_update = self.update_found.is_some();
-        let toggle = usize::from(has_update) + 1;
-        if index == 0 {
-            self.check_updates(true, window);
-        } else if has_update && index == 1 {
-            self.install_update(window);
-        } else if index == toggle {
-            self.prefs.check_updates = !self.prefs.check_updates;
-            self.prefs.save();
-            self.set_notice(if self.prefs.check_updates {
-                lang::tr("mises à jour : recherche au démarrage").into()
-            } else {
-                lang::tr("mises à jour : recherche désactivée").into()
-            });
-        }
-        window.request_redraw();
+        let (Some(sheet), Some(text)) = (self.settings.as_mut(), self.text.as_mut()) else {
+            return;
+        };
+        sheet.paint(frame, text, &theme, dpi, &state);
     }
 
     /// Applique et retient une langue.
@@ -1994,221 +2048,142 @@ impl Viewer {
         }
     }
 
-    /// Dessine l'invite modale par-dessus la vue.
-    #[allow(clippy::too_many_lines)] // une mise en page, lue de haut en bas
+    /// Dessine l'invite modale par-dessus la vue, sur la carte commune.
     fn paint_prompt(&mut self, frame: &mut Frame<'_>) {
-        let Some(prompt) = &self.prompt else { return };
-        let t = self.theme;
-        let dpi = self.dpi_scale as f32;
-        fill_rect_blend(
-            frame,
-            0,
-            0,
-            self.width as i32,
-            self.height as i32,
-            (0, 0, 0),
-            120,
-        );
-        let panel_w = (420.0 * dpi) as i32;
-        let panel_h = (196.0 * dpi) as i32;
-        let x = (self.width as i32 - panel_w) / 2;
-        let y = self.view_top() as i32 + (self.view_height() as i32 - panel_h) / 2;
-        let radius = 14.0 * dpi;
-        shadow(
-            frame,
-            x,
-            y + (6.0 * dpi) as i32,
-            panel_w,
-            panel_h,
-            radius,
-            26.0 * dpi,
-            0.45,
-        );
-        round_rect(frame, x, y, panel_w, panel_h, radius, t.bar);
-        round_rect_outline(
-            frame,
-            x,
-            y,
-            panel_w,
-            panel_h,
-            radius,
-            dpi.max(1.0),
-            t.separator,
-        );
-        let Some(text) = &mut self.text else { return };
-        let size = t.font_size * dpi;
-        let pad = (16.0 * dpi) as i32;
-        text.draw(
-            frame,
-            (x + pad) as f32,
-            (y + pad) as f32 + text.ascent(size * 1.15),
-            size * 1.15,
-            &prompt.title,
-            t.text,
-        );
-        text.draw_clipped(
-            frame,
-            (x + pad) as f32,
-            (y + pad) as f32 + size * 1.15 + (8.0 * dpi) + text.ascent(size),
-            size,
-            &prompt.label,
-            t.text_dim,
-            (panel_w - 2 * pad) as f32,
-        );
-        let box_h = (30.0 * dpi) as i32;
-        let box_y = y + pad + (size * 1.15 + size + 20.0 * dpi) as i32;
-        prompt.input.draw(
-            frame,
-            text,
-            &t,
-            dpi,
-            x + pad,
-            box_y,
-            panel_w - 2 * pad,
-            box_h,
-        );
-        // L'erreur, s'il y en a une, sous le champ.
-        if let Some(e) = &prompt.error {
-            let hint_y = (box_y + box_h) as f32 + (8.0 * dpi) + text.ascent(size);
-            text.draw(frame, (x + pad) as f32, hint_y, size, e, (0xE5, 0x53, 0x53));
-        }
-        // Deux boutons, comme dans les autres fenêtres : on peut aussi
-        // cliquer, pas seulement taper Entrée.
-        let button_h = (34.0 * dpi) as i32;
-        let by = y + panel_h - pad - button_h;
-        let mut right = x + panel_w - pad;
-        let mut buttons = Vec::new();
-        for (label, primary) in [(lang::tr("Valider"), true), (lang::tr("Annuler"), false)] {
-            let bw =
-                (text.measure(size, label) as i32 + (32.0 * dpi) as i32).max((88.0 * dpi) as i32);
-            let bx = right - bw;
-            let ink = crate::ui::paint::button(
-                frame,
-                bx,
-                by,
-                bw,
-                button_h,
-                dpi,
-                &t,
-                crate::ui::paint::ButtonLook {
-                    primary,
-                    hovered: false,
-                    focused: false,
-                    disabled: false,
-                },
-            );
-            let lw = text.measure(size, label);
-            text.draw(
-                frame,
-                bx as f32 + (bw as f32 - lw) / 2.0,
-                (by + button_h / 2) as f32 + text.ascent(size) / 2.0,
-                size,
-                label,
-                ink,
-            );
-            buttons.push((bx, by, bw, button_h, primary));
-            right = bx - (8.0 * dpi) as i32;
-        }
-        self.prompt_buttons = buttons;
+        let (theme, dpi) = (self.theme, self.dpi_scale as f32);
+        let (Some(p), Some(text)) = (self.prompt.as_mut(), self.text.as_mut()) else {
+            return;
+        };
+        let content = PromptContent {
+            title: &p.title,
+            label: &p.label,
+            input: &p.input,
+            error: p.error.as_deref(),
+        };
+        p.card.paint(frame, text, &theme, dpi, &content);
     }
 
-    /// Événement clavier pendant une invite modale.
+    /// Touche pendant une invite : Tab passe du champ aux boutons, Entrée
+    /// presse celui qui a le focus, Échap annule.
+    fn prompt_key(&mut self, key: Key, m: Modifiers, window: &mut dyn WindowHandle) {
+        let act = self
+            .prompt
+            .as_mut()
+            .and_then(|p| p.card.key(key, m.shift, &mut p.input, &mut p.error));
+        self.prompt_act(act, window);
+    }
+
+    /// Ce que l'invite a demandé : valider, annuler, ou rien.
+    fn prompt_act(&mut self, act: Option<PromptAct>, window: &mut dyn WindowHandle) {
+        match act {
+            Some(PromptAct::Submit) => self.prompt_submit(window),
+            Some(PromptAct::Cancel) => {
+                self.prompt = None;
+                log_line("invite : annulée");
+            }
+            None => {}
+        }
+    }
+
+    /// Valide l'invite : chaque sorte d'invite fait ce qu'on attend d'elle.
     #[allow(clippy::too_many_lines)] // une branche par sorte d'invite, à la suite
-    fn prompt_key(&mut self, key: Key, window: &mut dyn WindowHandle) {
+    fn prompt_submit(&mut self, window: &mut dyn WindowHandle) {
         let Some(prompt) = &mut self.prompt else {
             return;
         };
-        match prompt.input.key(key, false) {
-            InputAction::Cancel => self.prompt = None,
-            InputAction::Submit => {
-                let value = prompt.input.value.clone();
-                match &prompt.kind {
-                    PromptKind::Password { doc, .. } => {
-                        let pw = value.into_bytes();
-                        if doc.authenticate(&pw).is_ok() && !doc.needs_password() {
-                            let Some(Prompt {
-                                kind: PromptKind::Password { path, doc, pages },
-                                ..
-                            }) = self.prompt.take()
-                            else {
-                                return;
-                            };
-                            self.finish_open(path, doc, pages, Some(pw), window);
-                            self.announce_restrictions();
-                        } else {
-                            prompt.error = Some("Mot de passe incorrect".to_string());
-                            prompt.input.clear();
-                        }
-                    }
-                    PromptKind::Field { name, kind } => {
-                        let (name, kind) = (name.clone(), *kind);
-                        self.prompt = None;
-                        self.apply_edit(EditOp::SetField {
-                            name,
-                            value: FieldValue::parse(kind, &value),
-                        });
-                    }
-                    PromptKind::Highlight { zones } => {
-                        let zones = zones.clone();
-                        self.prompt = None;
-                        self.add_highlights(&zones, Some(&value));
-                    }
-                    PromptKind::Comb { page, cells } => {
-                        let (page, cells) = (*page, cells.clone());
-                        self.prompt = None;
-                        if !value.trim().is_empty() {
-                            let rect = acrux_features::fillsign::boxes::bounds_of(&cells);
-                            self.apply_fillsign(
-                                page,
-                                rect,
-                                acrux_features::fillsign::Item::Comb { text: value, cells },
-                            );
-                            // Le texte posé n'est pas pris en main : on passe
-                            // au peigne suivant.
-                            self.placed = None;
-                        }
-                    }
-                    PromptKind::EditText {
+        log_line("invite : validée");
+        let value = prompt.input.value.clone();
+        match &prompt.kind {
+            PromptKind::Password { doc, .. } => {
+                let pw = value.into_bytes();
+                if doc.authenticate(&pw).is_ok() && !doc.needs_password() {
+                    let Some(Prompt {
+                        kind: PromptKind::Password { path, doc, pages },
+                        ..
+                    }) = self.prompt.take()
+                    else {
+                        return;
+                    };
+                    self.finish_open(path, doc, pages, Some(pw), window);
+                    self.announce_restrictions();
+                } else {
+                    prompt.error = Some(lang::tr("Mot de passe incorrect").into());
+                    prompt.input.clear();
+                }
+            }
+            PromptKind::Field { name, kind } => {
+                let (name, kind) = (name.clone(), *kind);
+                self.prompt = None;
+                self.apply_edit(EditOp::SetField {
+                    name,
+                    value: FieldValue::parse(kind, &value),
+                });
+            }
+            PromptKind::Highlight { zones } => {
+                let zones = zones.clone();
+                self.prompt = None;
+                self.add_highlights(&zones, Some(&value));
+            }
+            PromptKind::Comb { page, cells } => {
+                let (page, cells) = (*page, cells.clone());
+                self.prompt = None;
+                if !value.trim().is_empty() {
+                    let rect = acrux_features::fillsign::boxes::bounds_of(&cells);
+                    self.apply_fillsign(
+                        page,
+                        rect,
+                        acrux_features::fillsign::Item::Comb { text: value, cells },
+                    );
+                    // Le texte posé n'est pas pris en main : on passe
+                    // au peigne suivant.
+                    self.placed = None;
+                }
+            }
+            PromptKind::EditText {
+                page,
+                line,
+                start,
+                end,
+            } => {
+                let (page, line, start, end) = (*page, *line, *start, *end);
+                self.prompt = None;
+                if !value.is_empty() {
+                    self.apply_edit(EditOp::EditText {
                         page,
                         line,
                         start,
                         end,
-                    } => {
-                        let (page, line, start, end) = (*page, *line, *start, *end);
-                        self.prompt = None;
-                        if !value.is_empty() {
-                            self.apply_edit(EditOp::EditText {
-                                page,
-                                line,
-                                start,
-                                end,
-                                text: value,
-                            });
-                        }
-                    }
-                    PromptKind::OwnerPassword { then } => {
-                        let then = *then;
-                        self.owner_password_entered(&value, then, window);
-                    }
-                    PromptKind::Note { page, x, y } => {
-                        let (page, x, y) = (*page, *x, *y);
-                        self.prompt = None;
-                        if !value.trim().is_empty() {
-                            self.apply_edit(EditOp::Annotate {
-                                page,
-                                annotation: NewAnnotation::Note {
-                                    x,
-                                    y,
-                                    contents: value,
-                                    color: [1.0, 0.85, 0.0],
-                                },
-                                author: author_name(),
-                            });
-                        }
-                    }
+                        text: value,
+                    });
                 }
             }
-            InputAction::Changed | InputAction::None => {}
+            PromptKind::OwnerPassword { then } => {
+                let then = *then;
+                self.owner_password_entered(&value, then, window);
+            }
+            PromptKind::Note { page, x, y } => {
+                let (page, x, y) = (*page, *x, *y);
+                self.prompt = None;
+                if !value.trim().is_empty() {
+                    self.apply_edit(EditOp::Annotate {
+                        page,
+                        annotation: NewAnnotation::Note {
+                            x,
+                            y,
+                            contents: value,
+                            color: [1.0, 0.85, 0.0],
+                        },
+                        author: author_name(),
+                    });
+                }
+            }
+        }
+        // Une saisie refusée se reprend dans le champ, quel que soit le
+        // bouton qui l'a validée.
+        if let Some(p) = &mut self.prompt {
+            if p.error.is_some() {
+                p.card.set_focus(PromptFocus::Field, &mut p.input);
+            }
         }
     }
 
@@ -2242,20 +2217,19 @@ impl Viewer {
             return;
         };
         let current = text.text(from, to);
-        let mut input = TextInput::new("texte");
+        let mut input = TextInput::new(lang::tr("Nouveau texte"));
         input.set_value(&current);
-        self.prompt = Some(Prompt {
-            title: "Modifier le texte".to_string(),
-            label: "Nouveau texte :".to_string(),
+        self.prompt = Some(Prompt::new(
+            lang::tr("Modifier le texte"),
+            lang::tr("Nouveau texte :").into(),
             input,
-            error: None,
-            kind: PromptKind::EditText {
+            PromptKind::EditText {
                 page,
                 line,
                 start: first,
                 end: last,
             },
-        });
+        ));
         window.request_redraw();
     }
 
@@ -2315,13 +2289,12 @@ impl Viewer {
         if zones.is_empty() {
             return;
         }
-        self.prompt = Some(Prompt {
-            title: "Surligner et commenter".to_string(),
-            label: "Commentaire :".to_string(),
-            input: TextInput::new("votre remarque"),
-            error: None,
-            kind: PromptKind::Highlight { zones },
-        });
+        self.prompt = Some(Prompt::new(
+            lang::tr("Surligner et commenter"),
+            lang::tr("Commentaire :").into(),
+            TextInput::new(lang::tr("Votre remarque")),
+            PromptKind::Highlight { zones },
+        ));
         window.request_redraw();
     }
 
@@ -2748,30 +2721,25 @@ impl Viewer {
     /// Colle le presse-papiers dans le champ de saisie qui a la main, s'il y
     /// en a un. Rend vrai si le collage le concernait.
     fn paste_into_field(&mut self, window: &mut dyn WindowHandle) -> bool {
-        let has_field = self.prompt.is_some()
-            || self.edit_menu_open()
-            || (self.search.is_some() && !self.editing_text());
+        let has_field = self.edit_menu_open() || (self.search.is_some() && !self.editing_text());
         if !has_field {
             return false;
         }
         let Some(text) = window.clipboard_text().filter(|t| !t.is_empty()) else {
             return true;
         };
-        if let Some(p) = &mut self.prompt {
-            let _ = p.input.paste(&text);
-            p.error = None;
-        } else if self.edit_menu_open() {
+        if self.edit_menu_open() {
             // La recherche d'une police, le code d'une couleur : caractère
             // par caractère, comme une frappe.
             for c in text.chars().filter(|c| !c.is_control()) {
                 let _ = self.edit_popup_char(c, window);
             }
         } else if let Some(s) = &mut self.search {
-            if s.on_replace {
+            if s.on_replace() {
                 if let Some(r) = s.replace.as_mut() {
                     let _ = r.paste(&text);
                 }
-            } else if s.input.paste(&text) == InputAction::Changed {
+            } else if s.focus == SearchFocus::Find && s.input.paste(&text) == InputAction::Changed {
                 self.update_search();
                 self.scroll_to_hit();
             }
@@ -2794,17 +2762,16 @@ impl Viewer {
         let Some((page, pt)) = self.page_at(mx, my) else {
             return;
         };
-        self.prompt = Some(Prompt {
-            title: "Nouvelle note".into(),
-            label: format!("Texte de la note (page {}) :", page + 1),
-            input: TextInput::new("Votre commentaire"),
-            error: None,
-            kind: PromptKind::Note {
+        self.prompt = Some(Prompt::new(
+            lang::tr("Nouvelle note"),
+            lang::trf("Texte de la note (page {}) :", &[&(page + 1).to_string()]),
+            TextInput::new(lang::tr("Votre commentaire")),
+            PromptKind::Note {
                 page,
                 x: pt.x,
                 y: pt.y,
             },
-        });
+        ));
     }
 
     /// Recalcule les occurrences si la requête a changé.
@@ -2930,12 +2897,11 @@ impl Viewer {
             }
         }
         // La carte en haut à droite : champs, compteur, boutons.
-        let Some(text) = &mut self.text else { return };
         let pages = self.loaded.as_ref().map_or(0, |l| l.pages.len());
-        let buttons = paint_search_card(frame, text, s, &t, dpi, pages);
-        if let Some(s) = &mut self.search {
-            s.buttons = buttons;
-        }
+        let (Some(text), Some(s)) = (self.text.as_mut(), self.search.as_mut()) else {
+            return;
+        };
+        paint_search_card(frame, text, s, &t, dpi, pages);
     }
 
     fn open(&mut self, path: &Path, window: &mut dyn WindowHandle) {
@@ -2955,23 +2921,22 @@ impl Viewer {
         }) {
             Ok((doc, pages)) => {
                 if doc.needs_password() {
-                    let mut input = TextInput::new("Mot de passe");
+                    let mut input = TextInput::new(lang::tr("Mot de passe"));
                     input.masked = true;
                     let name = path
                         .file_name()
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_default();
-                    self.prompt = Some(Prompt {
-                        title: "Document protégé".into(),
-                        label: format!("Mot de passe pour « {name} » :"),
+                    self.prompt = Some(Prompt::new(
+                        lang::tr("Document protégé"),
+                        lang::trf("Mot de passe pour « {} » :", &[&name]),
                         input,
-                        error: None,
-                        kind: PromptKind::Password {
+                        PromptKind::Password {
                             path: path.to_path_buf(),
                             doc,
                             pages,
                         },
-                    });
+                    ));
                 } else {
                     self.finish_open(path.to_path_buf(), doc, pages, None, window);
                     self.announce_restrictions();
@@ -3460,12 +3425,37 @@ impl Viewer {
         self.wake_anim();
     }
 
-    /// Vrai si quelque chose bouge encore.
+    /// Vrai si quelque chose bouge encore — dont une carte qui apparaît.
     fn animating(&self) -> bool {
         self.scroll_goal_y.is_some()
             || self.left_anim.running()
             || self.tools_anim.running()
-            || self.dialog_opening()
+            || self.dialog_animating()
+            || self
+                .prompt
+                .as_ref()
+                .is_some_and(|p| p.card.appear.animating())
+            || self.settings.as_ref().is_some_and(SettingsSheet::animating)
+            || self
+                .protect
+                .as_ref()
+                .is_some_and(crate::ui::protect::ProtectDialog::animating)
+    }
+
+    /// Arme le fil des animations si l'événement qui s'achève a lancé un
+    /// mouvement — typiquement, ouvert une carte. Sans cela, le fil ne le
+    /// saurait qu'au prochain événement : la carte, peinte une fois au début
+    /// de son fondu, resterait à demi transparente. Le fil existe déjà à ce
+    /// stade (`tick_anim` le crée au premier événement), et c'est lui qui
+    /// réveille : aucun réveil n'est posté depuis la boucle d'événements.
+    ///
+    /// On ne fait que lever le drapeau, jamais le baisser : un panneau qui
+    /// vient d'être ouvert n'a pas encore de cible (`step_anim` la fixe au
+    /// prochain pas) et compte sur `wake_anim` pour être animé.
+    fn sync_anim(&self) {
+        if self.animating() {
+            self.wake_anim();
+        }
     }
 
     /// Met en route (ou arrête) le fil qui réveille la fenêtre pendant les
@@ -4208,16 +4198,7 @@ impl Viewer {
     /// Ouvre le champ de recherche.
     fn open_search(&mut self) {
         if self.loaded.is_some() {
-            self.search = Some(Search {
-                input: TextInput::new("Rechercher dans le document"),
-                replace: None,
-                on_replace: false,
-                buttons: Vec::new(),
-                hits: Vec::new(),
-                current: 0,
-                last_query: String::new(),
-                scanned: 0,
-            });
+            self.search = Some(Search::new());
         }
     }
 
@@ -4235,29 +4216,81 @@ impl Viewer {
         }
         if let Some(s) = &mut self.search {
             if s.replace.is_none() {
-                s.replace = Some(TextInput::new("Remplacer par…"));
+                s.replace = Some(TextInput::new(lang::tr("Remplacer par…")));
             }
             // Le clavier va au champ qui manque : on ne remplace rien tant
             // qu'on n'a pas dit quoi chercher.
-            s.on_replace = !s.input.value.is_empty();
-            s.input.focused = !s.on_replace;
-            if let Some(r) = &mut s.replace {
-                r.focused = s.on_replace;
-            }
+            let focus = if s.input.value.is_empty() {
+                SearchFocus::Find
+            } else {
+                SearchFocus::With
+            };
+            s.set_focus(focus);
         }
     }
 
-    /// Ce que vise un clic dans le bandeau de recherche, s'il en vise quelque
-    /// chose. Les rectangles ont été relevés au dernier dessin, dans le repère
-    /// de la vue : on y ramène le clic.
-    fn search_hit(&self, x: i32, y: i32) -> Option<ReplaceButton> {
+    /// Ce que vise un point de la fenêtre dans la carte de recherche, s'il y
+    /// tombe. Les rectangles ont été relevés au dernier dessin, dans le
+    /// repère de la vue : on y ramène le point.
+    fn search_hit(&self, x: i32, y: i32) -> Option<SearchPart> {
         let s = self.search.as_ref()?;
         let x = x - self.view_left() as i32;
         let y = y - self.view_top() as i32;
-        s.buttons
+        if let Some(i) = s.row.hit(x, y) {
+            return Some(SearchPart::Button(i));
+        }
+        if let Some(field) = s
+            .fields
             .iter()
-            .find(|(bx, by, bw, bh, _)| x >= *bx && x < bx + bw && y >= *by && y < by + bh)
-            .map(|(_, _, _, _, what)| *what)
+            .find(|(fx, fy, fw, fh, _)| x >= *fx && x < fx + fw && y >= *fy && y < fy + fh)
+        {
+            return Some(SearchPart::Field(field.4));
+        }
+        crate::ui::modal::inside(s.card, x, y).then_some(SearchPart::Card)
+    }
+
+    /// Relâchement sur la carte de recherche : le bouton enfoncé agit, si le
+    /// pointeur est resté dessus.
+    fn search_mouse_up(&mut self, x: i32, y: i32) {
+        let (vx, vy) = (x - self.view_left() as i32, y - self.view_top() as i32);
+        match self.search.as_mut().and_then(|s| s.row.mouse_up(vx, vy)) {
+            Some(0) => {
+                log_line("recherche : remplacer");
+                self.replace_current();
+            }
+            Some(_) => {
+                log_line("recherche : tout remplacer");
+                self.replace_all();
+            }
+            None => {}
+        }
+    }
+
+    /// Survol de la carte de recherche : le bouton survolé s'éclaire, le
+    /// pointeur devient une main sur un bouton, une barre sur un champ. Rend
+    /// vrai si le pointeur est sur la carte — la page dessous n'a alors rien
+    /// à en savoir.
+    fn search_hover(&mut self, x: i32, y: i32, window: &mut dyn WindowHandle) -> bool {
+        let part = self.search_hit(x, y);
+        let (vx, vy) = (x - self.view_left() as i32, y - self.view_top() as i32);
+        let Some(s) = &mut self.search else {
+            return false;
+        };
+        let changed = if part.is_some() {
+            s.row.mouse_move(vx, vy)
+        } else {
+            s.row.leave()
+        };
+        if changed {
+            window.request_redraw();
+        }
+        match part {
+            Some(SearchPart::Button(_)) => window.set_cursor(Cursor::Hand),
+            Some(SearchPart::Field(_)) => window.set_cursor(Cursor::IBeam),
+            Some(SearchPart::Card) => window.set_cursor(Cursor::Arrow),
+            None => return false,
+        }
+        true
     }
 
     /// Remplace l'occurrence courante, puis passe à la suivante.
@@ -4314,7 +4347,7 @@ impl Viewer {
     fn restore_search(&mut self, saved: Option<Search>) {
         let Some(mut s) = saved else { return };
         s.hits.clear();
-        s.buttons.clear();
+        s.fields.clear();
         s.scanned = 0;
         // Vider la dernière requête force le nouveau parcours.
         s.last_query.clear();
@@ -4328,6 +4361,11 @@ impl Viewer {
             } else {
                 current.min(s.hits.len() - 1)
             };
+            // Plus rien à remplacer : les boutons se grisent, et le focus
+            // revient au champ plutôt que de rester sur un bouton muet.
+            if s.hits.is_empty() && matches!(s.focus, SearchFocus::Button(_)) {
+                s.set_focus(SearchFocus::With);
+            }
         }
         self.scroll_to_hit();
     }
@@ -5041,6 +5079,7 @@ impl Viewer {
         };
         self.update_rx = None;
         let asked = self.update_asked;
+        self.update_outcome = Some(outcome.as_ref().map(|_| ()).map_err(Clone::clone));
         match outcome {
             Ok(release) if crate::update::newer(&release.version, env!("CARGO_PKG_VERSION")) => {
                 self.set_notice(format!(
@@ -5544,13 +5583,15 @@ impl Viewer {
             // Un peigne : on demande le texte, qui se répartira dans les
             // cases, un caractère par case.
             let count = cells.len();
-            self.prompt = Some(Prompt {
-                title: "Remplir les cases".into(),
-                label: format!("Texte à répartir dans les {count} cases :"),
-                input: TextInput::new("un caractère par case"),
-                error: None,
-                kind: PromptKind::Comb { page, cells },
-            });
+            self.prompt = Some(Prompt::new(
+                lang::tr("Remplir les cases"),
+                lang::trf(
+                    "Texte à répartir dans les {} cases :",
+                    &[&count.to_string()],
+                ),
+                TextInput::new(lang::tr("un caractère par case")),
+                PromptKind::Comb { page, cells },
+            ));
             return true;
         }
         if item == SignItem::Move {
@@ -6707,8 +6748,21 @@ impl Viewer {
 }
 
 impl App for Viewer {
-    #[allow(clippy::too_many_lines)] // un bras par type d'événement
     fn event(&mut self, event: Event, window: &mut dyn WindowHandle) {
+        self.handle_event(event, window);
+        self.sync_anim();
+    }
+
+    fn paint(&mut self, frame: &mut Frame<'_>) {
+        self.paint_all(frame);
+    }
+}
+
+impl Viewer {
+    /// Traite un événement. Toutes ses sorties mènent à `sync_anim` (voir
+    /// [`App::event`]), y compris ses nombreux retours anticipés.
+    #[allow(clippy::too_many_lines)] // un bras par type d'événement
+    fn handle_event(&mut self, event: Event, window: &mut dyn WindowHandle) {
         if !self.pending_open.is_empty() {
             // Chaque fichier de la ligne de commande ouvre un onglet ; le
             // premier reste actif, comme dans les navigateurs.
@@ -6731,7 +6785,10 @@ impl App for Viewer {
             self.apply_frame_theme(window);
         }
         log_event(&event);
-        if self.dialog_event(&event, window) || self.protect_event(&event, window) {
+        if self.dialog_event(&event, window)
+            || self.protect_event(&event, window)
+            || self.modal_event(&event, window)
+        {
             if self.title_dirty {
                 self.update_title(window);
             }
@@ -6756,7 +6813,10 @@ impl App for Viewer {
                 // info-bulle à faire apparaître et sans média en train de
                 // jouer ne mérite pas de repeindre.
                 let results = self.collect_results();
+                // Le fil des mises à jour réveille une fois, son résultat
+                // prêt : la peinture le relève (`poll_updates`) et l'affiche.
                 if !results
+                    && self.update_rx.is_none()
                     && !self.search_scanning()
                     && !self.tip_due()
                     && !self.media_playing()
@@ -6824,10 +6884,11 @@ impl App for Viewer {
                     }
                 }
             }
-            // Ctrl+V dans un champ de saisie — une invite (le texte d'un
-            // peigne, une note, un mot de passe), la recherche, le code d'une
-            // couleur — y colle le presse-papiers. Un IBAN se copie d'ailleurs,
-            // il ne se retape pas.
+            // Ctrl+V dans un champ de saisie — la recherche, la police ou le
+            // code d'une couleur — y colle le presse-papiers ; celui d'une
+            // invite (le texte d'un peigne, une note, un mot de passe) passe
+            // par `modal_event`. Un IBAN se copie d'ailleurs, il ne se retape
+            // pas.
             Event::Char(c, m)
                 if m.ctrl && matches!(c, 'v' | 'V' | '\u{16}') && self.paste_into_field(window) => {
             }
@@ -6921,38 +6982,49 @@ impl App for Viewer {
                 let info = self.toolbar_info();
                 self.toolbar.char(c, &info);
             }
-            Event::Key(key, _) if self.prompt.is_some() => self.prompt_key(key, window),
-            Event::Char(c, m) if self.prompt.is_some() && !m.ctrl => {
-                if let Some(p) = &mut self.prompt {
-                    p.input.insert_char(c);
-                    p.error = None;
-                }
-            }
-            // La tabulation passe du champ « rechercher » au champ
-            // « remplacer », comme dans n'importe quel formulaire.
-            Event::Key(Key::Tab, _)
+            // La tabulation parcourt la carte comme n'importe quel formulaire :
+            // « rechercher », « remplacer », puis les boutons.
+            Event::Key(Key::Tab, m)
                 if self.search.as_ref().is_some_and(|s| s.replace.is_some()) =>
             {
                 if let Some(s) = &mut self.search {
-                    s.on_replace = !s.on_replace;
-                    s.input.focused = !s.on_replace;
-                    if let Some(r) = &mut s.replace {
-                        r.focused = s.on_replace;
-                    }
+                    s.tab(m.shift);
+                }
+                window.request_redraw();
+            }
+            // Sur un bouton de la carte, Entrée et Espace le pressent.
+            Event::Key(Key::Enter | Key::Space, _)
+                if self
+                    .search
+                    .as_ref()
+                    .is_some_and(|s| matches!(s.focus, SearchFocus::Button(_))) =>
+            {
+                if self.search.as_ref().map(|s| s.focus) == Some(SearchFocus::Button(0)) {
+                    log_line("recherche : remplacer (clavier)");
+                    self.replace_current();
+                } else {
+                    log_line("recherche : tout remplacer (clavier)");
+                    self.replace_all();
                 }
                 window.request_redraw();
             }
             Event::Key(key, m) if self.search.is_some() => {
-                let on_replace = self.search.as_ref().is_some_and(|s| s.on_replace);
-                let action = self.search.as_mut().map_or(InputAction::None, |s| {
-                    if on_replace {
-                        s.replace
+                let focus = self.search.as_ref().map_or(SearchFocus::Find, |s| s.focus);
+                let on_replace = focus == SearchFocus::With;
+                let action = self
+                    .search
+                    .as_mut()
+                    .map_or(InputAction::None, |s| match focus {
+                        SearchFocus::With => s
+                            .replace
                             .as_mut()
-                            .map_or(InputAction::None, |r| r.key(key, m.shift))
-                    } else {
-                        s.input.key(key, m.shift)
-                    }
-                });
+                            .map_or(InputAction::None, |r| r.key(key, m.shift)),
+                        SearchFocus::Find => s.input.key(key, m.shift),
+                        // Sur un bouton, seul Échap compte : il ferme la
+                        // recherche, comme partout ailleurs dans la carte.
+                        SearchFocus::Button(_) if key == Key::Escape => InputAction::Cancel,
+                        SearchFocus::Button(_) => InputAction::None,
+                    });
                 match action {
                     InputAction::Cancel => self.search = None,
                     // Entrée dans le champ de remplacement remplace
@@ -6983,13 +7055,17 @@ impl App for Viewer {
                 window.request_redraw();
             }
             Event::Char(c, m) if self.search.is_some() && !m.ctrl => {
-                let on_replace = self.search.as_ref().is_some_and(|s| s.on_replace);
+                let focus = self.search.as_ref().map_or(SearchFocus::Find, |s| s.focus);
                 if let Some(s) = &mut self.search {
-                    if on_replace {
+                    // Les caractères ne vont qu'à un champ : sur un bouton, la
+                    // barre d'espace le presse (plus haut), elle ne s'écrit pas.
+                    if focus == SearchFocus::With {
                         if let Some(r) = s.replace.as_mut() {
                             let _ = r.insert_char(c);
                         }
-                    } else if s.input.insert_char(c) == InputAction::Changed {
+                    } else if focus == SearchFocus::Find
+                        && s.input.insert_char(c) == InputAction::Changed
+                    {
                         self.update_search();
                         self.scroll_to_hit();
                     }
@@ -7088,12 +7164,10 @@ impl App for Viewer {
                     self.sign_action(action.0, window);
                     return;
                 }
-                if self.palette.is_some() {
-                    let chosen = self.palette.as_ref().and_then(|p| p.mouse_down(x, y));
-                    if let Some(c) = chosen {
-                        self.palette = None;
-                        self.run_command(c, window);
-                    } else {
+                if let Some(p) = &mut self.palette {
+                    // Une ligne s'enfonce et partira au relâchement ; un clic
+                    // dehors ferme, sans rien exécuter.
+                    if p.mouse_down(x, y) == PaletteDown::Outside {
                         self.palette = None;
                     }
                     window.request_redraw();
@@ -7106,39 +7180,20 @@ impl App for Viewer {
                     window.request_redraw();
                     return;
                 }
-                // Une invite modale ne laisse passer que ses deux boutons.
-                if self.prompt.is_some() {
-                    let hit = self
-                        .prompt_buttons
-                        .iter()
-                        .find(|(bx, by, bw, bh, _)| {
-                            x >= *bx && x < bx + bw && y >= *by && y < by + bh
-                        })
-                        .map(|b| b.4);
-                    match hit {
-                        Some(true) => self.prompt_key(Key::Enter, window),
-                        Some(false) => self.prompt = None,
-                        None => {}
-                    }
-                    window.request_redraw();
-                    return;
-                }
-                // Le bandeau de recherche flotte au-dessus de la page : ses
-                // champs et ses boutons se cliquent avant elle.
-                if let Some(what) = self.search_hit(x, y) {
-                    match what {
-                        ReplaceButton::Find | ReplaceButton::With => {
-                            let on_replace = what == ReplaceButton::With;
-                            if let Some(s) = &mut self.search {
-                                s.on_replace = on_replace;
-                                s.input.focused = !on_replace;
-                                if let Some(r) = &mut s.replace {
-                                    r.focused = on_replace;
-                                }
+                // La carte de recherche flotte au-dessus de la page : ses
+                // champs et ses boutons se cliquent avant elle. Un champ prend
+                // le focus tout de suite ; un bouton s'enfonce seulement, et
+                // agira au relâchement (`search_mouse_up`).
+                if let Some(part) = self.search_hit(x, y) {
+                    let (vx, vy) = (x - self.view_left() as i32, y - self.view_top() as i32);
+                    if let Some(s) = &mut self.search {
+                        match part {
+                            SearchPart::Field(focus) => s.set_focus(focus),
+                            SearchPart::Button(_) => {
+                                s.row.mouse_down(vx, vy);
                             }
+                            SearchPart::Card => {}
                         }
-                        ReplaceButton::One => self.replace_current(),
-                        ReplaceButton::All => self.replace_all(),
                     }
                     window.request_redraw();
                     return;
@@ -7273,12 +7328,32 @@ impl App for Viewer {
                 y,
                 ..
             } => self.drag_last = Some((x - self.view_left() as i32, y - self.view_top() as i32)),
+            Event::MouseUp { x, y, .. } if self.palette.is_some() => {
+                let chosen = self.palette.as_mut().and_then(|p| p.mouse_up(x, y));
+                if let Some(command) = chosen {
+                    self.palette = None;
+                    self.run_command(command, window);
+                }
+            }
+            // Un bouton de la carte de recherche enfoncé agit au relâchement,
+            // pointeur dessus — avant que l'outil en cours ne le prenne.
+            Event::MouseUp { x, y, .. }
+                if self.search.as_ref().is_some_and(|s| s.row.is_pressed()) =>
+            {
+                self.search_mouse_up(x, y);
+            }
             Event::MouseUp { .. } if self.edit_menu_open() => {
                 self.edit_popup_up();
                 window.request_redraw();
             }
             Event::MouseMove { x, y, dragging } if self.edit_popup_move(x, y, dragging, window) => {
             }
+            // Le survol de la carte de recherche ; un bouton enfoncé suit le
+            // pointeur même bouton tenu, pour remonter quand on glisse dehors.
+            Event::MouseMove { x, y, dragging }
+                if self.palette.is_none()
+                    && (!dragging || self.search.as_ref().is_some_and(|s| s.row.is_pressed()))
+                    && self.search_hover(x, y, window) => {}
             Event::MouseUp { .. } if self.objects.is_some() => {
                 self.objects_mouse_up();
                 window.request_redraw();
@@ -7525,7 +7600,8 @@ impl App for Viewer {
         window.request_redraw();
     }
 
-    fn paint(&mut self, frame: &mut Frame<'_>) {
+    /// Peint toute la fenêtre.
+    fn paint_all(&mut self, frame: &mut Frame<'_>) {
         self.collect_results();
         self.poll_updates();
         let t = self.theme;
@@ -7613,10 +7689,13 @@ impl App for Viewer {
             }
             self.paint_status(frame);
         }
+        // L'info-bulle parle d'un bouton de la barre : elle passe sous les
+        // cartes qui s'ouvrent par-dessus, avec lui.
+        self.paint_tip(frame);
         self.paint_capture(frame);
         self.paint_protect(frame);
         self.paint_prompt(frame);
-        self.paint_tip(frame);
+        self.paint_settings(frame);
         self.paint_palette(frame);
         self.paint_dialog(frame);
         dump_frame(frame);

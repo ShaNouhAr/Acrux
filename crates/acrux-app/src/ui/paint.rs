@@ -95,10 +95,30 @@ pub fn round_rect_outline(
     thickness: f32,
     color: Rgb,
 ) {
-    if w <= 0 || h <= 0 || thickness <= 0.0 {
+    round_rect_outline_f(
+        frame, x as f32, y as f32, w as f32, h as f32, radius, thickness, color,
+    );
+}
+
+/// Contour d'un rectangle arrondi aux coordonnées à virgule. Le trait est
+/// centré sur le contour : pour qu'un anneau d'épaisseur impaire (3 pixels à
+/// 150 %) tombe pile sur les pixels au lieu d'être à cheval sur deux, son
+/// contour doit pouvoir passer entre deux pixels.
+fn round_rect_outline_f(
+    frame: &mut Frame<'_>,
+    fx: f32,
+    fy: f32,
+    fw: f32,
+    fh: f32,
+    radius: f32,
+    thickness: f32,
+    color: Rgb,
+) {
+    if fw <= 0.0 || fh <= 0.0 || thickness <= 0.0 {
         return;
     }
-    let (fx, fy, fw, fh) = (x as f32, y as f32, w as f32, h as f32);
+    let (x, y) = (fx.floor() as i32, fy.floor() as i32);
+    let (w, h) = (fw.ceil() as i32 + 1, fh.ceil() as i32 + 1);
     let pad = thickness.ceil() as i32 + 1;
     for py in (y - pad).max(0)..(y + h + pad).min(frame.height as i32) {
         for px in (x - pad).max(0)..(x + w + pad).min(frame.width as i32) {
@@ -114,6 +134,11 @@ pub fn round_rect_outline(
 ///
 /// L'ombre est la même forme, étalée : la couverture décroît avec la distance
 /// au bord, ce qui donne un dégradé continu sans avoir à flouter une image.
+///
+/// La forme elle-même est assombrie de plein droit. Les cartes posent leur
+/// ombre **décalée vers le bas** : laisser l'intérieur intact faisait
+/// apparaître, sous chaque carte, une bande plus claire que l'ombre qui
+/// l'entoure — un liseré gris là où l'ombre est la plus dense.
 pub fn shadow(
     frame: &mut Frame<'_>,
     x: i32,
@@ -132,10 +157,7 @@ pub fn shadow(
     for py in (y - pad).max(0)..(y + h + pad).min(frame.height as i32) {
         for px in (x - pad).max(0)..(x + w + pad).min(frame.width as i32) {
             let d = distance(px as f32 + 0.5, py as f32 + 0.5, fx, fy, fw, fh, radius);
-            if d <= 0.0 {
-                continue;
-            }
-            let t = (1.0 - d / spread).clamp(0.0, 1.0);
+            let t = (1.0 - d.max(0.0) / spread).clamp(0.0, 1.0);
             // Courbe douce : le carré évite le halo trop net des dégradés
             // linéaires.
             blend(frame, px, py, (0, 0, 0), t * t * strength);
@@ -174,19 +196,24 @@ pub fn line(frame: &mut Frame<'_>, x0: f32, y0: f32, x1: f32, y1: f32, width: f3
 }
 
 /// Ce qu'un bouton a à dire de lui-même pour être dessiné.
-// Quatre états indépendants, qui se combinent : un bouton principal peut
-// être survolé et avoir le focus. Une énumération les multiplierait.
+// Cinq états indépendants, qui se combinent : un bouton principal peut
+// être survolé, enfoncé et avoir le focus. Une énumération les multiplierait.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ButtonLook {
     /// Le bouton principal : plein, de la couleur d'accent, texte blanc.
     pub primary: bool,
     /// Le pointeur est dessus.
     pub hovered: bool,
-    /// Il a le focus clavier : un anneau d'accent l'entoure.
+    /// Il a le focus clavier : un anneau d'accent l'entoure, à deux pixels
+    /// de distance — sans cet écart, l'anneau se confondrait avec le bouton
+    /// principal, de la même couleur que lui.
     pub focused: bool,
     /// Il ne répond pas pour l'instant : estompé.
     pub disabled: bool,
+    /// Le bouton est enfoncé, pointeur dessus : il n'agira qu'au relâchement,
+    /// et le montre en s'enfonçant.
+    pub pressed: bool,
 }
 
 /// Un bouton, **le même partout** : fenêtres, bandeau de recherche, barres.
@@ -208,7 +235,13 @@ pub fn button(
         (theme.bar, theme.text_dim)
     } else if look.primary {
         let a = theme.accent;
-        let bg = if look.hovered {
+        let bg = if look.pressed {
+            (
+                a.0.saturating_sub(14),
+                a.1.saturating_sub(14),
+                a.2.saturating_sub(14),
+            )
+        } else if look.hovered {
             (
                 a.0.saturating_add(18),
                 a.1.saturating_add(18),
@@ -218,30 +251,63 @@ pub fn button(
             a
         };
         (bg, (255, 255, 255))
+    } else if look.pressed {
+        // Enfoncé, le bouton secondaire rentre dans son fond : à mi-chemin
+        // entre le repos et la carte.
+        (mix(theme.hover, theme.bar), theme.text)
     } else if look.hovered {
-        (theme.separator, theme.text)
+        (theme.button_hover, theme.text)
     } else {
         (theme.hover, theme.text)
     };
     if look.focused {
-        let ring = (2.0 * dpi).max(1.0);
-        let r = ring as i32;
-        round_rect_outline(
-            frame,
-            x - r,
-            y - r,
-            w + 2 * r,
-            h + 2 * r,
-            radius + ring,
-            ring,
-            theme.accent,
-        );
+        focus_ring(frame, x, y, w, h, radius, dpi, theme.accent);
     }
     round_rect(frame, x, y, w, h, radius, bg);
     if look.disabled {
         round_rect_outline(frame, x, y, w, h, radius, dpi.max(1.0), theme.separator);
     }
     fg
+}
+
+/// Anneau de focus autour d'un rectangle arrondi, **à deux pixels** de lui.
+///
+/// L'écart n'est pas peint : le fond sur lequel l'élément est posé y reste
+/// visible, et c'est lui qui sépare l'anneau de l'élément. Un anneau collé
+/// au bouton principal, de la même couleur d'accent, ne se voyait pas.
+pub fn focus_ring(
+    frame: &mut Frame<'_>,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    radius: f32,
+    dpi: f32,
+    color: Rgb,
+) {
+    let gap = (2.0 * dpi).round().max(1.0) as i32;
+    let ring = (2.0 * dpi).round().max(1.0);
+    // Le trait est centré sur le contour qu'on lui donne : on écarte ce
+    // contour d'une demi-épaisseur de plus, pour que le bord intérieur du
+    // trait tombe juste à `gap` pixels de l'élément.
+    let half = ring / 2.0;
+    let o = gap as f32 + half;
+    let (ox, oy) = (x as f32 - o, y as f32 - o);
+    round_rect_outline_f(
+        frame,
+        ox,
+        oy,
+        w as f32 + 2.0 * o,
+        h as f32 + 2.0 * o,
+        radius + o,
+        ring,
+        color,
+    );
+}
+
+/// Moyenne de deux couleurs.
+fn mix(a: Rgb, b: Rgb) -> Rgb {
+    (a.0.midpoint(b.0), a.1.midpoint(b.1), a.2.midpoint(b.2))
 }
 
 /// Assombrit tout le cadre : ce qui est dessiné par-dessus se détache, et le
@@ -261,6 +327,7 @@ pub fn veil(frame: &mut Frame<'_>, progress: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::theme::Theme;
 
     fn frame(buf: &mut [u8], w: u32, h: u32) -> Frame<'_> {
         Frame::new(w, h, buf)
@@ -290,14 +357,92 @@ mod tests {
     }
 
     #[test]
-    fn lombre_sort_de_la_forme_sans_la_remplir() {
+    fn lombre_est_pleine_sous_la_forme_et_seteint_autour() {
         let mut buf = vec![255_u8; 60 * 60 * 4];
         let mut f = frame(&mut buf, 60, 60);
         shadow(&mut f, 20, 20, 20, 20, 6.0, 8.0, 0.5);
         let at = |x: usize, y: usize| buf[(y * 60 + x) * 4 + 1];
-        assert_eq!(at(30, 30), 255, "l'intérieur n'est pas assombri");
-        assert!(at(30, 44) < 255, "le dessous l'est");
+        // Sous la forme, l'ombre est à pleine force : une carte posée plus
+        // haut laisse voir ce dessous, qui ne doit pas trancher en clair.
+        assert_eq!(at(30, 30), 127, "le dessous de la forme est assombri");
+        assert!(
+            at(30, 44) < 255 && at(30, 44) > at(30, 30),
+            "le bord s'estompe"
+        );
         assert_eq!(at(59, 59), 255, "le lointain ne l'est pas");
+    }
+
+    /// Fond de carte, puis un bouton dessiné dessus.
+    fn card_with_button(theme: &Theme, look: ButtonLook) -> Vec<u8> {
+        let mut buf = vec![0_u8; 80 * 60 * 4];
+        let mut f = frame(&mut buf, 80, 60);
+        f.clear(theme.bar.0, theme.bar.1, theme.bar.2);
+        let _ = button(&mut f, 20, 20, 40, 20, 1.0, theme, look);
+        buf
+    }
+
+    /// Pixel RVB du tampon (qui est en BVRA).
+    fn rgb(buf: &[u8], x: usize, y: usize) -> Rgb {
+        let i = (y * 80 + x) * 4;
+        (buf[i + 2], buf[i + 1], buf[i])
+    }
+
+    #[test]
+    fn lanneau_de_focus_se_voit_autour_du_bouton_principal() {
+        let theme = Theme::dark();
+        let buf = card_with_button(
+            &theme,
+            ButtonLook {
+                primary: true,
+                focused: true,
+                ..ButtonLook::default()
+            },
+        );
+        // Deux pixels de fond de carte entre le bouton et l'anneau…
+        assert_eq!(rgb(&buf, 19, 30), theme.bar, "l'écart reste au fond");
+        assert_eq!(rgb(&buf, 18, 30), theme.bar, "l'écart fait deux pixels");
+        // … puis l'anneau, de la couleur d'accent, sur deux pixels.
+        assert_eq!(rgb(&buf, 17, 30), theme.accent, "l'anneau est d'accent");
+        assert_eq!(rgb(&buf, 16, 30), theme.accent, "l'anneau fait deux pixels");
+        assert_eq!(rgb(&buf, 15, 30), theme.bar, "et rien au-delà");
+        assert_eq!(rgb(&buf, 30, 30), theme.accent, "le bouton, lui, est plein");
+    }
+
+    /// Luminance approchée d'une couleur.
+    fn luma(c: Rgb) -> u32 {
+        u32::from(c.0) * 3 + u32::from(c.1) * 6 + u32::from(c.2)
+    }
+
+    #[test]
+    fn en_sombre_le_survol_eclaircit_et_en_clair_il_assombrit() {
+        for (theme, lighter) in [(Theme::dark(), true), (Theme::light(), false)] {
+            let rest = rgb(&card_with_button(&theme, ButtonLook::default()), 40, 30);
+            let hovered = ButtonLook {
+                hovered: true,
+                ..ButtonLook::default()
+            };
+            let over = rgb(&card_with_button(&theme, hovered), 40, 30);
+            assert_eq!(luma(over) > luma(rest), lighter, "{rest:?} → {over:?}");
+        }
+    }
+
+    #[test]
+    fn un_bouton_enfonce_se_distingue_du_survol() {
+        let theme = Theme::light();
+        for primary in [true, false] {
+            let look = ButtonLook {
+                primary,
+                hovered: true,
+                ..ButtonLook::default()
+            };
+            let over = rgb(&card_with_button(&theme, look), 40, 30);
+            let pressed = ButtonLook {
+                pressed: true,
+                ..look
+            };
+            let down = rgb(&card_with_button(&theme, pressed), 40, 30);
+            assert_ne!(over, down, "principal : {primary}");
+        }
     }
 
     #[test]

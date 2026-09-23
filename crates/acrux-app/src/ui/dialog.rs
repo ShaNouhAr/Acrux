@@ -10,7 +10,8 @@
 //!
 //! Clavier : Entrée valide le bouton qui a le focus (le principal au départ),
 //! Échap choisit « Annuler » quand il existe, Tab et les flèches déplacent le
-//! focus.
+//! focus. Souris : un bouton n'agit qu'au relâchement (voir
+//! [`crate::ui::modal::ButtonRow`]).
 
 // Coordonnées d'écran entières.
 #![allow(
@@ -21,8 +22,8 @@
 )]
 
 use crate::platform::{Frame, Key};
-use crate::ui::anim::ease_out;
-use crate::ui::paint::{round_rect_alpha, round_rect_outline, shadow, veil};
+use crate::ui::modal::{self, Appear, ButtonRow, RowButton};
+use crate::ui::paint::veil;
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
 
@@ -57,16 +58,15 @@ pub struct Dialog {
     pub message: String,
     /// Icône.
     pub tone: Tone,
-    /// Boutons, de gauche à droite.
+    /// Boutons, de gauche à droite : le principal d'abord, l'abandon en
+    /// dernier, comme sous Windows.
     pub buttons: Vec<Button>,
     /// Bouton qui a le focus.
     pub focus: usize,
-    /// Bouton survolé.
-    hover: Option<usize>,
-    /// Zones des boutons, remplies au dessin.
-    hits: Vec<(i32, i32, i32, i32)>,
-    /// Ouverture de la fenêtre : la carte arrive en fondu, en montant un peu.
-    opened: std::time::Instant,
+    /// La rangée dessinée : survol, appui, zones cliquables.
+    row: ButtonRow,
+    /// La carte arrive en fondu, en montant un peu.
+    appear: Appear,
 }
 
 impl Dialog {
@@ -74,15 +74,20 @@ impl Dialog {
     #[must_use]
     pub fn new(title: &str, message: &str, tone: Tone, buttons: Vec<Button>) -> Self {
         let focus = buttons.iter().position(|b| b.primary).unwrap_or(0);
+        let row = ButtonRow::new(
+            buttons
+                .iter()
+                .map(|b| RowButton::new(&b.label, b.primary))
+                .collect(),
+        );
         Self {
             title: title.to_string(),
             message: message.to_string(),
             tone,
             buttons,
             focus,
-            hover: None,
-            hits: Vec::new(),
-            opened: std::time::Instant::now(),
+            row,
+            appear: Appear::new(),
         }
     }
 
@@ -94,7 +99,7 @@ impl Dialog {
             message,
             Tone::Error,
             vec![Button {
-                label: "OK".into(),
+                label: crate::ui::lang::tr("OK").into(),
                 primary: true,
                 cancel: true,
             }],
@@ -122,28 +127,35 @@ impl Dialog {
         )
     }
 
-    /// Vrai pendant l'apparition (et un peu après, pour peindre l'état
-    /// final) : tant qu'elle dure, il faut repeindre sans attendre
-    /// d'événement, sans quoi la fenêtre resterait figée à demi transparente.
+    /// Vrai tant que l'apparition a une image à peindre : il faut repeindre
+    /// sans attendre d'événement, sans quoi la fenêtre resterait figée à
+    /// demi transparente.
     #[must_use]
-    pub fn opening(&self) -> bool {
-        self.opened.elapsed().as_secs_f64() < 0.2
+    pub fn animating(&self) -> bool {
+        self.appear.animating()
     }
 
-    /// Bouton sous un point, s'il y en a un.
+    /// Vrai si un bouton est sous le point : le pointeur devient une main.
     #[must_use]
-    pub fn button_at(&self, x: i32, y: i32) -> Option<usize> {
-        self.hits
-            .iter()
-            .position(|&(bx, by, bw, bh)| x >= bx && x < bx + bw && y >= by && y < by + bh)
+    pub fn over_button(&self, x: i32, y: i32) -> bool {
+        self.row.hit(x, y).is_some()
     }
 
     /// Survol ; rend vrai si l'affichage doit changer.
     pub fn mouse_move(&mut self, x: i32, y: i32) -> bool {
-        let over = self.button_at(x, y);
-        let changed = over != self.hover;
-        self.hover = over;
-        changed
+        self.row.mouse_move(x, y)
+    }
+
+    /// Appui : enfonce le bouton visé, sans rien choisir encore. Rend vrai
+    /// si l'affichage doit changer.
+    pub fn mouse_down(&mut self, x: i32, y: i32) -> bool {
+        self.row.mouse_down(x, y)
+    }
+
+    /// Relâchement : le bouton choisi, si l'appui s'est fait sur lui et que
+    /// le pointeur y est encore.
+    pub fn mouse_up(&mut self, x: i32, y: i32) -> Option<usize> {
+        self.row.mouse_up(x, y)
     }
 
     /// Touche : le bouton choisi, s'il y en a un.
@@ -169,7 +181,6 @@ impl Dialog {
     }
 
     /// Dessine la fenêtre au centre du cadre, sur un voile.
-    #[allow(clippy::too_many_lines)] // une mise en page, lue de haut en bas
     pub fn paint(
         &mut self,
         frame: &mut Frame<'_>,
@@ -178,52 +189,26 @@ impl Dialog {
         dpi: f32,
     ) {
         // Apparition : le voile s'assombrit et la carte monte de quelques
-        // pixels. 120 ms — assez pour voir d'où elle vient, pas assez pour
-        // attendre.
-        #[allow(clippy::cast_possible_truncation)]
-        let progress = ease_out(self.opened.elapsed().as_secs_f64() / 0.12) as f32;
+        // pixels (voir `modal::Appear`).
+        let progress = self.appear.progress();
         veil(frame, progress);
         let (fw, fh) = (frame.width as i32, frame.height as i32);
         let s = |v: f32| (v * dpi) as i32;
-        let width = s(460.0).min(fw - s(40.0)).max(s(260.0));
-        let pad = s(24.0);
+        let width = modal::card_width(fw, modal::CARD_WIDTH, dpi);
+        let pad = s(modal::PAD);
         let size = theme.font_size * dpi;
-        let title_size = size * 1.3;
+        let title_size = modal::title_size(theme, dpi);
         let icon = s(36.0);
         // Le message, coupé à la largeur disponible.
         let text_x0 = pad + icon + s(16.0);
         let text_w = (width - text_x0 - pad).max(s(80.0));
-        let lines = wrap(text, size, &self.message, text_w as f32);
+        let lines = modal::wrap(text, size, &self.message, text_w as f32);
         let line_h = (size * 1.45) as i32;
-        let button_h = s(34.0);
+        let button_h = s(modal::BUTTON_H);
         let body = s(8.0) + (title_size * 1.3) as i32 + s(8.0) + line_h * lines.len() as i32;
         let height = pad + body.max(icon) + s(24.0) + button_h + pad;
-        let x = (fw - width) / 2;
-        let rise = ((1.0 - progress) * 14.0 * dpi) as i32;
-        let y = ((fh - height) / 2).max(s(20.0)) + rise;
-        // Ombre portée, puis la carte aux coins arrondis.
-        let radius = 14.0 * dpi;
-        shadow(
-            frame,
-            x,
-            y + s(6.0),
-            width,
-            height,
-            radius,
-            26.0 * dpi,
-            0.45 * progress,
-        );
-        round_rect_alpha(frame, x, y, width, height, radius, theme.bar, progress);
-        round_rect_outline(
-            frame,
-            x,
-            y,
-            width,
-            height,
-            radius,
-            dpi.max(1.0),
-            theme.separator,
-        );
+        let (x, y) = modal::modal_rect(fw, fh, width, height, dpi, progress);
+        modal::card(frame, theme, dpi, x, y, width, height, progress);
         // Icône : un disque et son signe.
         let (disc, sign) = match self.tone {
             Tone::Question => (theme.accent, "?"),
@@ -241,15 +226,8 @@ impl Dialog {
             (255, 255, 255),
         );
         // Titre et message.
-        let mut ty = y + pad + s(8.0) + (title_size * 1.0) as i32;
-        text.draw(
-            frame,
-            (x + text_x0) as f32,
-            ty as f32,
-            title_size,
-            &self.title,
-            theme.text,
-        );
+        let mut ty = y + pad + s(8.0) + title_size as i32;
+        modal::title(frame, text, theme, dpi, x + text_x0, ty, &self.title);
         ty += (title_size * 0.3) as i32 + s(8.0);
         for line in &lines {
             ty += line_h;
@@ -262,70 +240,14 @@ impl Dialog {
                 theme.text_dim,
             );
         }
-        // Boutons, alignés à droite, le principal le plus à droite n'est pas
-        // imposé : on garde l'ordre donné, qui est l'ordre de lecture.
-        self.hits.clear();
-        let widths: Vec<i32> = self
-            .buttons
-            .iter()
-            .map(|b| (text.measure(size, &b.label) as i32 + s(32.0)).max(s(88.0)))
-            .collect();
-        let gap = s(8.0);
-        let total: i32 = widths.iter().sum::<i32>() + gap * (widths.len() as i32 - 1).max(0);
-        let mut bx = x + width - pad - total;
+        // Boutons, groupés à droite dans l'ordre donné : le principal
+        // d'abord, à gauche d'« Annuler », comme sous Windows.
         let by = y + height - pad - button_h;
-        for (i, (button, w)) in self.buttons.iter().zip(&widths).enumerate() {
-            let fg = crate::ui::paint::button(
-                frame,
-                bx,
-                by,
-                *w,
-                button_h,
-                dpi,
-                theme,
-                crate::ui::paint::ButtonLook {
-                    primary: button.primary,
-                    hovered: self.hover == Some(i),
-                    focused: self.focus == i,
-                    disabled: false,
-                },
-            );
-            let lw = text.measure(size, &button.label);
-            text.draw(
-                frame,
-                bx as f32 + (*w as f32 - lw) / 2.0,
-                (by + button_h / 2) as f32 + text.ascent(size) / 2.0,
-                size,
-                &button.label,
-                fg,
-            );
-            self.hits.push((bx, by, *w, button_h));
-            bx += w + gap;
-        }
+        self.row
+            .layout_right(text, size, dpi, x + width - pad, by, button_h);
+        let focus = self.focus.min(self.buttons.len().saturating_sub(1));
+        self.row.paint(frame, text, theme, dpi, Some(focus));
     }
-}
-
-/// Coupe un texte en lignes tenant dans une largeur ; `\n` force la coupure.
-fn wrap(text: &mut TextRenderer, size: f32, message: &str, width: f32) -> Vec<String> {
-    let mut out = Vec::new();
-    for paragraph in message.split('\n') {
-        let mut line = String::new();
-        for word in paragraph.split_whitespace() {
-            let candidate = if line.is_empty() {
-                word.to_string()
-            } else {
-                format!("{line} {word}")
-            };
-            if text.measure(size, &candidate) <= width || line.is_empty() {
-                line = candidate;
-            } else {
-                out.push(std::mem::take(&mut line));
-                line = word.to_string();
-            }
-        }
-        out.push(line);
-    }
-    out
 }
 
 /// Disque plein, lissé sur ses bords.
@@ -381,6 +303,24 @@ mod tests {
         assert_eq!(d.buttons.len(), 1);
         assert_eq!(d.key(Key::Escape, false), Some(0));
         assert_eq!(d.key(Key::Enter, false), Some(0));
+    }
+
+    #[test]
+    fn un_clic_se_decide_au_relachement() {
+        let mut d = Dialog::choice(
+            "Enregistrer ?",
+            "…",
+            Tone::Question,
+            &["Enregistrer", "Ne pas enregistrer", "Annuler"],
+        );
+        d.row.layout_with_widths(&[100, 140, 90], 500, 0, 30, 8);
+        // L'appui n'agit pas : il enfonce.
+        assert!(d.mouse_down(170, 10));
+        // Relâché ailleurs, on s'est ravisé.
+        assert_eq!(d.mouse_up(170, 90), None);
+        // Appui et relâchement sur « Annuler » : c'est lui qui est choisi.
+        assert!(d.mouse_down(460, 10));
+        assert_eq!(d.mouse_up(460, 12), Some(2));
     }
 
     #[test]

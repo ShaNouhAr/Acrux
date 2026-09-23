@@ -23,6 +23,11 @@ pub struct Theme {
     pub accent: Rgb,
     /// Fond d'un bouton survolé.
     pub hover: Rgb,
+    /// Fond d'un bouton secondaire survolé. Il se lit par contraste avec le
+    /// bouton au repos (`hover`) : en thème sombre il **éclaircit**, comme
+    /// sous Windows 11 — assombrir un bouton déjà sombre le ferait paraître
+    /// enfoncé, pas survolé. En thème clair, il assombrit.
+    pub button_hover: Rgb,
     /// Fond d'une info-bulle (légèrement détaché des barres pour se lire
     /// par-dessus n'importe quel fond).
     pub tip_bg: Rgb,
@@ -54,6 +59,7 @@ impl Theme {
             text_dim: (0xA0, 0xA3, 0xA8),
             accent: (0x4C, 0x8B, 0xF5),
             hover: (0x3E, 0x40, 0x45),
+            button_hover: (0x4A, 0x4C, 0x52),
             tip_bg: (0x1B, 0x1C, 0x1E),
             danger: (0xE5, 0x53, 0x53),
             warning: (0xE0, 0xA1, 0x3A),
@@ -76,6 +82,7 @@ impl Theme {
             text_dim: (0x6A, 0x6C, 0x70),
             accent: (0x2F, 0x6F, 0xE0),
             hover: (0xDE, 0xDF, 0xE3),
+            button_hover: (0xD0, 0xD1, 0xD4),
             tip_bg: (0xFF, 0xFF, 0xFF),
             danger: (0xC6, 0x28, 0x28),
             warning: (0xB0, 0x6A, 0x00),

@@ -63,6 +63,56 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 - Les questions d'Acrux finissent d'apparaître d'elles-mêmes : ouvertes au
   clavier, elles pouvaient rester à demi transparentes jusqu'au prochain
   mouvement de la souris.
+- **« Paramètres » devient une vraie fiche.** La langue, l'apparence (clair ou
+  sombre, qui n'y figurait pas) et les mises à jour tiennent sur une seule
+  carte : chaque réglage est un groupe de cases dont la case allumée dit l'état,
+  et un clic le change sur-le-champ — la fiche se repeint aussitôt dans la
+  langue ou le thème choisi. On y lit la version installée et l'issue de la
+  dernière recherche, avec « Rechercher maintenant » et, quand une version est
+  disponible, « Installer ». Avant, c'était une question à icône « ? » qui
+  menait à d'autres questions. Au clavier : Tab d'un groupe à l'autre, les
+  flèches changent la valeur, Entrée ou Échap ferment.
+- **Une invite ouverte garde pour elle le clavier et la souris.** Ctrl+W fermait
+  l'onglet sous l'invite du mot de passe, Ctrl+Maj+P ouvrait la palette
+  par-dessus, la molette faisait défiler la page dessous, et une invite ouverte
+  alors que la barre d'outils avait le focus (F6) ne recevait plus rien de ce
+  qu'on tapait. Seuls son champ et ses boutons répondent désormais ; Ctrl+V
+  colle toujours dans le champ.
+- **Les boutons agissent au relâchement**, pointeur dessus, et non plus à
+  l'appui : dans les questions, les invites, la fiche « Paramètres », la
+  fenêtre « Protéger par mot de passe », la carte de recherche et la palette de
+  commandes. On se ravise en glissant hors du bouton, comme partout sous
+  Windows, et un bouton enfoncé se voit. Un clic dans le champ de la palette ne
+  la ferme plus.
+- **Les invites de saisie** (note, mot de passe, champ de formulaire, peigne,
+  commentaire…) **prennent la carte des questions** : même titre, mêmes
+  marges, même fondu. Leur libellé se coupe sur plusieurs lignes au lieu d'être
+  tronqué. « Valider » passe avant « Annuler », groupés à droite comme sous
+  Windows — la carte de recherche (« Remplacer », « Tout remplacer ») et
+  « Protéger par mot de passe » suivent le même ordre. Survol, pointeur main,
+  et Tab qui va du champ aux boutons : Entrée ou Espace pressent celui qui a le
+  focus. Une saisie refusée (mauvais mot de passe) remet le focus dans le champ.
+- **Carte de recherche** : Tab atteint aussi « Remplacer » et « Tout remplacer »,
+  qui s'éclairent au survol ; la carte a le rayon et l'ombre des autres, et un
+  clic sur elle, hors des champs, ne sélectionne plus le texte de la page
+  dessous.
+- **L'anneau de focus se voit autour du bouton principal** : il s'écarte de deux
+  pixels du bouton au lieu de s'y coller, et ne se confond plus avec lui (même
+  couleur d'accent). **En thème sombre, le survol éclaircit** un bouton
+  secondaire au lieu de l'assombrir, comme sous Windows 11 — de même pour les
+  cases des contrôles segmentés.
+- **Ombres** : une bande claire soulignait chaque carte (questions, invites,
+  palette, info-bulles, cartes de l'accueil) — l'ombre, décalée vers le bas,
+  laissait son intérieur intact. Elle est maintenant pleine sous la carte.
+- Les fondus d'apparition se terminent toujours sur une image opaque, même si la
+  première peinture tarde, et pour toutes les cartes (invites, « Paramètres »,
+  « Protéger ») : le fil des animations est armé dès l'événement qui ouvre la
+  carte, et se tait une fois l'image finale peinte.
+- Le résultat d'une recherche de mise à jour s'affiche dès qu'il arrive ; il
+  attendait jusqu'ici le prochain mouvement de souris.
+- Les titres et libellés des invites, et la question « Enregistrer les
+  modifications ? » à la fermeture d'un onglet, suivent la langue de
+  l'interface.
 
 - **Les lignes à remplir se reconnaissent** — « Nom : ____________ ». Dans
   « Remplir et signer » (et là seulement), la place du texte s'encadre

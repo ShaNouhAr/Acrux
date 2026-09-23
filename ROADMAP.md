@@ -247,6 +247,13 @@ Livrable : version 0.2, parité avec Acrobat Standard hors édition de texte.
   (« Enregistrer », « Ne pas enregistrer », « Annuler »), la fenêtre ne bloque pas le programme —
   l'action attend la réponse — et le clavier la pilote (Entrée, Échap, Tab). Messages d'erreur,
   suppression de page, biffures et mise à jour passent par là.
+- [x] **Un seul modèle de carte modale** (`acrux-app/src/ui/modal.rs`) : questions, invites de
+  saisie, fiche « Paramètres » et « Protéger » partagent la carte (rayon, ombre, marges, titre),
+  le fondu qui se termine toujours (`Appear`) et la rangée de boutons (`ButtonRow`) : ordre de
+  Windows, survol, pointeur main, déclenchement au relâchement. Une carte ouverte prend tout le
+  clavier et la souris (`viewer/dialogs.rs`, `modal_event`).
+- [x] **Fiche « Paramètres »** (`acrux-app/src/ui/settings.rs`) : langue, apparence, mises à jour
+  (au démarrage ou jamais, rechercher maintenant, installer), appliqués sur-le-champ.
 - [x] **Pointeurs dessinés** (`acrux-app/src/ui/cursors.rs`) : ajouter du texte, surligneur, note,
   biffure, déplacement — le pointeur dit ce que fera le clic. À faire : pointeurs de
   redimensionnement aux poignées, et tailles spécifiques aux écrans à très haute résolution.

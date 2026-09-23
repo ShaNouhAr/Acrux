@@ -145,13 +145,12 @@ impl Viewer {
             OwnerThen::Unprotect => tr("Nécessaire pour retirer la protection :"),
             OwnerThen::Unlock => tr("Il donne tous les droits sur ce document :"),
         };
-        self.prompt = Some(Prompt {
-            title: tr("Mot de passe des permissions").into(),
-            label: label.into(),
+        self.prompt = Some(Prompt::new(
+            tr("Mot de passe des permissions"),
+            label.into(),
             input,
-            error: None,
-            kind: PromptKind::OwnerPassword { then },
-        });
+            PromptKind::OwnerPassword { then },
+        ));
     }
 
     /// Mot de passe des permissions saisi : accepté, il donne tous les
@@ -283,6 +282,7 @@ impl Viewer {
                 y,
                 ..
             } => dialog.mouse_down(x, y),
+            Event::MouseUp { x, y, .. } => dialog.mouse_up(x, y),
             Event::MouseMove { x, y, .. } => {
                 if dialog.mouse_move(x, y) {
                     window.request_redraw();
@@ -296,10 +296,7 @@ impl Viewer {
             }
             // Le reste de la souris, et un fichier déposé (il ouvrirait un
             // autre document sous la fenêtre), s'arrêtent là.
-            Event::MouseDown { .. }
-            | Event::MouseUp { .. }
-            | Event::Wheel { .. }
-            | Event::FileDropped(_) => Action::None,
+            Event::MouseDown { .. } | Event::Wheel { .. } | Event::FileDropped(_) => Action::None,
             _ => return false,
         };
         match action {

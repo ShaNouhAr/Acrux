@@ -603,6 +603,17 @@ fn score(label: &str, query: &str) -> Option<usize> {
     Some(500 + spread)
 }
 
+/// Où tombe l'appui de la souris.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaletteDown {
+    /// Sur une ligne : elle s'enfonce, et s'exécutera au relâchement.
+    Row,
+    /// Dans la carte, hors des lignes (le champ) : la palette reste.
+    Inside,
+    /// Dehors : la palette se ferme, sans rien exécuter.
+    Outside,
+}
+
 /// Palette de commandes.
 pub struct Palette {
     /// Champ de filtrage.
@@ -613,6 +624,10 @@ pub struct Palette {
     selected: usize,
     /// Rectangles des lignes au dernier dessin.
     rows: Vec<(i32, i32, i32, i32)>,
+    /// Rectangle de la carte au dernier dessin.
+    card: (i32, i32, i32, i32),
+    /// Ligne enfoncée, qui attend le relâchement pour s'exécuter.
+    pressed: Option<usize>,
     /// Un document est ouvert.
     has_document: bool,
 }
@@ -626,6 +641,8 @@ impl Palette {
             filtered: Vec::new(),
             selected: 0,
             rows: Vec::new(),
+            card: (0, 0, 0, 0),
+            pressed: None,
             has_document,
         };
         p.refilter();
@@ -701,26 +718,46 @@ impl Palette {
         }
     }
 
-    /// Clic : `Some(commande)` si une ligne a été choisie.
-    #[must_use]
-    pub fn mouse_down(&self, x: i32, y: i32) -> Option<Command> {
-        let index = self
-            .rows
+    /// Ligne sous un point, d'après le dernier dessin.
+    fn row_at(&self, x: i32, y: i32) -> Option<usize> {
+        self.rows
             .iter()
-            .position(|&(rx, ry, rw, rh)| x >= rx && x < rx + rw && y >= ry && y < ry + rh)?;
+            .position(|&(rx, ry, rw, rh)| x >= rx && x < rx + rw && y >= ry && y < ry + rh)
+    }
+
+    /// Appui : une ligne s'enfonce (et se sélectionne), mais rien ne
+    /// s'exécute encore — comme un bouton, une commande part au relâchement,
+    /// et l'on se ravise en glissant hors de la ligne.
+    pub fn mouse_down(&mut self, x: i32, y: i32) -> PaletteDown {
+        self.pressed = self.row_at(x, y);
+        if let Some(index) = self.pressed {
+            self.selected = index;
+            return PaletteDown::Row;
+        }
+        let (cx, cy, cw, ch) = self.card;
+        if x >= cx && x < cx + cw && y >= cy && y < cy + ch {
+            PaletteDown::Inside
+        } else {
+            PaletteDown::Outside
+        }
+    }
+
+    /// Relâchement : la commande de la ligne enfoncée, si le pointeur est
+    /// resté dessus.
+    pub fn mouse_up(&mut self, x: i32, y: i32) -> Option<Command> {
+        let pressed = self.pressed.take()?;
+        if self.row_at(x, y) != Some(pressed) {
+            return None;
+        }
         self.filtered
-            .get(index)
+            .get(pressed)
             .and_then(|&i| ENTRIES.get(i))
             .map(|e| e.command)
     }
 
     /// Survol : sélectionne la ligne sous le pointeur ; vrai si ça a changé.
     pub fn mouse_move(&mut self, x: i32, y: i32) -> bool {
-        let Some(index) = self
-            .rows
-            .iter()
-            .position(|&(rx, ry, rw, rh)| x >= rx && x < rx + rw && y >= ry && y < ry + rh)
-        else {
+        let Some(index) = self.row_at(x, y) else {
             return false;
         };
         let changed = index != self.selected;
@@ -729,6 +766,7 @@ impl Palette {
     }
 
     /// Dessine la palette par-dessus la vue.
+    #[allow(clippy::too_many_lines)] // une mise en page, lue de haut en bas
     pub fn paint(
         &mut self,
         frame: &mut Frame<'_>,
@@ -769,6 +807,7 @@ impl Palette {
             dpi.max(1.0),
             t.separator,
         );
+        self.card = (x, y, width, height);
         self.input.draw(
             frame,
             text,
@@ -953,6 +992,30 @@ mod tests {
         assert_eq!((cmd, close), (first, true));
         let (cmd, close) = p.key(Key::Escape, false);
         assert_eq!((cmd, close), (None, true));
+    }
+
+    #[test]
+    fn la_palette_choisit_au_relachement() {
+        let mut p = Palette::new(true);
+        p.card = (0, 0, 400, 300);
+        p.rows = vec![(0, 50, 400, 30), (0, 80, 400, 30)];
+        let second = p
+            .filtered
+            .get(1)
+            .and_then(|&i| ENTRIES.get(i))
+            .map(|e| e.command);
+        // L'appui sélectionne sans exécuter ; le relâchement exécute.
+        assert_eq!(p.mouse_down(10, 90), PaletteDown::Row);
+        assert_eq!(p.current(), second);
+        assert_eq!(p.mouse_up(20, 95), second);
+        // Glissé vers une autre ligne : on s'est ravisé.
+        assert_eq!(p.mouse_down(10, 60), PaletteDown::Row);
+        assert_eq!(p.mouse_up(10, 90), None);
+        // Un relâchement sans appui ne fait rien.
+        assert_eq!(p.mouse_up(10, 60), None);
+        // Le champ garde la palette ouverte ; dehors, elle se ferme.
+        assert_eq!(p.mouse_down(10, 10), PaletteDown::Inside);
+        assert_eq!(p.mouse_down(500, 10), PaletteDown::Outside);
     }
 
     #[test]

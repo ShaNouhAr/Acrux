@@ -66,9 +66,11 @@ barre d'état. C'est la seule chose qui sorte de votre machine : une requête
 `GET` publique, sans identifiant et sans statistique. Rien n'est jamais
 téléchargé ni installé sans que vous l'ayez demandé.
 
-Pour la couper : ouvrez `%APPDATA%\Acrux\prefs.txt` et mettez
-`mises-a-jour=0`. La recherche reste disponible à la demande, dans la palette
-(Ctrl+Maj+P → « Rechercher les mises à jour »).
+Pour la couper : « Paramètres » (bouton de la barre d'outils, ou palette) →
+« Mises à jour » → « Jamais » ; ou, à la main, `mises-a-jour=0` dans
+`%APPDATA%\Acrux\prefs.txt`. La recherche reste disponible à la demande, dans la
+même fiche (« Rechercher maintenant ») ou la palette (Ctrl+Maj+P → « Rechercher
+les mises à jour »).
 
 ## Compiler et tester (3 commandes)
 
@@ -314,6 +316,12 @@ l'impression (non, basse, haute résolution), la modification, la copie, les com
 formulaires, l'accessibilité et l'assemblage. Un document ouvert avec le seul mot de passe
 d'ouverture n'accorde que ses permissions ; chaque refus propose le mot de passe des permissions,
 qui seul permet aussi de changer ou de retirer la protection.
+
+**« Paramètres »** (bouton de la barre d'outils, ou palette) est une fiche : langue (celle du
+système, français ou anglais), thème clair ou sombre, recherche des mises à jour au démarrage ou
+jamais, version installée. Un clic change le réglage sur-le-champ. Dans cette fiche comme dans
+toutes les questions et invites, un bouton n'agit qu'au relâchement — on se ravise en glissant
+hors de lui —, Tab passe d'un élément à l'autre et Échap ferme.
 
 Les réglages (thème, disposition, zoom, panneau, taille de fenêtre, fichiers récents) sont
 conservés dans `%APPDATA%\Acrux\prefs.txt`, un fichier texte `clé=valeur` lisible et

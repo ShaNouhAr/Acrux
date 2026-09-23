@@ -1,12 +1,14 @@
 //! Questions et messages du visualiseur, dans les fenêtres dessinées de
-//! [`crate::ui::dialog`].
+//! [`crate::ui::dialog`], et le routage de toutes les cartes modales.
 //!
 //! Une question ne bloque rien : elle est posée, la page reste peinte
 //! derrière un voile, et l'action attend la réponse dans [`Then`]. Tant
-//! qu'une fenêtre est ouverte, elle reçoit seule le clavier et la souris.
+//! qu'une carte modale est ouverte — question, invite, fiche
+//! « Paramètres » —, elle reçoit seule le clavier et la souris : rien ne
+//! passe au document, à la barre ou aux onglets qu'elle recouvre.
 
 use super::{log_line, EditOp, Viewer};
-use crate::platform::{Cursor, Event, Frame, WindowHandle};
+use crate::platform::{Cursor, Event, Frame, MouseButton, WindowHandle};
 use crate::ui::dialog::{Dialog, Tone};
 use crate::ui::lang::{tr, trf};
 
@@ -25,12 +27,6 @@ pub(super) enum Then {
     DeletePage(usize),
     /// Télécharger et lancer l'installateur (adresse, version).
     InstallUpdate(String, String),
-    /// Choisir la langue de l'interface : le rang du bouton dit laquelle.
-    Language,
-    /// Menu des paramètres : le rang du bouton dit quelle page ouvrir.
-    Settings,
-    /// Réglages des mises à jour.
-    Updates,
     /// Document déjà protégé : changer sa protection, ou la retirer.
     Protection,
     /// Une action refusée par les permissions : saisir le mot de passe des
@@ -63,16 +59,16 @@ pub(super) struct Asking {
 }
 
 impl Viewer {
-    /// Pose une question. Elle apparaît en fondu : l'horloge des animations
-    /// est réveillée pour que la fenêtre se repeigne pendant ce temps-là.
+    /// Pose une question. Elle apparaît en fondu : `sync_anim`, à la fin de
+    /// l'événement, arme l'horloge des animations pour que la fenêtre se
+    /// repeigne jusqu'à la dernière image.
     fn ask(&mut self, asking: Asking) {
         self.dialogs.push(asking);
-        self.wake_anim();
     }
 
-    /// Vrai tant que la question du dessus apparaît.
-    pub(super) fn dialog_opening(&self) -> bool {
-        self.dialogs.last().is_some_and(|a| a.dialog.opening())
+    /// Vrai tant que la question du dessus a une image d'apparition à peindre.
+    pub(super) fn dialog_animating(&self) -> bool {
+        self.dialogs.last().is_some_and(|a| a.dialog.animating())
     }
 
     /// Affiche un message d'erreur.
@@ -98,7 +94,7 @@ impl Viewer {
     /// lance.
     pub(super) fn confirm(&mut self, title: &str, message: &str, verb: &str, then: Then) {
         self.ask(Asking {
-            dialog: Dialog::choice(title, message, Tone::Question, &[verb, "Annuler"]),
+            dialog: Dialog::choice(title, message, Tone::Question, &[verb, tr("Annuler")]),
             kind: Kind::Confirm,
             then,
         });
@@ -132,12 +128,13 @@ impl Viewer {
         let name = self.document_name();
         self.ask(Asking {
             dialog: Dialog::choice(
-                "Enregistrer les modifications ?",
-                &format!(
-                    "« {name} » a été modifié. Enregistrer les modifications avant de le fermer ?"
+                tr("Enregistrer les modifications ?"),
+                &trf(
+                    "« {} » a été modifié. Enregistrer les modifications avant de le fermer ?",
+                    &[&name],
                 ),
                 Tone::Question,
-                &["Enregistrer", "Ne pas enregistrer", "Annuler"],
+                &[tr("Enregistrer"), tr("Ne pas enregistrer"), tr("Annuler")],
             ),
             kind: Kind::SaveFirst,
             then: Then::CloseTab,
@@ -171,9 +168,9 @@ impl Viewer {
                     self.select_tab(index);
                 }
             }
-            format!(
+            trf(
                 "« {} » a été modifié. Enregistrer les modifications avant de quitter ?",
-                self.document_name()
+                &[&self.document_name()],
             )
         } else {
             trf(
@@ -188,7 +185,7 @@ impl Viewer {
         };
         self.ask(Asking {
             dialog: Dialog::choice(
-                "Enregistrer les modifications ?",
+                tr("Enregistrer les modifications ?"),
                 &message,
                 Tone::Question,
                 &[save, tr("Quitter sans enregistrer"), tr("Annuler")],
@@ -215,19 +212,30 @@ impl Viewer {
         };
         let choice = match *event {
             Event::Key(key, m) => top.dialog.key(key, m.shift),
-            Event::MouseDown { x, y, .. } => top.dialog.button_at(x, y),
+            // L'appui enfonce ; c'est le relâchement, pointeur toujours sur
+            // le bouton, qui choisit. On se ravise en glissant dehors.
+            Event::MouseDown {
+                button: MouseButton::Left,
+                x,
+                y,
+                ..
+            } => {
+                top.dialog.mouse_down(x, y);
+                None
+            }
+            Event::MouseUp { x, y, .. } => top.dialog.mouse_up(x, y),
             Event::MouseMove { x, y, .. } => {
                 if top.dialog.mouse_move(x, y) {
                     window.request_redraw();
                 }
-                window.set_cursor(if top.dialog.button_at(x, y).is_some() {
+                window.set_cursor(if top.dialog.over_button(x, y) {
                     Cursor::Hand
                 } else {
                     Cursor::Arrow
                 });
                 None
             }
-            Event::Char(..) | Event::MouseUp { .. } | Event::Wheel { .. } => None,
+            Event::Char(..) | Event::MouseDown { .. } | Event::Wheel { .. } => None,
             Event::FileDropped(_) | Event::Close => return !matches!(event, Event::Close),
             _ => return false,
         };
@@ -253,23 +261,6 @@ impl Viewer {
         ));
         if asking.kind == Kind::Choice {
             match asking.then {
-                Then::Language => {
-                    let choice = match index {
-                        0 => Some(crate::ui::lang::Lang::Auto),
-                        1 => Some(crate::ui::lang::Lang::French),
-                        2 => Some(crate::ui::lang::Lang::English),
-                        _ => None,
-                    };
-                    if let Some(choice) = choice {
-                        self.set_language(choice, window);
-                    }
-                }
-                Then::Settings => match index {
-                    0 => self.open_language(window),
-                    1 => self.open_updates(window),
-                    _ => {}
-                },
-                Then::Updates => self.updates_answer(index, window),
                 Then::Protection => match index {
                     0 => self.protect_change(),
                     1 => self.remove_protection(),
@@ -298,12 +289,7 @@ impl Viewer {
         }
         match asking.then.clone() {
             // Rien à faire : un message, ou un choix déjà appliqué.
-            Then::Nothing
-            | Then::Language
-            | Then::Settings
-            | Then::Updates
-            | Then::Protection
-            | Then::OwnerPassword => {}
+            Then::Nothing | Then::Protection | Then::OwnerPassword => {}
             Then::CloseTab => {
                 let active = self.active_tab;
                 self.close_tab_now(active);
@@ -322,6 +308,140 @@ impl Viewer {
             Then::InstallUpdate(url, version) => self.install_update_now(&url, &version),
             Then::ClearRecent => self.clear_recent(),
         }
+    }
+
+    /// Donne l'événement à l'invite ou à la fiche « Paramètres », si l'une
+    /// est ouverte. Elle prend **tout** le clavier et la souris : les
+    /// raccourcis (Ctrl+W, Ctrl+Maj+P, F6…), la molette et les clics
+    /// n'atteignent pas ce qu'elle recouvre — une invite ouverte depuis la
+    /// barre (F6) restait sinon insaisissable, et Ctrl+W fermait l'onglet
+    /// sous l'invite du mot de passe. Le redimensionnement, le réveil et la
+    /// fermeture de la fenêtre suivent leur cours : rend faux pour eux.
+    ///
+    /// Seule compte une carte ouverte **avant** l'événement : le relâchement
+    /// qui ouvre l'invite du surlignage va, lui, au document.
+    pub(super) fn modal_event(&mut self, event: &Event, window: &mut dyn WindowHandle) -> bool {
+        if self.settings.is_some() {
+            return self.settings_event(event, window);
+        }
+        if self.prompt.is_none() {
+            return false;
+        }
+        match *event {
+            Event::Key(key, m) => self.prompt_key(key, m, window),
+            // Ctrl+V colle dans le champ ; les autres raccourcis s'arrêtent là.
+            Event::Char(c, m) if m.ctrl => {
+                let paste = matches!(c, 'v' | 'V' | '\u{16}');
+                if let Some(p) = &mut self.prompt {
+                    if paste && p.card.focus == crate::ui::modal::PromptFocus::Field {
+                        let text = window.clipboard_text().unwrap_or_default();
+                        if p.input.paste(&text) == crate::ui::input::InputAction::Changed {
+                            p.error = None;
+                        }
+                    }
+                }
+            }
+            Event::Char(c, _) => {
+                if let Some(p) = &mut self.prompt {
+                    p.card.char(c, &mut p.input, &mut p.error);
+                }
+            }
+            Event::MouseDown {
+                button: MouseButton::Left,
+                x,
+                y,
+                ..
+            } => {
+                self.tip = None;
+                if let Some(p) = &mut self.prompt {
+                    p.card.mouse_down(x, y, &mut p.input);
+                }
+            }
+            Event::MouseUp { x, y, .. } => {
+                // Un geste commencé sous la carte ne se poursuit pas.
+                self.drag_last = None;
+                self.sel_dragging = false;
+                let act = self.prompt.as_mut().and_then(|p| p.card.mouse_up(x, y));
+                self.prompt_act(act, window);
+            }
+            Event::MouseMove { x, y, .. } => {
+                self.tip = None;
+                let Some(p) = &mut self.prompt else {
+                    return true;
+                };
+                let changed = p.card.buttons.mouse_move(x, y);
+                window.set_cursor(if p.card.buttons.hit(x, y).is_some() {
+                    Cursor::Hand
+                } else if p.card.over_field(x, y) {
+                    Cursor::IBeam
+                } else {
+                    Cursor::Arrow
+                });
+                if !changed {
+                    return true;
+                }
+            }
+            // Les autres boutons de la souris, la molette et un fichier
+            // déposé (il ouvrirait un document sous l'invite) s'arrêtent là.
+            Event::MouseDown { .. } | Event::Wheel { .. } | Event::FileDropped(_) => {}
+            _ => return false,
+        }
+        window.request_redraw();
+        true
+    }
+
+    /// La fiche « Paramètres » : même routage que l'invite.
+    fn settings_event(&mut self, event: &Event, window: &mut dyn WindowHandle) -> bool {
+        let state = Self::settings_state(
+            &self.prefs,
+            &self.theme,
+            self.update_rx.is_some(),
+            self.update_found.as_ref(),
+            self.update_outcome.as_ref(),
+        );
+        let Some(sheet) = &mut self.settings else {
+            return false;
+        };
+        let action = match *event {
+            Event::Key(key, m) => sheet.key(key, m.shift, &state),
+            Event::MouseDown {
+                button: MouseButton::Left,
+                x,
+                y,
+                ..
+            } => {
+                self.tip = None;
+                sheet.mouse_down(x, y);
+                None
+            }
+            Event::MouseUp { x, y, .. } => {
+                self.drag_last = None;
+                self.sel_dragging = false;
+                sheet.mouse_up(x, y)
+            }
+            Event::MouseMove { x, y, .. } => {
+                self.tip = None;
+                window.set_cursor(if sheet.over(x, y) {
+                    Cursor::Hand
+                } else {
+                    Cursor::Arrow
+                });
+                if !sheet.mouse_move(x, y) {
+                    return true;
+                }
+                None
+            }
+            Event::Char(..)
+            | Event::MouseDown { .. }
+            | Event::Wheel { .. }
+            | Event::FileDropped(_) => None,
+            _ => return false,
+        };
+        if let Some(action) = action {
+            self.settings_action(action, window);
+        }
+        window.request_redraw();
+        true
     }
 
     /// Enregistre ce que l'action va faire disparaître ; faux si un

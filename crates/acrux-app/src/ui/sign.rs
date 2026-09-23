@@ -580,7 +580,7 @@ impl Capture {
                     primary: action == Button::Apply,
                     hovered: false,
                     focused: false,
-                    disabled: false,
+                    ..ButtonLook::default()
                 },
             );
             let lw = text.measure(size, label);
@@ -610,7 +610,7 @@ impl Capture {
                     primary: false,
                     hovered: false,
                     focused: false,
-                    disabled: false,
+                    ..ButtonLook::default()
                 },
             );
             let lw = text.measure(size, label);

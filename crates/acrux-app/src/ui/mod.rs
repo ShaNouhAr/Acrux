@@ -13,11 +13,13 @@
 //! | `text`    | rendu de texte d'interface avec une police système    |
 //! | `theme`   | couleurs et dimensions                                |
 //! | `lang`    | langue de l'interface : français ou anglais           |
+//! | `modal`   | modèle commun des cartes modales : carte, fondu, rangée de boutons, invite |
 //! | `input`   | champ de saisie sur une ligne                         |
 //! | `icons`   | icônes vectorielles rasterisées à la demande          |
 //! | `toolbar` | barre d'outils (boutons, champ de page, zoom)         |
 //! | `panel`   | panneau latéral (vignettes, signets)                  |
 //! | `prefs`   | réglages persistants et modes d'affichage             |
+//! | `settings` | fiche « Paramètres » : langue, apparence, mises à jour |
 //! | `protect` | fenêtre « Protéger par mot de passe » : deux mots de passe, permissions |
 //! | `tabs`    | barre d'onglets (un par document ouvert)              |
 //! | `paint`   | coins arrondis, ombres douces, aplats translucides    |
@@ -39,6 +41,7 @@ pub mod editpdf;
 pub mod icons;
 pub mod input;
 pub mod lang;
+pub mod modal;
 pub mod modebar;
 pub mod objects;
 pub mod paint;
@@ -47,6 +50,7 @@ pub mod panel;
 pub mod pickers;
 pub mod prefs;
 pub mod protect;
+pub mod settings;
 pub mod sign;
 pub mod signpanel;
 pub mod tabs;

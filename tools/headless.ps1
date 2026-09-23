@@ -98,6 +98,14 @@ function Click($x, $y) {
     Start-Sleep -Milliseconds 500
 }
 
+# Survol seul : le pointeur se pose en (x, y) sans rien cliquer. Sert a voir
+# l'etat survole d'un bouton, ou a placer la souris avant une touche (la note
+# se pose la ou est le pointeur).
+function Hover($x, $y) {
+    [W.HL]::PostMessage($script:Hwnd, 0x0200, [IntPtr]0, (LParam $x $y)) | Out-Null
+    Start-Sleep -Milliseconds 300
+}
+
 # Trace un geste continu : bouton enfonce, une suite de points, puis relache.
 # Les points sont donnes en coordonnees client : @(@(x,y), @(x,y), ...).
 function Drag($points) {

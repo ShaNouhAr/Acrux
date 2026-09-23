@@ -32,8 +32,8 @@ use crate::platform::{Frame, Key};
 use crate::ui::controls::{self, CheckLook, Segment, SegmentItem};
 use crate::ui::input::{InputAction, TextInput};
 use crate::ui::lang::tr;
-use crate::ui::paint::{button, round_rect, round_rect_alpha, round_rect_outline, shadow, veil};
-use crate::ui::paint::{ButtonLook, Rgb};
+use crate::ui::modal::{self, Appear};
+use crate::ui::paint::{button, focus_ring, round_rect_alpha, veil, ButtonLook, Rgb};
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
 
@@ -173,12 +173,16 @@ pub struct ProtectDialog {
     focus: Target,
     /// Élément survolé.
     hover: Option<Target>,
+    /// Élément enfoncé : il n'agira qu'au relâchement, pointeur dessus.
+    pressed: Option<Target>,
     /// Zones cliquables, relevées au dernier dessin.
     targets: Vec<(i32, i32, i32, i32, Target)>,
     /// Erreur de la dernière validation, en français (traduite au dessin).
     error: Option<&'static str>,
     /// Le document était déjà protégé : on change sa protection.
     changing: bool,
+    /// Apparition, comme toutes les cartes.
+    appear: Appear,
 }
 
 impl Default for ProtectDialog {
@@ -208,9 +212,11 @@ impl ProtectDialog {
             assemble: true,
             focus: Target::Field(OPEN),
             hover: None,
+            pressed: None,
             targets: Vec::new(),
             error: None,
             changing: false,
+            appear: Appear::new(),
         };
         dialog.sync_focus();
         dialog
@@ -240,6 +246,12 @@ impl ProtectDialog {
         };
         dialog.sync_focus();
         dialog
+    }
+
+    /// Vrai tant que l'apparition a une image à peindre.
+    #[must_use]
+    pub fn animating(&self) -> bool {
+        self.appear.animating()
     }
 
     /// Titre de la fenêtre, en français (traduit au dessin).
@@ -313,8 +325,9 @@ impl ProtectDialog {
                 out.push(Target::Check(perm));
             }
         }
-        out.push(Target::Cancel);
+        // Dans l'ordre où on les voit : « Protéger », puis « Annuler ».
         out.push(Target::Apply);
+        out.push(Target::Cancel);
         out
     }
 
@@ -440,11 +453,31 @@ impl ProtectDialog {
             .map(|t| t.4)
     }
 
-    /// Clic.
+    /// Appui. Un champ prend le focus tout de suite, pour qu'on puisse y
+    /// taper ; une case ou un bouton s'enfonce seulement, et n'agira qu'au
+    /// relâchement — on se ravise en glissant hors de lui.
     pub fn mouse_down(&mut self, x: i32, y: i32) -> Action {
+        self.pressed = None;
         match self.target_at(x, y) {
-            Some(target) => self.press(target),
+            Some(target @ Target::Field(_)) => self.press(target),
+            Some(target) => {
+                self.pressed = Some(target);
+                self.hover = Some(target);
+                Action::Redraw
+            }
             None => Action::None,
+        }
+    }
+
+    /// Relâchement : l'élément enfoncé agit, si le pointeur est resté dessus.
+    pub fn mouse_up(&mut self, x: i32, y: i32) -> Action {
+        let Some(pressed) = self.pressed.take() else {
+            return Action::None;
+        };
+        if self.target_at(x, y) == Some(pressed) {
+            self.press(pressed)
+        } else {
+            Action::Redraw
         }
     }
 
@@ -573,48 +606,25 @@ impl ProtectDialog {
         let (fw, fh) = (frame.width as i32, frame.height as i32);
         let width = s(540.0).min(fw - s(24.0)).max(s(320.0));
         let height = s(548.0);
-        let x = (fw - width) / 2;
-        let y = ((fh - height) / 2).max(s(8.0));
         let pad = s(22.0);
         let inner = width - 2 * pad;
-        let left = x + pad;
         self.targets.clear();
 
-        // Voile, ombre et carte : les mêmes que la fenêtre de capture.
-        veil(frame, 1.0);
-        let radius = 14.0 * dpi;
-        shadow(
-            frame,
-            x,
-            y + s(6.0),
-            width,
-            height,
-            radius,
-            26.0 * dpi,
-            0.45,
-        );
-        round_rect(frame, x, y, width, height, radius, theme.bar);
-        round_rect_outline(
-            frame,
-            x,
-            y,
-            width,
-            height,
-            radius,
-            dpi.max(1.0),
-            theme.separator,
-        );
+        // Voile, ombre et carte : celles de toutes les fenêtres
+        // (`modal::card`), avec la même apparition.
+        let progress = self.appear.progress();
+        veil(frame, progress);
+        let (x, y) = modal::modal_rect(fw, fh, width, height, dpi, progress);
+        // Une fenêtre plus haute que le cadre se colle en haut plutôt que de
+        // perdre ses boutons en bas.
+        let y = y.min((fh - height).max(s(8.0)));
+        let left = x + pad;
+        modal::card(frame, theme, dpi, x, y, width, height, progress);
 
         let mut cy = y + pad;
-        let title_size = size * 1.2;
-        text.draw(
-            frame,
-            left as f32,
-            cy as f32 + text.ascent(title_size),
-            title_size,
-            tr(self.title()),
-            theme.text,
-        );
+        let title_size = modal::title_size(theme, dpi);
+        let baseline = cy + text.ascent(title_size) as i32;
+        modal::title(frame, text, theme, dpi, left, baseline, tr(self.title()));
         cy += s(30.0);
         text.draw_clipped(
             frame,
@@ -727,16 +737,14 @@ impl ProtectDialog {
         let (seg_w, rects) =
             controls::segmented(frame, text, theme, dpi, left + label_w, cy, seg_h, &items);
         if matches!(self.focus, Target::Print(_)) {
-            let ring = (2.0 * dpi).max(1.0);
-            let r = ring.ceil() as i32 + 1;
-            round_rect_outline(
+            focus_ring(
                 frame,
-                left + label_w - r,
-                cy - r,
-                seg_w + 2 * r,
-                seg_h + 2 * r,
-                7.0 * dpi + ring,
-                ring,
+                left + label_w,
+                cy,
+                seg_w,
+                seg_h,
+                7.0 * dpi,
+                dpi,
                 theme.accent,
             );
         }
@@ -785,14 +793,16 @@ impl ProtectDialog {
                 inner as f32,
             );
         }
-        let bh = s(34.0);
+        // Les boutons, groupés à droite dans l'ordre de Windows : « Protéger »,
+        // puis « Annuler » — posés de droite à gauche.
+        let bh = s(modal::BUTTON_H);
         let by = y + height - pad - bh;
         let mut bx = x + width - pad;
         for (label, target, primary) in [
-            (tr("Protéger"), Target::Apply, true),
             (tr("Annuler"), Target::Cancel, false),
+            (tr("Protéger"), Target::Apply, true),
         ] {
-            let bw = (text.measure(size, label) as i32 + s(32.0)).max(s(96.0));
+            let bw = (text.measure(size, label) as i32 + s(32.0)).max(s(modal::BUTTON_MIN_W));
             bx -= bw;
             let ink = button(
                 frame,
@@ -807,6 +817,7 @@ impl ProtectDialog {
                     hovered: hovered(target),
                     focused: self.focus == target,
                     disabled: false,
+                    pressed: hovered(target) && self.pressed == Some(target),
                 },
             );
             let lw = text.measure(size, label);
@@ -1064,6 +1075,28 @@ mod tests {
         assert_eq!(d.title(), "Changer la protection");
         let d = ProtectDialog::from_current(Permissions::all(), false);
         assert!(d.require_open && d.permissions().is_all());
+    }
+
+    #[test]
+    fn buttons_and_boxes_act_on_release_fields_on_press() {
+        let mut d = ProtectDialog::new();
+        d.targets = vec![
+            (0, 0, 50, 30, Target::Cancel),
+            (60, 0, 50, 30, Target::Check(Perm::Modify)),
+            (0, 40, 110, 30, Target::Field(OWNER)),
+        ];
+        // L'appui enfonce, il ne ferme rien.
+        assert_eq!(d.mouse_down(10, 10), Action::Redraw);
+        assert_eq!(d.mouse_up(10, 12), Action::Cancel);
+        // Glissé hors de la case : elle reste cochée.
+        assert_eq!(d.mouse_down(70, 10), Action::Redraw);
+        assert_eq!(d.mouse_up(10, 60), Action::Redraw);
+        assert!(d.modify);
+        // Un relâchement sans appui ne fait rien.
+        assert_eq!(d.mouse_up(70, 10), Action::None);
+        // Un champ prend le focus dès l'appui : on y tape aussitôt.
+        d.mouse_down(20, 50);
+        assert_eq!(d.focus, Target::Field(OWNER));
     }
 
     #[test]

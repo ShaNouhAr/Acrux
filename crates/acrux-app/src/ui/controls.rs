@@ -112,7 +112,9 @@ pub fn segmented(
         let (fill, ink) = if item.on {
             (Some(theme.accent), (255, 255, 255))
         } else if item.hovered {
-            (Some(theme.separator), theme.text)
+            // Comme un bouton secondaire : le survol éclaircit en sombre,
+            // assombrit en clair.
+            (Some(theme.button_hover), theme.text)
         } else {
             (None, theme.text)
         };

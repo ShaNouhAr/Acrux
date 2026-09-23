@@ -462,7 +462,7 @@ impl SignPanel {
                 primary: strong,
                 hovered,
                 focused: false,
-                disabled: false,
+                ..ButtonLook::default()
             },
         );
         let w = text.measure(size, label);
