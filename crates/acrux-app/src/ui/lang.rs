@@ -178,6 +178,7 @@ static TABLE: &[(&str, &str)] = &[
     ("Exiger un mot de passe pour ouvrir le document", "Require a password to open the document"),
     ("Export interdit", "Export not allowed"),
     ("Exporter", "Export"),
+    ("Extraction interdite", "Extraction not allowed"),
     ("Extraction pour l'accessibilité", "Extraction for accessibility"),
     ("Extraire la page", "Extract page"),
     ("Faible", "Weak"),

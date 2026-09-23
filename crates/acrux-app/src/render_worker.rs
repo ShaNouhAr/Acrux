@@ -291,6 +291,19 @@ impl EditOp {
                 if let Some(pw) = password {
                     src.authenticate(pw)?;
                 }
+                // Insérer les pages d'un document protégé dans un autre,
+                // c'est en extraire le contenu : un document à ouverture
+                // libre qui interdit la copie ne se recopie pas ainsi dans
+                // un fichier sans permissions. Son propriétaire, lui, le peut.
+                let restricted = src.security().is_some_and(|h| {
+                    !h.is_owner()
+                        && !acrux_document::protect::Permissions::from_p(h.permissions()).copy
+                });
+                if restricted {
+                    return Err(acrux_core::Error::Unsupported(
+                        "les permissions de ce document interdisent d'en extraire les pages".into(),
+                    ));
+                }
                 let indices: Vec<usize> = if pages.is_empty() {
                     (0..collect_pages(&src)?.len()).collect()
                 } else {
@@ -847,5 +860,42 @@ mod tests {
         assert!(!Right::FillForms.allowed_by(p) && !Right::Annotate.allowed_by(p));
         p.assemble = false;
         assert!(!Right::Assemble.allowed_by(p) && Right::Modify.allowed_by(p));
+    }
+
+    /// Les pages d'un document à ouverture libre qui interdit la copie ne
+    /// s'insèrent pas dans un autre ; avec le mot de passe des permissions,
+    /// si.
+    #[test]
+    #[allow(clippy::unwrap_used)] // tests
+    fn insert_refuses_a_source_that_forbids_copying() {
+        use acrux_features::create::{new_document, PageSetup};
+        let plain = new_document(&PageSetup::default())
+            .unwrap()
+            .save_full()
+            .unwrap();
+        let src = Document::from_bytes(plain.clone()).unwrap();
+        let mut perms = Permissions::all();
+        perms.copy = false;
+        src.protect(b"", b"chef", perms).unwrap();
+        let path = std::env::temp_dir().join(format!("acrux-insert-{}.pdf", std::process::id()));
+        std::fs::write(&path, src.save_full().unwrap()).unwrap();
+        let insert = |password: Option<Vec<u8>>| {
+            let target = Document::from_bytes(plain.clone()).unwrap();
+            EditOp::Insert {
+                path: path.clone(),
+                password,
+                pages: Vec::new(),
+                at: 0,
+            }
+            .apply(&target)
+        };
+        let refused = insert(None);
+        let allowed = insert(Some(b"chef".to_vec()));
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            matches!(refused, Err(acrux_core::Error::Unsupported(_))),
+            "{refused:?}"
+        );
+        assert!(allowed.is_ok(), "{allowed:?}");
     }
 }

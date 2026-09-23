@@ -1896,6 +1896,23 @@ impl Viewer {
         if !self.editing_text() {
             return false;
         }
+        // Copier ou couper le texte d'un bloc, c'est en extraire le contenu :
+        // le droit de modifier ne donne pas celui de copier, et ce que les
+        // permissions refusent à Ctrl+C sur la page, elles le refusent ici.
+        let copying = m.ctrl
+            && matches!(c, 'c' | 'C' | '\u{3}' | 'x' | 'X' | '\u{18}')
+            && self
+                .edit
+                .as_ref()
+                .and_then(|e| e.active.as_ref())
+                .is_some_and(|a| !a.buffer.selected().is_empty());
+        if copying && !self.rights().copy {
+            self.set_notice(
+                crate::ui::lang::tr("copie interdite par les permissions du document").into(),
+            );
+            window.request_redraw();
+            return true;
+        }
         let Some(a) = self.edit.as_mut().and_then(|e| e.active.as_mut()) else {
             return false;
         };

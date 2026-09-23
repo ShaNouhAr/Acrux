@@ -36,7 +36,11 @@ c'est la section correspondante de ce fichier qui devient la page de version.
   chaque modification exige son droit (assembler pour pivoter ou supprimer une
   page, commenter pour annoter, remplir pour les champs, modifier pour le
   reste). Chaque refus propose de saisir le mot de passe des permissions, qui
-  lève tout.
+  lève tout. Sans la permission de copier, ni « Extraire la page » ni
+  « Insérer des pages » (depuis un document à ouverture libre) ne recopient
+  son contenu dans un fichier sans protection, et Ctrl+C / Ctrl+X restent
+  refusés dans « Modifier le PDF ». Supprimer une page ou appliquer les
+  biffures est refusé avant la confirmation, et non après.
 - **Seul le mot de passe des permissions change ou retire la protection**, dans
   l'application comme avec `acr unprotect` : un simple lecteur ne peut plus
   retirer les restrictions en reprotégeant le document. Les fichiers protégés

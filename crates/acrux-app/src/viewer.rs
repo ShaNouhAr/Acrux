@@ -2366,7 +2366,8 @@ impl Viewer {
 
     /// Applique définitivement les marques de biffure, après confirmation.
     fn apply_redactions(&mut self) {
-        if self.loaded.is_none() {
+        // Le droit se vérifie avant de faire confirmer pour rien.
+        if self.loaded.is_none() || !self.require_right(crate::render_worker::Right::Modify) {
             return;
         }
         self.confirm(
@@ -2495,11 +2496,14 @@ impl Viewer {
             |n| n.to_string_lossy().into_owned(),
         );
         let size = data.len();
-        self.apply_edit(EditOp::Attach {
+        if !self.apply_edit(EditOp::Attach {
             name: name.clone(),
             data,
             description: None,
-        });
+        }) {
+            window.request_redraw();
+            return;
+        }
         self.panel_open = true;
         self.panel.tab = PanelTab::Attachments;
         self.clamp_scroll();
@@ -2519,13 +2523,14 @@ impl Viewer {
             return;
         };
         let at = self.current_page();
-        self.apply_edit(EditOp::Insert {
+        if self.apply_edit(EditOp::Insert {
             path,
             password: None,
             pages: Vec::new(),
             at,
-        });
-        self.set_notice(format!("pages insérées avant la page {}", at + 1));
+        }) {
+            self.set_notice(format!("pages insérées avant la page {}", at + 1));
+        }
     }
 
     /// Duplique la page courante juste après elle. Un index répété dans
@@ -2540,12 +2545,23 @@ impl Viewer {
             return;
         }
         order.insert(page + 1, page);
-        self.apply_edit(EditOp::Reorder { order });
-        self.set_notice(format!("page {} dupliquée", page + 1));
+        if self.apply_edit(EditOp::Reorder { order }) {
+            self.set_notice(format!("page {} dupliquée", page + 1));
+        }
     }
 
     /// Écrit la page courante dans un nouveau fichier.
     fn extract_current(&mut self, window: &mut dyn WindowHandle) {
+        // La page extraite est écrite en clair, sans les permissions du
+        // document : c'est en extraire le contenu, que la permission de copie
+        // refuse (Acrobat lie de même l'extraction de pages à la copie).
+        if self.loaded.is_some() && !self.rights().copy {
+            self.refuse(
+                lang::tr("Extraction interdite"),
+                lang::tr("Les permissions de ce document interdisent d'en extraire le contenu. Le mot de passe des permissions lève cette restriction."),
+            );
+            return;
+        }
         let Some(l) = &self.loaded else { return };
         let page = self.current_page();
         let stem = l.path.file_stem().map_or_else(
@@ -3927,16 +3943,22 @@ impl Viewer {
     }
 
     /// Applique une modification au document (et à la copie du fil de rendu).
-    fn apply_edit(&mut self, op: EditOp) {
+    ///
+    /// Rend faux si elle n'a pas eu lieu — refusée par les permissions ou
+    /// impossible, ce qui est déjà dit : l'appelant ne doit pas annoncer
+    /// comme fait ce qui ne l'est pas.
+    fn apply_edit(&mut self, op: EditOp) -> bool {
         // Un document protégé ne se modifie que dans la limite de ses
         // permissions (le propriétaire les a toutes).
         if self.loaded.is_some() && !self.require_right(op.required_right()) {
-            return;
+            return false;
         }
-        let Some(l) = &mut self.loaded else { return };
+        let Some(l) = &mut self.loaded else {
+            return false;
+        };
         if let Err(e) = op.apply(&l.doc) {
             self.alert("Modification impossible", &format!("{e}"));
-            return;
+            return false;
         }
         if let Some(w) = &mut l.worker {
             w.edit(op.clone());
@@ -3947,7 +3969,7 @@ impl Viewer {
             Ok(p) => l.pages = p,
             Err(e) => {
                 self.alert("Modification impossible", &format!("{e}"));
-                return;
+                return false;
             }
         }
         l.page_index = PageIndex::new(&l.pages);
@@ -3966,6 +3988,7 @@ impl Viewer {
         self.three_d = None;
         self.title_dirty = true;
         self.clamp_scroll();
+        true
     }
 
     /// Reconstruit le document depuis le fichier et rejoue `ops`. C'est la
@@ -4077,6 +4100,10 @@ impl Viewer {
                 "Suppression impossible",
                 "Un document doit garder au moins une page.",
             );
+            return;
+        }
+        // Le droit se vérifie avant de faire confirmer pour rien.
+        if !self.require_right(crate::render_worker::Right::Assemble) {
             return;
         }
         let page = self.current_page();
@@ -4323,12 +4350,14 @@ impl Viewer {
         if let Some(s) = &mut saved {
             s.current = 0;
         }
-        self.apply_edit(EditOp::ReplaceAll { find, with });
+        let replaced = self.apply_edit(EditOp::ReplaceAll { find, with });
         self.restore_search(saved);
-        self.set_notice(crate::ui::lang::trf(
-            "{} occurrence(s) remplacée(s)",
-            &[&found.to_string()],
-        ));
+        if replaced {
+            self.set_notice(crate::ui::lang::trf(
+                "{} occurrence(s) remplacée(s)",
+                &[&found.to_string()],
+            ));
+        }
     }
 
     fn toggle_theme(&mut self, window: &mut dyn WindowHandle) {
@@ -6248,10 +6277,11 @@ impl Viewer {
             color: self.sign_rgb(),
             ..acrux_features::fillsign::Options::default()
         };
-        self.apply_edit(EditOp::FillSign {
+        if self.apply_edit(EditOp::FillSign {
             options: Box::new(options),
-        });
-        self.set_notice(format!("posé : {label} en page {}", page + 1));
+        }) {
+            self.set_notice(format!("posé : {label} en page {}", page + 1));
+        }
         // Une marque reste en main : on coche rarement une seule case, et
         // Acrobat fait de même. Le reste — une signature, un paraphe — se
         // pose une fois, puis se laisse ajuster.

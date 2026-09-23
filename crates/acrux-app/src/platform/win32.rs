@@ -1253,7 +1253,19 @@ fn deliver(state: &mut WindowState, event: Event) {
         }
     }
     if let Some(t) = actions.clipboard {
-        set_clipboard_text(state.hwnd, &t);
+        if state.headless {
+            // Le mode invisible ne touche jamais au presse-papiers de la
+            // personne qui travaille : pas plus qu'il ne le lit (voir
+            // `clipboard_text`), il ne l'écrase. Le journal dit ce qui aurait
+            // été copié, pour que les essais puissent le vérifier.
+            let head: String = t.chars().take(80).collect();
+            debug_log(&format!(
+                "presse-papiers : {} caractère(s) « {head} »",
+                t.chars().count()
+            ));
+        } else {
+            set_clipboard_text(state.hwnd, &t);
+        }
     }
     if let Some(u) = actions.url {
         open_url(state.hwnd, &u);
