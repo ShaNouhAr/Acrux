@@ -1,7 +1,8 @@
 //! Chiffrement des documents (ISO 32000-2 §7.6) : gestionnaire de sécurité
 //! standard, révisions 2 à 6, RC4 et AES.
 //!
-//! Primitives écrites dans ce module : [`md5`], [`sha2`], [`rc4`], [`aes`].
+//! Primitives écrites dans ce module : [`md5`], [`sha2`], [`rc4`], [`aes`],
+//! et l'aléa cryptographique ([`random`] : ChaCha20 semé par le système).
 //! Voir CHARTE_PROJET.md §1.2 : la décision de conserver ou non une
 //! cryptographie maison reste ouverte ; ces implémentations suivent les
 //! normes à la lettre et sont testées sur les vecteurs officiels.
@@ -11,6 +12,7 @@
 pub mod aes;
 pub mod bigint;
 pub mod md5;
+pub mod random;
 pub mod rc4;
 pub mod rsa;
 pub mod sha1;
@@ -50,6 +52,8 @@ pub struct SecurityHandler {
     /// Vrai si le mot de passe fourni était celui du propriétaire.
     owner: bool,
     permissions: i32,
+    /// `/Perms` ne confirme pas `/P` (révisions 5 et 6, algorithme 13).
+    perms_mismatch: bool,
 }
 
 /// Résolveur d'objets pour lire le dictionnaire `/Encrypt`.
@@ -147,6 +151,11 @@ impl SecurityHandler {
                 encrypt_metadata,
             )?
         };
+        let (permissions, perms_mismatch) = if revision >= 5 {
+            check_perms(&key, &string(get("Perms")), p, owner)
+        } else {
+            (p, false)
+        };
         Ok(Self {
             key,
             revision,
@@ -154,7 +163,8 @@ impl SecurityHandler {
             strings,
             encrypt_metadata,
             owner,
-            permissions: p,
+            permissions,
+            perms_mismatch,
         })
     }
 
@@ -222,6 +232,24 @@ impl SecurityHandler {
         self.revision
     }
 
+    /// Méthode de chiffrement des flux.
+    #[must_use]
+    pub const fn stream_method(&self) -> Method {
+        self.streams
+    }
+
+    /// Algorithme en toutes lettres, pour l'affichage : « AES-256 (R6) ».
+    #[must_use]
+    pub fn describe(&self) -> String {
+        let method = match self.streams {
+            Method::AesV3 => "AES-256".to_string(),
+            Method::AesV2 => "AES-128".to_string(),
+            Method::Rc4 => format!("RC4 {} bits", self.key.len() * 8),
+            Method::None => "aucun (identité)".to_string(),
+        };
+        format!("{method} (R{})", self.revision)
+    }
+
     /// Le mot de passe fourni était celui du propriétaire.
     #[must_use]
     pub const fn is_owner(&self) -> bool {
@@ -232,6 +260,15 @@ impl SecurityHandler {
     #[must_use]
     pub const fn permissions(&self) -> i32 {
         self.permissions
+    }
+
+    /// Vrai si `/Perms` contredit `/P` : quelqu'un a retouché les
+    /// permissions sans connaître la clé. Les permissions rendues sont alors
+    /// les plus restrictives des deux (sauf pour le propriétaire, qui a tous
+    /// les droits de toute façon).
+    #[must_use]
+    pub const fn perms_tampered(&self) -> bool {
+        self.perms_mismatch
     }
 
     /// Vrai si le flux `/Metadata` est chiffré.
@@ -350,6 +387,39 @@ impl SecurityHandler {
         d.into_iter()
             .map(|(k, v)| (k, self.decrypt_object(v, r)))
             .collect()
+    }
+}
+
+/// Bits de `/P` qui portent une permission (3 à 6 et 9 à 12) ; les autres
+/// sont réservés, et des producteurs les remplissent chacun à sa façon.
+const PERMISSION_BITS: i32 = 0b1111_0011_1100;
+
+/// Algorithme 13 (§7.6.4.4.12) : `/Perms` est `/P` chiffré par la clé de
+/// fichier, suivi de « adb ». Un `/P` retouché à la main pour s'accorder des
+/// droits ne s'y retrouve plus, puisqu'il faudrait la clé pour refaire
+/// `/Perms`.
+///
+/// Rend les permissions à appliquer et vrai en cas d'écart. Jamais d'échec :
+/// des fichiers réels ont un `/Perms` faux ou absent, et doivent s'ouvrir.
+/// Seul l'utilisateur est dégradé — au plus restrictif des deux valeurs.
+fn check_perms(key: &[u8], perms: &[u8], p: i32, owner: bool) -> (i32, bool) {
+    let Some(mut block) = perms.get(..16).and_then(|b| <[u8; 16]>::try_from(b).ok()) else {
+        return (p, false);
+    };
+    let Ok(cipher) = aes::Aes::new(key) else {
+        return (p, false);
+    };
+    cipher.decrypt_block(&mut block);
+    if &block[9..12] != b"adb" {
+        return (p, true);
+    }
+    let sealed = i32::from_le_bytes([block[0], block[1], block[2], block[3]]);
+    if (sealed ^ p) & PERMISSION_BITS == 0 {
+        (p, false)
+    } else if owner {
+        (p, true)
+    } else {
+        (p & sealed, true)
     }
 }
 
@@ -759,6 +829,43 @@ pub(crate) mod tests {
         assert_eq!(h2.file_key(), key);
         let c = h.encrypt_stream(b"aes 256 payload", R, &[1; 16]);
         assert_eq!(h.decrypt_stream(&c, R), b"aes 256 payload");
+        assert_eq!(h.describe(), "AES-256 (R6)");
+        assert!(!h.perms_tampered());
+    }
+
+    /// Algorithme 13 : `/P` retouché pour s'accorder la copie, `/Perms`
+    /// scellé sans elle. L'utilisateur garde l'interdiction, le propriétaire
+    /// voit l'écart sans rien perdre.
+    #[test]
+    fn perms_tamper_detected() {
+        let key = [0x24u8; 32];
+        let sealed = -4 & !(1 << 4); // tout sauf la copie (bit 5)
+        let salts = [[5u8; 8], [6u8; 8], [7u8; 8], [8u8; 8]];
+        let e = build_r6_entries(&key, b"u", b"o", &salts, sealed, true, &[1, 2, 3, 4]);
+        let mut d = r6_encrypt_dict(&key, b"u", b"o");
+        for (k, v) in [
+            ("O", e.o),
+            ("U", e.u),
+            ("OE", e.oe),
+            ("UE", e.ue),
+            ("Perms", e.perms),
+        ] {
+            d.insert(Name::new(k), Object::String(v));
+        }
+        d.insert(Name::new("P"), Object::Integer(-4));
+        let user = SecurityHandler::new(&d, ID0, b"u", &direct).unwrap();
+        assert!(user.perms_tampered());
+        assert_eq!(user.permissions() & (1 << 4), 0, "la copie reste interdite");
+        let owner = SecurityHandler::new(&d, ID0, b"o", &direct).unwrap();
+        assert!(owner.perms_tampered() && owner.is_owner());
+        // Un /Perms illisible est signalé, sans empêcher l'ouverture.
+        d.insert(Name::new("Perms"), Object::String(vec![0; 16]));
+        let h = SecurityHandler::new(&d, ID0, b"u", &direct).unwrap();
+        assert!(h.perms_tampered());
+        // Absent : rien à vérifier.
+        d.remove(&Name::new("Perms"));
+        let h = SecurityHandler::new(&d, ID0, b"u", &direct).unwrap();
+        assert!(!h.perms_tampered());
     }
 
     #[test]

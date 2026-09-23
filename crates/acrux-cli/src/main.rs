@@ -23,7 +23,9 @@ use std::process::ExitCode;
 use std::sync::OnceLock;
 use std::time::Instant;
 
-use acrux_document::protect::Permissions;
+use acrux_document::protect::{
+    password_strength, password_warnings, Permissions, PrintLevel, Strength,
+};
 use acrux_document::text::decode_text_string;
 use acrux_document::{collect_pages, writer, Document, Name, Object, ObjectRef, XrefKind};
 use acrux_features::navigation::{flatten_outline, outline, page_links, Action, PageIndex, View};
@@ -234,9 +236,15 @@ fn usage() {
     eprintln!("  separations <fichier> [--page N] [--dpi N] -o <prefix>.png");
     eprintln!("                                  aperçu de sortie : une image par plaque (CMJN et tons directs) et le taux d'encre");
     eprintln!();
-    eprintln!("  protect   <fichier> [--user <mdp>] [--owner <mdp>] [--no-print] [--no-copy] [--no-modify]");
-    eprintln!("            [--no-annotate] -o <sortie>       chiffre en AES-256 avec mots de passe et permissions");
-    eprintln!("  unprotect <fichier> -o <sortie>           retire le chiffrement (mot de passe via --password)");
+    eprintln!("  protect   <fichier> [--user <mdp>] [--owner <mdp>] [--print none|low|high]");
+    eprintln!(
+        "            [--no-modify] [--no-copy] [--no-annotate] [--no-fill] [--no-accessibility]"
+    );
+    eprintln!("            [--no-assemble] -o <sortie>");
+    eprintln!("                                  chiffre en AES-256 : --user est demandé à l'ouverture (absent :");
+    eprintln!("                                  ouverture libre), --owner donne tous les droits et seul il permet");
+    eprintln!("                                  de changer la protection ; toute restriction exige --owner");
+    eprintln!("  unprotect <fichier> -o <sortie>           retire le chiffrement (mot de passe des permissions via --password)");
     eprintln!();
     eprintln!("  redact <fichier> --page N --rect x0,y0,x1,y1 [--text <remplacement>] [--color r,g,b] -o <sortie>");
     eprintln!("  redact <fichier> --find <texte> [--page N] [--all-pages] [--text <remplacement>] -o <sortie>");
@@ -400,6 +408,14 @@ fn main() -> ExitCode {
 fn open(path: &str) -> acrux_core::Result<(Document, std::time::Duration)> {
     let t = Instant::now();
     let doc = Document::load(path)?;
+    // Un document à ouverture libre s'ouvre tout seul, en simple
+    // utilisateur : le mot de passe fourni est alors celui des permissions,
+    // et il faut le présenter pour de bon (sans quoi `unprotect` refuse).
+    if doc.is_encrypted() {
+        if let Some(pw) = PASSWORD.get() {
+            doc.authenticate(pw)?;
+        }
+    }
     if doc.needs_password() {
         match PASSWORD.get() {
             Some(pw) => doc.authenticate(pw)?,
@@ -883,38 +899,87 @@ fn cmd_unstamp(path: &str, rest: &[String]) -> acrux_core::Result<()> {
     save(&doc, &out, rest)
 }
 
+/// Permissions d'après les options de `protect` : tout est permis, sauf ce
+/// que les options retirent. Chaque option ne retire que son bit ; les liens
+/// entre bits (commenter comprend remplir, copier comprend l'accessibilité)
+/// sont ceux de [`Permissions::normalized`].
+fn parse_permissions(rest: &[String]) -> acrux_core::Result<Permissions> {
+    let has = |flag: &str| rest.iter().any(|a| a == flag);
+    let mut perms = Permissions::all();
+    if let Some(level) = option_value(rest, "--print") {
+        perms.set_print(match level.as_str() {
+            "none" | "non" => PrintLevel::None,
+            "low" | "basse" => PrintLevel::Low,
+            "high" | "haute" => PrintLevel::High,
+            other => {
+                return Err(acrux_core::Error::Unsupported(format!(
+                    "--print {other} : attendu none, low ou high"
+                )))
+            }
+        });
+    }
+    // Ancienne forme, gardée pour les scripts existants.
+    if has("--no-print") {
+        perms.set_print(PrintLevel::None);
+    }
+    for (flag, bit) in [
+        ("--no-modify", &mut perms.modify),
+        ("--no-copy", &mut perms.copy),
+        ("--no-annotate", &mut perms.annotate),
+        ("--no-fill", &mut perms.fill_forms),
+        ("--no-accessibility", &mut perms.accessibility),
+        ("--no-assemble", &mut perms.assemble),
+    ] {
+        if has(flag) {
+            *bit = false;
+        }
+    }
+    Ok(perms.normalized())
+}
+
+/// Force et mises en garde d'un mot de passe, sur la sortie d'erreur.
+fn report_password(label: &str, pw: &[u8]) {
+    let Ok(pw) = std::str::from_utf8(pw) else {
+        return;
+    };
+    if pw.is_empty() {
+        return;
+    }
+    let strength = password_strength(pw);
+    eprintln!("{label} : force {}", strength.label().to_lowercase());
+    if strength == Strength::Weak {
+        eprintln!("  attention : ce mot de passe se devine vite");
+    }
+    for w in password_warnings(pw) {
+        eprintln!("  attention : {w}");
+    }
+}
+
 fn cmd_protect(path: &str, rest: &[String]) -> acrux_core::Result<()> {
     let out = output_arg(rest)?;
-    let (doc, _) = open(path)?;
     let user = option_value(rest, "--user")
         .map(String::as_bytes)
         .unwrap_or_default();
     let owner = option_value(rest, "--owner")
         .map(String::as_bytes)
         .unwrap_or_default();
-    let has = |flag: &str| rest.iter().any(|a| a == flag);
-    let mut perms = Permissions::all();
-    if has("--no-print") {
-        perms.print = false;
-        perms.print_high_quality = false;
-    }
-    if has("--no-copy") {
-        perms.copy = false;
-        perms.accessibility = false;
-    }
-    if has("--no-modify") {
-        perms.modify = false;
-        perms.assemble = false;
-    }
-    if has("--no-annotate") {
-        perms.annotate = false;
-        perms.fill_forms = false;
-    }
+    let perms = parse_permissions(rest)?;
     if user.is_empty() && owner.is_empty() {
         return Err(acrux_core::Error::Unsupported(
             "indiquer au moins un mot de passe (--user ou --owner)".into(),
         ));
     }
+    // Sans mot de passe des permissions distinct, celui d'ouverture donne
+    // tous les droits : les restrictions ne vaudraient rien.
+    if !perms.is_all() && (owner.is_empty() || owner == user) {
+        return Err(acrux_core::Error::Unsupported(
+            "des restrictions exigent un mot de passe des permissions (--owner) distinct de --user"
+                .into(),
+        ));
+    }
+    let (doc, _) = open(path)?;
+    report_password("--user", user);
+    report_password("--owner", owner);
     doc.protect(user, owner, perms)?;
     let bytes = doc.save_full()?;
     std::fs::write(&out, &bytes)?;
@@ -922,9 +987,18 @@ fn cmd_protect(path: &str, rest: &[String]) -> acrux_core::Result<()> {
         "écrit : {out} (AES-256, {} octets){}",
         bytes.len(),
         if user.is_empty() {
-            " — ouverture libre, modifications restreintes"
+            " — ouverture libre"
         } else {
             " — mot de passe demandé à l'ouverture"
+        }
+    );
+    let restrictions = perms.restrictions();
+    println!(
+        "permissions : {}",
+        if restrictions.is_empty() {
+            "tout autorisé".to_string()
+        } else {
+            restrictions.join(", ")
         }
     );
     Ok(())
@@ -978,10 +1052,16 @@ fn cmd_info(path: &str) -> acrux_core::Result<()> {
         "Chiffré        : {}",
         if doc.is_encrypted() { "oui" } else { "non" }
     );
+    if let Some(h) = doc.security() {
+        print_security(&h);
+    }
     let trailer = doc.trailer();
     if let Some(Object::Array(ids)) = trailer.get(&Name::new("ID")) {
         if let Some(Object::String(id)) = ids.first() {
             println!("ID             : {}", hex(id));
+        }
+        if let Some(Object::String(id)) = ids.get(1) {
+            println!("ID (version)   : {}", hex(id));
         }
     }
     let catalog = doc.catalog()?;
@@ -1043,6 +1123,42 @@ fn cmd_info(path: &str) -> acrux_core::Result<()> {
     }
     println!("Ouvert en      : {:.1} ms", elapsed.as_secs_f64() * 1000.0);
     Ok(())
+}
+
+/// Chiffrement, droits d'accès et permissions d'un document chiffré.
+fn print_security(h: &acrux_document::crypt::SecurityHandler) {
+    println!("Chiffrement    : {}", h.describe());
+    println!(
+        "Accès          : {}",
+        if h.is_owner() {
+            "propriétaire (tous les droits)"
+        } else {
+            "utilisateur"
+        }
+    );
+    let perms = Permissions::from_p(h.permissions());
+    let restrictions = perms.restrictions();
+    println!(
+        "Permissions    : {}",
+        if restrictions.is_empty() {
+            "tout autorisé".to_string()
+        } else {
+            restrictions.join(", ")
+        }
+    );
+    println!(
+        "Impression     : {}",
+        match perms.print_level() {
+            PrintLevel::None => "non",
+            PrintLevel::Low => "basse résolution",
+            PrintLevel::High => "haute résolution",
+        }
+    );
+    if h.perms_tampered() {
+        println!(
+            "Attention      : /Perms contredit /P (permissions retouchées ?) ; la plus stricte s'applique"
+        );
+    }
 }
 
 fn cmd_pages(path: &str) -> acrux_core::Result<()> {
@@ -4218,4 +4334,43 @@ fn cmd_combine(rest: &[String]) -> acrux_core::Result<()> {
         inputs.len()
     );
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)] // tests
+mod tests {
+    use super::*;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn parse_permissions_levels_and_bits() {
+        let p = parse_permissions(&args(&["--print", "low"])).unwrap();
+        assert_eq!(p.print_level(), PrintLevel::Low);
+        assert!(p.modify && p.copy);
+        for none in [&["--print", "none"][..], &["--no-print"]] {
+            let p = parse_permissions(&args(none)).unwrap();
+            assert_eq!(p.print_level(), PrintLevel::None);
+        }
+        // Chaque option ne coupe que son bit : --no-fill --no-assemble
+        // retirent les bits 9 et 11 et rien d'autre, --no-annotate le 6.
+        let p = parse_permissions(&args(&["--no-fill", "--no-annotate", "--no-assemble"])).unwrap();
+        let bits = |p: Permissions| u32::from_le_bytes(p.to_p().to_le_bytes());
+        assert_eq!(
+            bits(Permissions::all()) ^ bits(p),
+            (1 << 5) | (1 << 8) | (1 << 10)
+        );
+        // Commenter comprend remplir : --no-fill seul ne coupe rien tant
+        // que les commentaires restent permis.
+        let p = parse_permissions(&args(&["--no-fill"])).unwrap();
+        assert!(p.fill_forms && p.annotate);
+        assert!(parse_permissions(&args(&["--print", "moyen"])).is_err());
+        let p = parse_permissions(&args(&["--no-copy"])).unwrap();
+        assert!(!p.copy && p.accessibility, "l'accessibilité reste");
+        let p = parse_permissions(&args(&["--no-modify"])).unwrap();
+        assert!(!p.modify && p.assemble, "l'assemblage reste");
+        assert!(parse_permissions(&args(&[])).unwrap().is_all());
+    }
 }

@@ -163,9 +163,29 @@ impl Document {
     /// [`Error::Encrypted`] si le mot de passe est refusé ; [`Error::Unsupported`]
     /// si le gestionnaire de sécurité n'est pas le gestionnaire standard.
     pub fn authenticate(&self, password: &[u8]) -> Result<()> {
+        let Some(handler) = self.handler_for(password)? else {
+            return Ok(());
+        };
+        *self.security.borrow_mut() = Some(handler);
+        self.cache.borrow_mut().clear();
+        self.object_streams.borrow_mut().clear();
+        Ok(())
+    }
+
+    /// Vrai si le document s'ouvre sans mot de passe : en clair, ou chiffré
+    /// avec un mot de passe d'ouverture vide (ce qui laisse les permissions
+    /// s'appliquer). Rien n'est changé au gestionnaire en place.
+    #[must_use]
+    pub fn opens_without_password(&self) -> bool {
+        self.handler_for(b"").is_ok()
+    }
+
+    /// Gestionnaire de sécurité qu'ouvrirait `password`, sans l'installer ;
+    /// `None` pour un document en clair.
+    fn handler_for(&self, password: &[u8]) -> Result<Option<SecurityHandler>> {
         let trailer = self.trailer();
         let Some(enc) = trailer.get(&Name::new("Encrypt")) else {
-            return Ok(());
+            return Ok(None);
         };
         let enc = self.resolve(enc)?;
         let Some(enc) = enc.as_dict() else {
@@ -184,11 +204,7 @@ impl Document {
                 Err(_) => Object::Null,
             }
         };
-        let handler = SecurityHandler::new(enc, &id0, password, &resolve)?;
-        *self.security.borrow_mut() = Some(handler);
-        self.cache.borrow_mut().clear();
-        self.object_streams.borrow_mut().clear();
-        Ok(())
+        SecurityHandler::new(enc, &id0, password, &resolve).map(Some)
     }
 
     /// Vrai si le document est chiffré et qu'aucun mot de passe valide n'a été fourni.

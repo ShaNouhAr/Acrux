@@ -10,6 +10,7 @@
 use acrux_core::{Error, Result};
 
 use crate::crypt::md5;
+use crate::crypt::random::{Random, SystemRandom};
 use crate::document::Document;
 use crate::objects::{Dict, Name, Object, ObjectRef};
 use crate::writer::write_object;
@@ -92,7 +93,9 @@ impl Document {
             out.push(b'\n');
         }
         let security = self.security();
-        let mut rng = Rng::new(original.len() as u64);
+        // Les IV et le second /ID doivent être imprévisibles : un IV deviné
+        // affaiblit CBC, et /ID entre dans la clé des révisions anciennes.
+        let mut rng = SystemRandom::new();
         let mut entries: Vec<(u32, XrefEntry)> = Vec::new();
         let mut numbers: Vec<u32> = self.edits.borrow().keys().copied().collect();
         numbers.sort_unstable();
@@ -187,7 +190,7 @@ impl Document {
             v => v,
         };
         let mut out = format!("%PDF-{major}.{minor}\n%\u{E2}\u{E3}\u{CF}\u{D3}\n").into_bytes();
-        let mut rng = Rng::new(self.bytes().len() as u64 ^ 0x5DEE_CE66);
+        let mut rng = SystemRandom::new();
         let mut entries: Vec<(u32, XrefEntry)> = Vec::new();
         let mut max_number = 0u32;
         // Objets à emballer dans des flux d'objets : (numéro, sérialisation).
@@ -433,7 +436,7 @@ fn encrypt_for_save(
     h: &crate::crypt::SecurityHandler,
     obj: Object,
     r: ObjectRef,
-    rng: &mut Rng,
+    rng: &mut dyn Random,
 ) -> Object {
     match obj {
         Object::String(s) => Object::String(h.encrypt_string(&s, r, &rng.iv())),
@@ -470,14 +473,19 @@ fn encrypt_for_save(
     }
 }
 
-fn encrypt_dict(h: &crate::crypt::SecurityHandler, d: Dict, r: ObjectRef, rng: &mut Rng) -> Dict {
+fn encrypt_dict(
+    h: &crate::crypt::SecurityHandler,
+    d: Dict,
+    r: ObjectRef,
+    rng: &mut dyn Random,
+) -> Dict {
     d.into_iter()
         .map(|(k, v)| (k, encrypt_for_save(h, v, r, rng)))
         .collect()
 }
 
 /// Met à jour `/ID` : premier élément conservé, second recalculé (§14.4).
-fn update_id(trailer: &mut Dict, content: &[u8], rng: &mut Rng) {
+fn update_id(trailer: &mut Dict, content: &[u8], rng: &mut dyn Random) {
     let first = match trailer.get(&Name::new("ID")) {
         Some(Object::Array(a)) => match a.first() {
             Some(Object::String(s)) => s.clone(),
@@ -487,7 +495,7 @@ fn update_id(trailer: &mut Dict, content: &[u8], rng: &mut Rng) {
     };
     let mut h = md5::Md5::new();
     h.update(&content[content.len().saturating_sub(4096)..]);
-    h.update(&rng.next().to_le_bytes());
+    h.update(&rng.next_u64().to_le_bytes());
     h.update(&(content.len() as u64).to_le_bytes());
     let second = h.finish().to_vec();
     let first = if first.is_empty() {
@@ -600,38 +608,6 @@ fn write_xref_stream(out: &mut Vec<u8>, number: u32, entries: &[(u32, XrefEntry)
     out.extend_from_slice(format!("{number} 0 obj\n").as_bytes());
     write_object(&Object::Stream { dict, raw: data }, out);
     out.extend_from_slice(b"\nendobj\n");
-}
-
-/// Générateur pseudo-aléatoire (xorshift64*) pour les IV et l'identifiant de
-/// fichier. Il n'a pas vocation cryptographique : l'unicité des IV suffit.
-pub(crate) struct Rng(u64);
-
-impl Rng {
-    pub(crate) fn new(seed: u64) -> Self {
-        let t = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0x9E37_79B9_7F4A_7C15, |d| {
-                // Seuls les 64 bits de poids faible comptent pour la graine.
-                u64::try_from(d.as_nanos() & u128::from(u64::MAX)).unwrap_or(0)
-            });
-        Self((seed ^ t ^ 0x2545_F491_4F6C_DD1D).max(1))
-    }
-
-    pub(crate) fn next(&mut self) -> u64 {
-        let mut x = self.0;
-        x ^= x >> 12;
-        x ^= x << 25;
-        x ^= x >> 27;
-        self.0 = x;
-        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
-    }
-
-    pub(crate) fn iv(&mut self) -> [u8; 16] {
-        let mut iv = [0u8; 16];
-        iv[..8].copy_from_slice(&self.next().to_le_bytes());
-        iv[8..].copy_from_slice(&self.next().to_le_bytes());
-        iv
-    }
 }
 
 #[cfg(test)]

@@ -17,9 +17,9 @@
 //! | `pages`     | arbre des pages et héritage                            | §7.7.3    |
 //! | `text`      | chaînes de texte (UTF-16, PDFDoc)                      | §7.9.2    |
 //! | `writer`    | sérialisation en syntaxe PDF                           | §7.3      |
-//! | `crypt`     | chiffrement standard (RC4, AES-128/256, R2 à R6)       | §7.6      |
+//! | `crypt`     | chiffrement standard (RC4, AES-128/256, R2 à R6), aléa ChaCha20 | §7.6      |
 //! | `edit`      | modifications, enregistrement incrémental et complet   | §7.5.6    |
-//! | `protect`   | pose / retrait du chiffrement (AES-256 R6), permissions | §7.6.4    |
+//! | `protect`   | pose / retrait du chiffrement (AES-256 R6), permissions, force des mots de passe | §7.6.4    |
 //!
 //! À venir : `structure` (§14.7), `metadata` (§14.3).
 

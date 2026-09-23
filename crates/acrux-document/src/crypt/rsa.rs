@@ -15,6 +15,7 @@ use acrux_core::{Error, Result};
 
 use crate::asn1::{self, Oid, Reader};
 use crate::crypt::bigint::{BigUint, Montgomery};
+use crate::crypt::random::Random;
 use crate::crypt::{sha1, sha2};
 
 /// `1.2.840.113549.1.1.1` — `rsaEncryption`.
@@ -655,16 +656,18 @@ pub fn equal_in_constant_time(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-// --- Génération de clés (matériel de test) ---------------------------------
+// --- Génération de clés ------------------------------------------------------
 
 /// Générateur pseudo-aléatoire déterministe fondé sur SHA-256 en mode
 /// compteur.
 ///
 /// **À n'employer que pour fabriquer du matériel de test.** Une vraie clé
-/// exige l'entropie du système d'exploitation ; ce générateur est
-/// reproductible par construction, ce qui est précisément ce qu'il ne faut
-/// pas pour une clé de production, et exactement ce qu'il faut pour un corpus
-/// de test que l'on veut pouvoir refabriquer à l'identique.
+/// exige l'entropie du système d'exploitation ([`SystemRandom`]) ; ce
+/// générateur est reproductible par construction, ce qui est précisément ce
+/// qu'il ne faut pas pour une clé de production, et exactement ce qu'il faut
+/// pour un corpus de test que l'on veut pouvoir refabriquer à l'identique.
+///
+/// [`SystemRandom`]: super::random::SystemRandom
 #[derive(Debug, Clone)]
 pub struct SeededRandom {
     seed: Vec<u8>,
@@ -699,24 +702,30 @@ impl SeededRandom {
             }
         }
     }
+}
 
-    /// Entier aléatoire de **exactement** `bits` bits, impair, avec les deux
-    /// bits de poids fort à 1 : c'est la forme d'un candidat de premier RSA,
-    /// qui garantit que le produit `p·q` occupe bien toute la largeur voulue.
-    fn odd_candidate(&mut self, bits: usize) -> BigUint {
-        let bytes = bits.div_ceil(8);
-        let mut buf = vec![0u8; bytes];
-        self.fill(&mut buf);
-        // Les bits au-delà de `bits` sont mis à zéro, puis on force les bits
-        // de rang bits-1, bits-2 et 0.
-        for i in bits..bytes * 8 {
-            clear_bit(&mut buf, i);
-        }
-        set_bit(&mut buf, bits - 1);
-        set_bit(&mut buf, bits.saturating_sub(2));
-        set_bit(&mut buf, 0);
-        BigUint::from_bytes_be(&buf)
+impl Random for SeededRandom {
+    fn fill(&mut self, out: &mut [u8]) {
+        SeededRandom::fill(self, out);
     }
+}
+
+/// Entier aléatoire de **exactement** `bits` bits, impair, avec les deux
+/// bits de poids fort à 1 : c'est la forme d'un candidat de premier RSA,
+/// qui garantit que le produit `p·q` occupe bien toute la largeur voulue.
+fn odd_candidate<R: Random + ?Sized>(random: &mut R, bits: usize) -> BigUint {
+    let bytes = bits.div_ceil(8);
+    let mut buf = vec![0u8; bytes];
+    random.fill(&mut buf);
+    // Les bits au-delà de `bits` sont mis à zéro, puis on force les bits
+    // de rang bits-1, bits-2 et 0.
+    for i in bits..bytes * 8 {
+        clear_bit(&mut buf, i);
+    }
+    set_bit(&mut buf, bits - 1);
+    set_bit(&mut buf, bits.saturating_sub(2));
+    set_bit(&mut buf, 0);
+    BigUint::from_bytes_be(&buf)
 }
 
 /// Met à 1 le bit de rang `i` d'un tampon gros-boutiste.
@@ -750,7 +759,7 @@ const SMALL_PRIMES: [u32; 54] = [
 /// Test de primalité de Miller-Rabin à bases aléatoires (probabilité d'erreur
 /// inférieure à `4^-rounds`).
 #[must_use]
-pub fn is_probable_prime(n: &BigUint, rounds: usize, random: &mut SeededRandom) -> bool {
+pub fn is_probable_prime<R: Random + ?Sized>(n: &BigUint, rounds: usize, random: &mut R) -> bool {
     if n.bits() < 2 {
         return false;
     }
@@ -812,12 +821,16 @@ pub fn is_probable_prime(n: &BigUint, rounds: usize, random: &mut SeededRandom) 
 
 /// Engendre une clé RSA de `bits` bits avec l'exposant public 65537.
 ///
-/// **Matériel de test uniquement** : voir [`SeededRandom`]. Compter quelques
-/// secondes pour 2048 bits en profil de développement.
+/// La clé vaut ce que vaut l'aléa : avec [`SystemRandom`], c'est une clé de
+/// production ; avec [`SeededRandom`], du matériel de test reproductible, à
+/// ne jamais employer pour signer pour de vrai. Compter quelques secondes
+/// pour 2048 bits en profil de développement.
+///
+/// [`SystemRandom`]: super::random::SystemRandom
 ///
 /// # Errors
 /// Taille inférieure à 512 bits, ou échec de la recherche de premiers.
-pub fn generate(bits: usize, random: &mut SeededRandom) -> Result<PrivateKey> {
+pub fn generate<R: Random + ?Sized>(bits: usize, random: &mut R) -> Result<PrivateKey> {
     if bits < 512 || bits % 2 != 0 {
         return Err(Error::Corrupt(
             "taille de clé RSA invalide (au moins 512 bits, pair)".into(),
@@ -866,10 +879,10 @@ pub fn generate(bits: usize, random: &mut SeededRandom) -> Result<PrivateKey> {
     ))
 }
 
-fn find_prime(bits: usize, e: &BigUint, random: &mut SeededRandom) -> Result<BigUint> {
+fn find_prime<R: Random + ?Sized>(bits: usize, e: &BigUint, random: &mut R) -> Result<BigUint> {
     let one = BigUint::one();
     for _ in 0..100_000 {
-        let candidate = random.odd_candidate(bits);
+        let candidate = odd_candidate(random, bits);
         if candidate.bits() != bits {
             continue;
         }
@@ -1079,6 +1092,20 @@ mod tests {
                 "{c} est composé"
             );
         }
+    }
+
+    #[test]
+    fn generate_with_system_random() {
+        let mut rng = crate::crypt::random::SystemRandom::new();
+        let key = generate(512, &mut rng).unwrap();
+        assert_eq!(key.public.bits(), 512);
+        key.check().unwrap();
+        let digest = Hash::Sha256.digest(b"cle de production");
+        let sig = key.sign_pkcs1_v15(Hash::Sha256, &digest).unwrap();
+        assert!(key.public.verify_pkcs1_v15(Hash::Sha256, &digest, &sig));
+        // Deux tirages, deux clés : l'aléa n'est plus rejoué.
+        let other = generate(512, &mut rng).unwrap();
+        assert_ne!(other.public.to_pkcs1_der(), key.public.to_pkcs1_der());
     }
 
     #[test]
