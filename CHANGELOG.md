@@ -228,6 +228,12 @@ c'est la section correspondante de ce fichier qui devient la page de version.
   invisible n'ouvre plus le navigateur de la personne (le journal note
   « adresse : … »), et « Ouvrir le dossier du fichier » n'ouvre pas
   l'Explorateur (« dossier : … »).
+- Le mode invisible n'ouvre plus aucun dialogue du système sans réponse
+  imposée : « Imprimer… » (sans `ACRUX_PRINTER`), l'ouverture ou
+  l'enregistrement d'un fichier (« Extraire… », sans `ACRUX_OPEN_FILE` ni
+  `ACRUX_SAVE_*`) et les confirmations (sans `ACRUX_CONFIRM`) sont tenus pour
+  annulés, et le journal le note. « Imprimer… » du clic droit faisait surgir
+  la fenêtre d'impression de Windows à l'écran pendant un essai.
 
 ## 0.22.0 — 20 septembre 2026
 

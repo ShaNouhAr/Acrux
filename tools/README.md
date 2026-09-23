@@ -27,6 +27,11 @@ Options passées à `Start-App` par la table `-Env`, par exemple pour répondre 
 Start-App $pdf -Env @{ ACRUX_SAVE_DIR = "C:\temp\sortie"; ACRUX_CONFIRM = "oui" }
 ```
 
+Sans ces réponses, le mode invisible tient le dialogue pour **annulé** plutôt que de l'ouvrir à
+l'écran : ouverture et enregistrement de fichier (`ACRUX_OPEN_FILE`, `ACRUX_SAVE_FILE`,
+`ACRUX_SAVE_DIR`), confirmation (`ACRUX_CONFIRM`) et impression (`ACRUX_PRINTER`, avec
+`ACRUX_PRINT_OUTPUT`). Le journal note `… : dialogue du système évité (mode invisible)`.
+
 `ACRUX_CLIPBOARD` donne au mode invisible un presse-papiers d'essai (`
 ` et `
 ` en toutes

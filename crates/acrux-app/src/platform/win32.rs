@@ -708,12 +708,18 @@ impl WindowHandle for Handle<'_> {
         if let Some(scripted) = scripted_path("ACRUX_OPEN_FILE") {
             return scripted.answer();
         }
+        if headless_skips("ouverture de fichier") {
+            return None;
+        }
         file_dialog(self.state.hwnd, false, "", OPEN_TYPES, "")
     }
 
     fn save_file_dialog(&mut self, suggested: &str) -> Option<PathBuf> {
         if let Some(scripted) = scripted_save(suggested) {
             return scripted.answer();
+        }
+        if headless_skips("enregistrement") {
+            return None;
         }
         file_dialog(
             self.state.hwnd,
@@ -727,6 +733,9 @@ impl WindowHandle for Handle<'_> {
     fn save_file_dialog_as(&mut self, suggested: &str, types: &[(&str, &str)]) -> Option<PathBuf> {
         if let Some(scripted) = scripted_save(suggested) {
             return scripted.answer();
+        }
+        if headless_skips("export") {
+            return None;
         }
         file_dialog(
             self.state.hwnd,
@@ -742,6 +751,9 @@ impl WindowHandle for Handle<'_> {
             debug_log(&format!("confirmation « {title} » → {answer}"));
             let _ = message;
             return answer;
+        }
+        if headless_skips("confirmation") {
+            return false;
         }
         let t = wide(title);
         let m = wide(message);
@@ -814,6 +826,9 @@ impl WindowHandle for Handle<'_> {
     }
 
     fn print(&mut self, title: &str, source: &mut dyn PrintSource) -> PrintOutcome {
+        if std::env::var_os("ACRUX_PRINTER").is_none() && headless_skips("impression") {
+            return PrintOutcome::Cancelled;
+        }
         print_document(self.state.hwnd, title, source)
     }
 
@@ -1419,6 +1434,22 @@ fn scripted_confirm() -> Option<bool> {
 /// Vrai si l'application tourne sans se montrer (`ACRUX_HEADLESS`).
 fn headless() -> bool {
     std::env::var_os("ACRUX_HEADLESS").is_some()
+}
+
+/// Vrai si un dialogue du système doit être évité : en mode invisible, sans
+/// réponse imposée par une variable d'environnement, il s'ouvrirait quand
+/// même — à l'écran de la personne qui travaille, par-dessus son travail —
+/// et l'essai attendrait qu'elle y réponde. Il est alors tenu pour annulé, et
+/// le journal le dit. « Imprimer… » et « Extraire… », qu'un menu du clic
+/// droit met à portée d'un seul geste, y menaient tout droit.
+fn headless_skips(what: &str) -> bool {
+    if !headless() {
+        return false;
+    }
+    debug_log(&format!(
+        "{what} : dialogue du système évité (mode invisible)"
+    ));
+    true
 }
 
 /// Écrit la poignée de fenêtre dans le fichier `ACRUX_HWND`, s'il est demandé :
