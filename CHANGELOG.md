@@ -158,7 +158,12 @@ c'est la section correspondante de ce fichier qui devient la page de version.
   panneau des vignettes, sur la colonne d'outils ou sur un modèle 3D faisait
   défiler le document.
 - Ctrl+V colle dans le champ de la palette ; il collait dans la recherche restée
-  ouverte dessous, ou nulle part.
+  ouverte dessous, ou nulle part. Les autres raccourcis Ctrl s'arrêtent à la
+  palette, comme à une invite : Ctrl+W fermait l'onglet dessous (la palette
+  proposait ensuite « Enregistrer » sans document), Ctrl+Z défaisait une
+  modification sous le voile. Ctrl+Maj+P la referme.
+- Sur un pavé tactile, les petits crans de molette s'additionnent : un geste
+  lent faisait défiler la palette, alors qu'il la laissait immobile.
 - Harnais invisible : `Wheel x y crans` (la molette, en coordonnées d'écran
   comme le vrai Windows) et `KeyCtrl` (Ctrl+Fin, Ctrl+Origine).
 

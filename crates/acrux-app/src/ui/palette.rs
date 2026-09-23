@@ -832,6 +832,10 @@ pub struct Palette {
     /// Nombre de lignes sans filtre : c'est sur lui que la carte se pose,
     /// pour que le champ ne saute pas à chaque frappe.
     full_len: usize,
+    /// Fraction de ligne que la molette n'a pas encore fait défiler. Un pavé
+    /// tactile envoie de petits crans (un dixième, un quart) : arrondis un à
+    /// un, ils ne faisaient rien — un geste lent laissait la liste immobile.
+    wheel_rest: f32,
 }
 
 impl Palette {
@@ -871,6 +875,7 @@ impl Palette {
             english,
             recent: unique,
             full_len,
+            wheel_rest: 0.0,
         };
         p.refilter();
         p
@@ -1045,10 +1050,21 @@ impl Palette {
     /// Molette : la liste défile de trois lignes par cran, la sélection
     /// suit. Pas d'animation — rien à réveiller, la fin de l'événement
     /// repeint.
+    ///
+    /// Les fractions de cran s'additionnent jusqu'à faire une ligne ; un
+    /// changement de sens repart de zéro, pour que la liste réponde aussitôt.
     pub fn wheel(&mut self, delta: f32) {
+        if !delta.is_finite() {
+            return;
+        }
+        if self.wheel_rest * delta < 0.0 {
+            self.wheel_rest = 0.0;
+        }
+        self.wheel_rest += delta * 3.0;
+        let lines = self.wheel_rest.trunc();
+        self.wheel_rest -= lines;
         let max = self.filtered.len().saturating_sub(self.visible()) as i64;
-        let lines = (delta * 3.0).round() as i64;
-        self.first = (self.first as i64 - lines).clamp(0, max) as usize;
+        self.first = (self.first as i64 - lines as i64).clamp(0, max) as usize;
         self.follow();
     }
 
@@ -1658,6 +1674,24 @@ mod tests {
         assert_eq!(p.first, 0);
         p.wheel(-50.0);
         assert_eq!(p.first, p.filtered.len() - 5);
+        assert!(selection_visible(&p));
+    }
+
+    #[test]
+    fn small_wheel_steps_add_up() {
+        // Un pavé tactile : des quarts de cran, qui ne faisaient rien un à un.
+        let mut p = palette();
+        p.capacity = 5;
+        p.wheel(-0.25);
+        assert_eq!(p.first, 0, "trois quarts de ligne : pas encore");
+        for _ in 0..3 {
+            p.wheel(-0.25);
+        }
+        assert_eq!(p.first, 3, "un cran entier en quatre fois : trois lignes");
+        // Le sens change : le reste de l'autre sens ne retient pas la liste.
+        p.wheel(-0.25);
+        p.wheel(0.5);
+        assert_eq!(p.first, 2);
         assert!(selection_visible(&p));
     }
 

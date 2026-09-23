@@ -6964,6 +6964,16 @@ impl Viewer {
             Event::Char(c, m)
                 if m.ctrl && matches!(c, 'v' | 'V' | '\u{16}') && self.paste_into_field(window) => {
             }
+            // Les autres raccourcis Ctrl s'arrêtent à la palette, comme à une
+            // invite : Ctrl+W fermait l'onglet dessous et la palette proposait
+            // encore « Enregistrer » ou « Imprimer » sans document, Ctrl+Z
+            // défaisait une modification sous le voile, Ctrl+A sélectionnait
+            // tout le document au lieu du champ. Ctrl+Maj+P la referme.
+            Event::Char(c, m) if m.ctrl && self.palette.is_some() => {
+                if m.shift && matches!(c, 'p' | 'P') {
+                    self.palette = None;
+                }
+            }
             // Un sélecteur de la barre « Modifier » déroulé prend le clavier :
             // flèches et Entrée dans la liste des polices, frappe dans sa
             // recherche ou dans le code d'une couleur, Échap pour refermer.
