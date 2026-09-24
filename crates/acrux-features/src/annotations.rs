@@ -34,8 +34,13 @@ use acrux_document::{collect_pages, Dict, Document, Name, Object, ObjectRef, Pag
 
 use crate::stamp::StandardFont;
 
+pub mod appearance;
+mod edit;
 pub mod freetext;
+pub mod review;
 pub mod shapes;
+
+pub use edit::{set_annotation_properties, set_hidden, AnnotChanges};
 
 /// Résumé d'une annotation existante.
 #[derive(Debug, Clone)]
@@ -70,6 +75,30 @@ pub struct AnnotationInfo {
     pub reply_type: Option<String>,
     /// `/IT` : intention (`Replace`, `StrikeOutTextEdit`…), nom brut.
     pub intent: Option<String>,
+    /// Couleur principale, ramenée en RVB : `/C` d'une forme (son trait),
+    /// d'un balisage (sa teinte), d'une note (son icône) ; pour une zone de
+    /// texte, la couleur **du texte**, lue dans `/DA` — son `/C` est son
+    /// fond. C'est la couleur que la barre de propriétés montre et change.
+    pub color: Option<Rgb>,
+    /// Couleur de fond : `/IC` d'une forme, `/C` d'une zone de texte.
+    pub fill: Option<Rgb>,
+    /// Opacité `/CA`, 1 par défaut.
+    pub opacity: f64,
+    /// Épaisseur du trait : `/BS /W`, sinon le troisième nombre de
+    /// `/Border` ; `None` quand l'annotation n'en dit rien.
+    pub border_width: Option<f64>,
+    /// `/Popup` : la fenêtre contextuelle de l'annotation.
+    pub popup: Option<ObjectRef>,
+    /// Zones d'un balisage (`/QuadPoints`), chacune ramenée au rectangle
+    /// qui la contient ; vide pour les autres annotations.
+    pub quads: Vec<Rect>,
+    /// `/State` : état posé par une annotation d'état (`Accepted`,
+    /// `Marked`…), §12.5.6.3.
+    pub state: Option<String>,
+    /// `/StateModel` : `Review` ou `Marked`.
+    pub state_model: Option<String>,
+    /// Posée par « remplir et signer » : elle se gère là, pas ici.
+    pub fill_sign: bool,
 }
 
 impl AnnotationInfo {
@@ -80,6 +109,25 @@ impl AnnotationInfo {
     #[must_use]
     pub fn is_group_member(&self) -> bool {
         self.in_reply_to.is_some() && self.reply_type.as_deref() == Some("Group")
+    }
+
+    /// Vrai pour une annotation d'état (`/IRT` et `/State`) : elle donne un
+    /// statut à celle qu'elle vise, elle n'est pas un commentaire.
+    #[must_use]
+    pub fn is_state(&self) -> bool {
+        self.in_reply_to.is_some() && self.state.as_deref().is_some_and(|s| !s.is_empty())
+    }
+
+    /// Vrai pour une réponse : `/IRT` sans état ni groupe.
+    #[must_use]
+    pub fn is_reply(&self) -> bool {
+        self.in_reply_to.is_some() && !self.is_group_member() && !self.is_state()
+    }
+
+    /// Vrai si l'annotation est cachée (bit 2 de `/F`).
+    #[must_use]
+    pub fn hidden(&self) -> bool {
+        self.flags & 2 != 0
     }
 }
 
@@ -603,6 +651,20 @@ pub fn list_annotations(doc: &Document, page: &Page) -> Result<Vec<AnnotationInf
             Some(Object::Reference(r)) => Some(*r),
             _ => None,
         };
+        let popup = match d.get(&Name::new("Popup")) {
+            Some(Object::Reference(r)) => Some(*r),
+            _ => None,
+        };
+        let free_text = subtype == "FreeText";
+        let color = if free_text {
+            string(doc, d, "DA").and_then(|da| appearance::parse_da(&da).fill)
+        } else {
+            numbers(doc, d, "C").and_then(|c| color_from(&c))
+        };
+        let fill = numbers(doc, d, if free_text { "C" } else { "IC" }).and_then(|c| color_from(&c));
+        let quads = numbers(doc, d, "QuadPoints")
+            .map(|q| quads_from(&q))
+            .unwrap_or_default();
         out.push(AnnotationInfo {
             index,
             reference,
@@ -619,9 +681,111 @@ pub fn list_annotations(doc: &Document, page: &Page) -> Result<Vec<AnnotationInf
             in_reply_to,
             reply_type: name(doc, d, "RT"),
             intent: name(doc, d, "IT"),
+            color,
+            fill,
+            opacity: num(doc, d, "CA").map_or(1.0, |a| a.clamp(0.0, 1.0)),
+            border_width: border_width(doc, d),
+            popup,
+            quads,
+            state: string_or_name(doc, d, "State"),
+            state_model: string_or_name(doc, d, "StateModel"),
+            fill_sign: d.contains_key(&Name::new(crate::fillsign::TAG)),
         });
     }
     Ok(out)
+}
+
+/// Nombres d'un tableau de l'annotation (`/C`, `/QuadPoints`, `/L`…) ;
+/// `None` si la clé manque ou n'est pas un tableau.
+pub(crate) fn numbers(doc: &Document, d: &Dict, key: &str) -> Option<Vec<f64>> {
+    let o = doc.dict_get(d, key).ok().flatten()?;
+    let a = o.as_array()?;
+    Some(
+        a.iter()
+            .filter_map(|v| doc.resolve(v).ok().and_then(|x| x.as_f64()))
+            .collect(),
+    )
+}
+
+/// Couleur d'un tableau `/C` ou `/IC` ramenée en RVB : gris, RVB ou CMJN
+/// (§12.5.2, table 166). Un tableau vide veut dire « transparent ».
+pub(crate) fn color_from(c: &[f64]) -> Option<Rgb> {
+    let unit = |v: f64| {
+        if v.is_finite() {
+            v.clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    };
+    match c {
+        [g] => Some([unit(*g); 3]),
+        [r, g, b] => Some([unit(*r), unit(*g), unit(*b)]),
+        [c, m, y, k] => {
+            let k = unit(*k);
+            Some([
+                (1.0 - unit(*c)) * (1.0 - k),
+                (1.0 - unit(*m)) * (1.0 - k),
+                (1.0 - unit(*y)) * (1.0 - k),
+            ])
+        }
+        _ => None,
+    }
+}
+
+/// `/QuadPoints` en rectangles : huit nombres par zone, dont on garde le
+/// rectangle qui les contient (un quadrilatère penché s'y inscrit).
+pub(crate) fn quads_from(q: &[f64]) -> Vec<Rect> {
+    q.chunks_exact(8)
+        .map(|c| {
+            let xs = [c[0], c[2], c[4], c[6]];
+            let ys = [c[1], c[3], c[5], c[7]];
+            Rect::new(
+                xs.iter().copied().fold(f64::INFINITY, f64::min),
+                ys.iter().copied().fold(f64::INFINITY, f64::min),
+                xs.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                ys.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+            )
+        })
+        .collect()
+}
+
+/// Épaisseur du trait : `/BS /W`, sinon le troisième nombre de `/Border`.
+pub(crate) fn border_width(doc: &Document, d: &Dict) -> Option<f64> {
+    let bs = doc
+        .dict_get(d, "BS")
+        .ok()
+        .flatten()
+        .and_then(|bs| bs.as_dict().and_then(|b| num(doc, b, "W")));
+    bs.or_else(|| numbers(doc, d, "Border").and_then(|b| b.get(2).copied()))
+        .filter(|w| w.is_finite())
+        .map(|w| w.max(0.0))
+}
+
+/// Chaîne de texte ou nom : `/State` et `/StateModel` sont des chaînes
+/// (§12.5.6.3, table 175), mais des logiciels les écrivent en noms.
+fn string_or_name(doc: &Document, d: &Dict, key: &str) -> Option<String> {
+    string(doc, d, key).or_else(|| name(doc, d, key))
+}
+
+/// Date PDF `D:AAAAMMJJHHmmSS…` rendue lisible (« 2024-03-12 10:30 ») ; la
+/// chaîne est rendue telle quelle si elle n'a pas cette forme — les fichiers
+/// réels en contiennent de toutes sortes.
+///
+/// La ligne de commande et l'application la partagent : une même date se lit
+/// pareil dans `acr annots`, dans le panneau des commentaires et dans la
+/// bulle d'une note.
+#[must_use]
+pub fn readable_date(raw: &str) -> String {
+    let digits: Vec<char> = raw.trim_start_matches("D:").chars().collect();
+    if digits.len() < 8 || !digits[..8].iter().all(char::is_ascii_digit) {
+        return raw.to_string();
+    }
+    let part = |a: usize, b: usize| -> String { digits[a..b.min(digits.len())].iter().collect() };
+    let date = format!("{}-{}-{}", part(0, 4), part(4, 6), part(6, 8));
+    if digits.len() >= 12 && digits[8..12].iter().all(char::is_ascii_digit) {
+        return format!("{date} {}:{}", part(8, 10), part(10, 12));
+    }
+    date
 }
 
 /// Date PDF `D:AAAAMMJJHHmmSSZ` pour l'instant présent (UTC).
@@ -960,6 +1124,45 @@ fn caret_appearance(x: f64, line: &Rect, color: Rgb) -> (Rect, String) {
         n = fmt(notch)
     );
     (rect, content)
+}
+
+/// Icône d'une note (`/Text`) dans son rectangle : une bulle de la couleur
+/// de la note, cernée de gris, et trois lignes de « texte ».
+///
+/// Le dessin est pensé pour 20 × 20 points, la taille qu'Acrux donne à ses
+/// notes, et suit le rectangle quand il est autre : une note d'un autre
+/// logiciel dont on change la couleur garde sa taille.
+pub(crate) fn note_icon(rect: Rect, color: Rgb) -> String {
+    let (x0, y0) = (rect.x0, rect.y0);
+    let (u, v) = (rect.width() / 20.0, rect.height() / 20.0);
+    let x = |t: f64| fmt(x0 + t * u);
+    let y = |t: f64| fmt(y0 + t * v);
+    format!(
+        "{} 0.25 0.25 0.25 RG 0.8 w {} {} m {} {} l {} {} l {} {} l {} {} l h B 1 g 0.4 w {} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S",
+        color_op(color, false),
+        x(0.0),
+        y(0.0),
+        x(20.0),
+        y(0.0),
+        x(20.0),
+        y(14.0),
+        x(10.0),
+        y(20.0),
+        x(0.0),
+        y(14.0),
+        x(4.0),
+        y(11.0),
+        x(16.0),
+        y(11.0),
+        x(4.0),
+        y(8.0),
+        x(16.0),
+        y(8.0),
+        x(4.0),
+        y(5.0),
+        x(12.0),
+        y(5.0),
+    )
 }
 
 /// Annotation `/Caret` complète.
@@ -1467,33 +1670,11 @@ pub fn add_annotation_with(
             d.insert(Name::new("Contents"), Object::String(encode_text(contents)));
             d.insert(Name::new("C"), color_array(*color));
             d.insert(Name::new("F"), Object::Integer(4 | 8 | 16)); // Print, NoZoom, NoRotate
-                                                                   // Icône : bulle arrondie remplie avec trois lignes de « texte ».
-            let (x0, y0) = (rect.x0, rect.y0);
-            let content = format!(
-                "{} 0.25 0.25 0.25 RG 0.8 w {x0} {y0} m {} {y0} l {} {} l {} {} l {x0} {} l h B 1 g 0.4 w {} {} m {} {} l S {} {} m {} {} l S {} {} m {} {} l S",
-                color_op(*color, false),
-                fmt(x0 + 20.0),
-                fmt(x0 + 20.0),
-                fmt(y0 + 14.0),
-                fmt(x0 + 10.0),
-                fmt(y0 + 20.0),
-                fmt(y0 + 14.0),
-                fmt(x0 + 4.0),
-                fmt(y0 + 11.0),
-                fmt(x0 + 16.0),
-                fmt(y0 + 11.0),
-                fmt(x0 + 4.0),
-                fmt(y0 + 8.0),
-                fmt(x0 + 16.0),
-                fmt(y0 + 8.0),
-                fmt(x0 + 4.0),
-                fmt(y0 + 5.0),
-                fmt(x0 + 12.0),
-                fmt(y0 + 5.0),
-                x0 = fmt(x0),
-                y0 = fmt(y0)
+            set_appearance(
+                doc,
+                &mut d,
+                appearance_stream(rect, note_icon(rect, *color), &[]),
             );
-            set_appearance(doc, &mut d, appearance_stream(rect, content, &[]));
         }
         NewAnnotation::Link { rect, uri } => {
             d.insert(Name::new("Subtype"), Object::Name(Name::new("Link")));
@@ -1517,25 +1698,31 @@ pub fn add_annotation_with(
     Ok(annot_ref)
 }
 
-/// Vrai si l'annotation `o` est un membre du groupe dont `primary` est le
-/// membre principal (`/IRT` vers lui, `/RT /Group`).
-fn is_member_of(doc: &Document, o: &Object, primary: ObjectRef) -> bool {
+/// Références vers lesquelles pointe une annotation de `/Annots` : celle
+/// qu'elle vise par `/IRT` (réponse, état, membre de groupe) et, pour une
+/// fenêtre contextuelle, son annotation mère (`/Parent`).
+fn attached_to(doc: &Document, o: &Object) -> Vec<ObjectRef> {
     let Ok(resolved) = doc.resolve(o) else {
-        return false;
+        return Vec::new();
     };
     let Some(d) = resolved.as_dict() else {
-        return false;
+        return Vec::new();
     };
-    matches!(d.get(&Name::new("IRT")), Some(Object::Reference(r)) if *r == primary)
-        && d.get(&Name::new("RT"))
-            .and_then(Object::as_name)
-            .is_some_and(|n| n.0 == b"Group")
+    ["IRT", "Parent"]
+        .iter()
+        .filter_map(|key| match d.get(&Name::new(key)) {
+            Some(Object::Reference(r)) => Some(*r),
+            _ => None,
+        })
+        .collect()
 }
 
-/// Supprime l'annotation d'index donné (position dans `/Annots`) ; son popup
-/// éventuel est supprimé aussi, et, si elle est le membre principal d'un
-/// groupe (un remplacement), les autres membres avec elle : un texte barré
-/// sans le signe qui disait par quoi le remplacer ne voudrait plus rien dire.
+/// Supprime l'annotation d'index donné (position dans `/Annots`), et tout ce
+/// qui n'a de sens qu'avec elle : sa fenêtre contextuelle, les autres
+/// membres de son groupe (un texte barré sans le signe qui disait par quoi
+/// le remplacer ne voudrait plus rien dire), ses réponses et leurs réponses,
+/// ses annotations d'état — comme Acrobat, où supprimer un commentaire
+/// emporte son fil.
 ///
 /// Les index des annotations suivantes peuvent donc reculer de plus d'un.
 ///
@@ -1543,37 +1730,58 @@ fn is_member_of(doc: &Document, o: &Object, primary: ObjectRef) -> bool {
 /// Index invalide ou page non indirecte.
 pub fn remove_annotation(doc: &Document, page: &Page, index: usize) -> Result<()> {
     let (page_ref, mut page_dict) = current_page(doc, page)?;
-    let mut annots = annots_of(doc, &page_dict)?;
-    if index >= annots.len() {
+    let annots = annots_of(doc, &page_dict)?;
+    let Some(removed) = annots.get(index) else {
         return Err(Error::Corrupt(format!(
             "annotation {} inexistante",
             index + 1
         )));
-    }
-    let removed = annots.remove(index);
+    };
+    let mut kept: Vec<Object> = annots
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != index)
+        .map(|(_, a)| a.clone())
+        .collect();
     if let Object::Reference(r) = removed {
-        if let Ok(o) = doc.get(r) {
-            if let Some(d) = o.as_dict() {
-                if let Some(Object::Reference(popup)) = d.get(&Name::new("Popup")) {
-                    annots.retain(|a| !matches!(a, Object::Reference(p) if p == popup));
-                    doc.delete(*popup);
+        // Tout ce qui s'y rattache, de proche en proche : on collecte
+        // d'abord, on filtre `/Annots` une seule fois ensuite. L'ensemble
+        // grandit à chaque tour ou la boucle s'arrête : un cycle d'`/IRT`
+        // ne la fait pas tourner sans fin.
+        let mut gone: std::collections::HashSet<ObjectRef> = std::iter::once(*r).collect();
+        if let Some(Object::Reference(popup)) = doc.get(*r).ok().and_then(|o| {
+            o.as_dict()
+                .and_then(|d| d.get(&Name::new("Popup")).cloned())
+        }) {
+            gone.insert(popup);
+        }
+        loop {
+            let before = gone.len();
+            for a in &kept {
+                let Object::Reference(me) = a else { continue };
+                if gone.contains(me) {
+                    continue;
+                }
+                if attached_to(doc, a).iter().any(|t| gone.contains(t)) {
+                    gone.insert(*me);
+                    if let Some(Object::Reference(popup)) = doc.get(*me).ok().and_then(|o| {
+                        o.as_dict()
+                            .and_then(|d| d.get(&Name::new("Popup")).cloned())
+                    }) {
+                        gone.insert(popup);
+                    }
                 }
             }
-        }
-        let mut kept = Vec::with_capacity(annots.len());
-        for a in annots {
-            if is_member_of(doc, &a, r) {
-                if let Object::Reference(member) = a {
-                    doc.delete(member);
-                }
-            } else {
-                kept.push(a);
+            if gone.len() == before {
+                break;
             }
         }
-        annots = kept;
-        doc.delete(r);
+        kept.retain(|a| !matches!(a, Object::Reference(x) if gone.contains(x)));
+        for x in gone {
+            doc.delete(x);
+        }
     }
-    page_dict.insert(Name::new("Annots"), Object::Array(annots));
+    page_dict.insert(Name::new("Annots"), Object::Array(kept));
     doc.set(page_ref, Object::Dict(page_dict));
     Ok(())
 }
@@ -2543,5 +2751,642 @@ mod tests {
         assert_eq!(wild.stroke, Some([1.0, 0.0, 0.0]));
         assert_eq!(wild.width, 72.0);
         assert_eq!(wild.opacity, 1.0);
+    }
+
+    // --- Gérer les commentaires : modifier, répondre, statuer, supprimer ---
+
+    /// Un carré rouge de 2 pt posé en (40, 40)-(80, 80).
+    fn square(d: &Document) -> usize {
+        add_annotation(
+            d,
+            &page0(d),
+            &NewAnnotation::Square {
+                rect: Rect::new(40.0, 40.0, 80.0, 80.0),
+                style: style([1.0, 0.0, 0.0]),
+                contents: Some("Carré".into()),
+            },
+            Some("Zoé"),
+        )
+        .unwrap();
+        list_annotations(d, &page0(d)).unwrap().len() - 1
+    }
+
+    /// Ajoute une annotation écrite à la main (sans apparence) et rend son
+    /// rang.
+    fn raw_annotation(d: &Document, entries: &[(&str, Object)]) -> usize {
+        let mut dict = Dict::new();
+        dict.insert(Name::new("Type"), Object::Name(Name::new("Annot")));
+        for (k, v) in entries {
+            dict.insert(Name::new(k), v.clone());
+        }
+        let r = d.add(Object::Dict(dict));
+        push_to_annots(d, &page0(d), &[r]).unwrap();
+        list_annotations(d, &page0(d)).unwrap().len() - 1
+    }
+
+    fn reals(values: &[f64]) -> Object {
+        Object::Array(values.iter().map(|v| Object::Real(*v)).collect())
+    }
+
+    fn name_obj(n: &str) -> Object {
+        Object::Name(Name::new(n))
+    }
+
+    /// Flux `/AP /N` d'une annotation.
+    fn normal_stream(d: &Document, a: &AnnotationInfo) -> (ObjectRef, Dict, Vec<u8>) {
+        let ap = d
+            .dict_get(&raw(d, a), "AP")
+            .unwrap()
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .clone();
+        let Some(Object::Reference(n)) = ap.get(&Name::new("N")).cloned() else {
+            panic!("apparence indirecte attendue")
+        };
+        let o = d.get(n).unwrap();
+        let Object::Stream { dict, .. } = &*o else {
+            panic!("flux attendu")
+        };
+        let data = d.stream_data(&o).unwrap().data;
+        (n, dict.clone(), data)
+    }
+
+    /// Déplacer un carré le déplace, l'agrandir le redessine : le trait
+    /// garde son épaisseur, l'ancienne place redevient blanche, et tout
+    /// tient après enregistrement.
+    #[test]
+    fn un_carre_se_deplace_et_s_agrandit() {
+        let d = doc();
+        let i = square(&d);
+        let changes = AnnotChanges {
+            rect: Some(Rect::new(100.0, 100.0, 140.0, 140.0)),
+            date: Some("D:20260924120000Z".into()),
+            ..AnnotChanges::default()
+        };
+        set_annotation_properties(&d, &page0(&d), i, &changes).unwrap();
+        let a = &list_annotations(&d, &page0(&d)).unwrap()[i];
+        assert_eq!(a.rect, Rect::new(100.0, 100.0, 140.0, 140.0));
+        assert_eq!(a.modified.as_deref(), Some("D:20260924120000Z"));
+        let at = rendered(&d);
+        assert!(
+            is_red(at(100.5, 120.0)),
+            "bord gauche : {:?}",
+            at(100.5, 120.0)
+        );
+        assert!(
+            is_white(at(40.5, 60.0)),
+            "ancienne place : {:?}",
+            at(40.5, 60.0)
+        );
+        // Agrandi : l'apparence est refaite, le trait reste de 2 pt.
+        let bigger = AnnotChanges {
+            rect: Some(Rect::new(100.0, 100.0, 180.0, 180.0)),
+            ..AnnotChanges::default()
+        };
+        set_annotation_properties(&d, &page0(&d), i, &bigger).unwrap();
+        let d2 = reloaded(&d);
+        let a = &list_annotations(&d2, &page0(&d2)).unwrap()[i];
+        assert_eq!(a.rect, Rect::new(100.0, 100.0, 180.0, 180.0));
+        let (_, dict, _) = normal_stream(&d2, a);
+        assert_eq!(
+            numbers(&d2, &dict, "BBox"),
+            vec![100.0, 100.0, 180.0, 180.0]
+        );
+        let at = rendered(&d2);
+        assert!(is_red(at(100.8, 140.0)), "{:?}", at(100.8, 140.0));
+        assert!(
+            is_white(at(103.5, 140.0)),
+            "trait resté fin : {:?}",
+            at(103.5, 140.0)
+        );
+    }
+
+    /// Une encre, une ligne et un polygone d'un autre logiciel (sans
+    /// apparence) : leur géométrie suit le rectangle, en translation comme
+    /// en échelle.
+    #[test]
+    fn la_geometrie_suit_le_rectangle() {
+        let d = doc();
+        let ink = raw_annotation(
+            &d,
+            &[
+                ("Subtype", name_obj("Ink")),
+                ("Rect", reals(&[10.0, 10.0, 30.0, 30.0])),
+                (
+                    "InkList",
+                    Object::Array(vec![reals(&[10.0, 10.0, 30.0, 30.0])]),
+                ),
+                ("C", reals(&[0.0, 0.0, 1.0])),
+            ],
+        );
+        let line = raw_annotation(
+            &d,
+            &[
+                ("Subtype", name_obj("Line")),
+                ("Rect", reals(&[10.0, 50.0, 30.0, 70.0])),
+                ("L", reals(&[10.0, 50.0, 30.0, 70.0])),
+                ("C", reals(&[0.0, 0.0, 0.0])),
+            ],
+        );
+        let poly = raw_annotation(
+            &d,
+            &[
+                ("Subtype", name_obj("Polygon")),
+                ("Rect", reals(&[10.0, 100.0, 30.0, 120.0])),
+                ("Vertices", reals(&[10.0, 100.0, 30.0, 100.0, 20.0, 120.0])),
+            ],
+        );
+        // Encre : translation de (+50, +5).
+        let moved = AnnotChanges {
+            rect: Some(Rect::new(60.0, 15.0, 80.0, 35.0)),
+            ..AnnotChanges::default()
+        };
+        set_annotation_properties(&d, &page0(&d), ink, &moved).unwrap();
+        let list = list_annotations(&d, &page0(&d)).unwrap();
+        let dict = raw(&d, &list[ink]);
+        let strokes = d.dict_get(&dict, "InkList").unwrap().unwrap();
+        let first: Vec<f64> = strokes.as_array().unwrap()[0]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Object::as_f64)
+            .collect();
+        assert_eq!(first, vec![60.0, 15.0, 80.0, 35.0]);
+        assert!(!list[ink].has_appearance, "un déplacement ne redessine pas");
+        // Ligne : échelle ×2 autour de son coin bas-gauche.
+        let doubled = AnnotChanges {
+            rect: Some(Rect::new(10.0, 50.0, 50.0, 90.0)),
+            ..AnnotChanges::default()
+        };
+        set_annotation_properties(&d, &page0(&d), line, &doubled).unwrap();
+        let list = list_annotations(&d, &page0(&d)).unwrap();
+        assert_eq!(
+            numbers(&d, &raw(&d, &list[line]), "L"),
+            vec![10.0, 50.0, 50.0, 90.0]
+        );
+        // L'apparence refaite couvre la ligne entière, trait compris.
+        assert!(list[line].has_appearance);
+        assert!(list[line].rect.x1 >= 50.0 && list[line].rect.y1 >= 90.0);
+        // Polygone : translation.
+        let shifted = AnnotChanges {
+            rect: Some(Rect::new(110.0, 100.0, 130.0, 120.0)),
+            ..AnnotChanges::default()
+        };
+        set_annotation_properties(&d, &page0(&d), poly, &shifted).unwrap();
+        let list = list_annotations(&d, &page0(&d)).unwrap();
+        assert_eq!(
+            numbers(&d, &raw(&d, &list[poly]), "Vertices"),
+            vec![110.0, 100.0, 130.0, 100.0, 120.0, 120.0]
+        );
+    }
+
+    /// Un surlignage ne se déplace pas — il suit le texte — mais change de
+    /// couleur, son apparence refaite avec son groupe de transparence.
+    #[test]
+    fn un_marquage_change_de_couleur_sans_bouger() {
+        let d = doc();
+        add_annotation(
+            &d,
+            &page0(&d),
+            &markup(
+                MarkupKind::Highlight,
+                vec![Rect::new(20.0, 100.0, 120.0, 112.0)],
+            ),
+            None,
+        )
+        .unwrap();
+        let moved = AnnotChanges {
+            rect: Some(Rect::new(0.0, 0.0, 10.0, 10.0)),
+            ..AnnotChanges::default()
+        };
+        assert!(set_annotation_properties(&d, &page0(&d), 0, &moved).is_err());
+        let green = AnnotChanges {
+            color: Some([0.0, 1.0, 0.0]),
+            ..AnnotChanges::default()
+        };
+        set_annotation_properties(&d, &page0(&d), 0, &green).unwrap();
+        let d2 = reloaded(&d);
+        let a = &list_annotations(&d2, &page0(&d2)).unwrap()[0];
+        assert_eq!(a.color, Some([0.0, 1.0, 0.0]));
+        assert_eq!(a.quads.len(), 1);
+        let (_, dict, _) = normal_stream(&d2, a);
+        assert!(dict.contains_key(&Name::new("Group")));
+        let at = rendered(&d2);
+        let p = at(60.0, 106.0);
+        assert!(p[1] > 200 && p[0] < 80 && p[2] < 80, "vert attendu : {p:?}");
+    }
+
+    /// L'opacité est écrite dans `/CA` **et** dans l'apparence ; pour un
+    /// tampon qu'on ne sait pas redessiner, l'apparence d'origine est
+    /// enveloppée, une seule fois même si l'on recommence.
+    #[test]
+    fn l_opacite_est_dans_l_apparence() {
+        let d = doc();
+        let i = square(&d);
+        let half = AnnotChanges {
+            opacity: Some(0.5),
+            ..AnnotChanges::default()
+        };
+        set_annotation_properties(&d, &page0(&d), i, &half).unwrap();
+        let a = &list_annotations(&d, &page0(&d)).unwrap()[i];
+        assert_eq!(a.opacity, 0.5);
+        let (_, _, content) = normal_stream(&d, a);
+        assert!(content.starts_with(b"/GS0 gs"), "{content:?}");
+        let at = rendered(&d);
+        let p = at(40.8, 60.0);
+        assert!(
+            p[0] > 200 && p[1] > 90 && p[1] < 170,
+            "rouge atténué : {p:?}"
+        );
+        // Un tampon : un carré bleu plein en apparence.
+        let form = d.add(appearance_stream(
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+            "0 0 1 rg 0 0 10 10 re f".into(),
+            &[],
+        ));
+        let mut ap = Dict::new();
+        ap.insert(Name::new("N"), Object::Reference(form));
+        let stamp = raw_annotation(
+            &d,
+            &[
+                ("Subtype", name_obj("Stamp")),
+                ("Rect", reals(&[120.0, 120.0, 160.0, 160.0])),
+                ("AP", Object::Dict(ap)),
+            ],
+        );
+        let blue = AnnotChanges {
+            color: Some([0.0, 0.0, 1.0]),
+            ..AnnotChanges::default()
+        };
+        assert!(set_annotation_properties(&d, &page0(&d), stamp, &blue).is_err());
+        for o in [0.5, 0.25] {
+            let fade = AnnotChanges {
+                opacity: Some(o),
+                ..AnnotChanges::default()
+            };
+            set_annotation_properties(&d, &page0(&d), stamp, &fade).unwrap();
+        }
+        let list = list_annotations(&d, &page0(&d)).unwrap();
+        let (_, dict, content) = normal_stream(&d, &list[stamp]);
+        assert_eq!(content.as_slice(), b"/GS0 gs /AkOriginal Do");
+        let res = d.dict_get(&dict, "Resources").unwrap().unwrap();
+        let xobj = d
+            .dict_get(res.as_dict().unwrap(), "XObject")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            xobj.as_dict().unwrap().get(&Name::new("AkOriginal")),
+            Some(&Object::Reference(form)),
+            "l'enveloppe vise l'original, pas l'enveloppe précédente"
+        );
+        let at = rendered(&d);
+        let p = at(140.0, 140.0);
+        assert!(p[2] > 200 && p[0] > 150, "bleu au quart : {p:?}");
+    }
+
+    /// Un lien, un champ et un élément de « remplir et signer » se gèrent
+    /// ailleurs : refusés, le document intact.
+    #[test]
+    fn liens_champs_et_remplir_et_signer_refuses() {
+        let d = doc();
+        let link = raw_annotation(
+            &d,
+            &[
+                ("Subtype", name_obj("Link")),
+                ("Rect", reals(&[0.0, 0.0, 10.0, 10.0])),
+            ],
+        );
+        let widget = raw_annotation(
+            &d,
+            &[
+                ("Subtype", name_obj("Widget")),
+                ("Rect", reals(&[0.0, 0.0, 10.0, 10.0])),
+            ],
+        );
+        let signed = raw_annotation(
+            &d,
+            &[
+                ("Subtype", name_obj("Stamp")),
+                ("Rect", reals(&[0.0, 0.0, 10.0, 10.0])),
+                (crate::fillsign::TAG, name_obj("drawn")),
+            ],
+        );
+        // Le fichier, sans sa fin (l'identifiant `/ID` change à chaque
+        // enregistrement).
+        let body = |d: &Document| {
+            let bytes = d.save_full().unwrap();
+            let end = bytes.windows(7).position(|w| w == b"trailer").unwrap();
+            bytes[..end].to_vec()
+        };
+        let before = body(&d);
+        for i in [link, widget, signed] {
+            let c = AnnotChanges {
+                rect: Some(Rect::new(1.0, 1.0, 11.0, 11.0)),
+                ..AnnotChanges::default()
+            };
+            assert!(set_annotation_properties(&d, &page0(&d), i, &c).is_err());
+        }
+        for i in [link, widget] {
+            assert!(review::add_reply(&d, &page0(&d), i, "x", &AnnotMeta::default()).is_err());
+        }
+        assert!(set_annotation_properties(&d, &page0(&d), 9, &AnnotChanges::default()).is_err());
+        assert_eq!(body(&d), before);
+        let list = list_annotations(&d, &page0(&d)).unwrap();
+        assert!(list[signed].fill_sign);
+    }
+
+    fn meta(author: &str, date: &str) -> AnnotMeta {
+        AnnotMeta {
+            author: Some(author.into()),
+            name: Some(format!("{author}-{date}")),
+            date: Some(date.into()),
+        }
+    }
+
+    /// Une note, deux réponses dont une imbriquée, deux statuts (le plus
+    /// récent fait foi), une case : un seul fil, bien rangé.
+    #[test]
+    fn reponses_et_statuts_forment_un_fil() {
+        use review::{comment_threads, ReviewState, StateChange};
+        let d = doc();
+        add_annotation_with(
+            &d,
+            &page0(&d),
+            &NewAnnotation::Note {
+                x: 20.0,
+                y: 180.0,
+                contents: "À relire".into(),
+                color: [1.0, 0.8, 0.0],
+            },
+            &meta("Alice", "D:20240101100000Z"),
+        )
+        .unwrap();
+        let p = page0(&d);
+        review::add_reply(&d, &p, 0, "D'accord", &meta("Bruno", "D:20240102100000Z")).unwrap();
+        review::add_reply(&d, &p, 1, "Merci", &meta("Alice", "D:20240103100000Z")).unwrap();
+        // L'ordre d'écriture ne compte pas : la date fait foi.
+        review::set_state(
+            &d,
+            &p,
+            0,
+            StateChange::Review(ReviewState::Rejected),
+            &meta("Bruno", "D:20240105100000Z"),
+        )
+        .unwrap();
+        review::set_state(
+            &d,
+            &p,
+            0,
+            StateChange::Review(ReviewState::Accepted),
+            &meta("Alice", "D:20240104100000Z"),
+        )
+        .unwrap();
+        review::set_state(
+            &d,
+            &p,
+            0,
+            StateChange::Marked(true),
+            &meta("Alice", "D:20240104"),
+        )
+        .unwrap();
+        let d2 = reloaded(&d);
+        let pages = collect_pages(&d2).unwrap();
+        let threads = comment_threads(&d2, &pages);
+        assert_eq!(threads.len(), 1, "{threads:?}");
+        let t = &threads[0];
+        assert_eq!(t.author.as_deref(), Some("Alice"));
+        assert_eq!(t.contents, "À relire");
+        let replies: Vec<(&str, usize)> = t
+            .replies
+            .iter()
+            .map(|r| (r.contents.as_str(), r.depth))
+            .collect();
+        assert_eq!(replies, [("D'accord", 1), ("Merci", 2)]);
+        assert_eq!(
+            t.review,
+            Some((ReviewState::Rejected, Some("Bruno".into())))
+        );
+        assert!(t.marked);
+        let list = list_annotations(&d2, &pages[0]).unwrap();
+        assert!(list[1].is_reply() && list[3].is_state() && list[3].hidden());
+        assert_eq!(list[3].contents.as_deref(), Some("Rejected set by Bruno"));
+        // Les réponses ne se dessinent pas sur la note : une réponse rouge
+        // posée au même endroit ne laisse aucun pixel rouge.
+        let d3 = doc();
+        add_annotation(
+            &d3,
+            &page0(&d3),
+            &NewAnnotation::Note {
+                x: 20.0,
+                y: 180.0,
+                contents: "Mère".into(),
+                color: [1.0, 1.0, 0.0],
+            },
+            None,
+        )
+        .unwrap();
+        review::add_reply(&d3, &page0(&d3), 0, "Fille", &AnnotMeta::default()).unwrap();
+        let reply = list_annotations(&d3, &page0(&d3)).unwrap()[1].clone();
+        let form = d3.add(appearance_stream(
+            Rect::new(20.0, 160.0, 40.0, 180.0),
+            "1 0 0 rg 20 160 20 20 re f".into(),
+            &[],
+        ));
+        let mut ap = Dict::new();
+        ap.insert(Name::new("N"), Object::Reference(form));
+        let mut dict = raw(&d3, &reply);
+        dict.insert(Name::new("AP"), Object::Dict(ap));
+        d3.set(reply.reference.unwrap(), Object::Dict(dict));
+        let at = rendered(&d3);
+        assert!(
+            !is_red(at(30.0, 170.0)),
+            "réponse dessinée : {:?}",
+            at(30.0, 170.0)
+        );
+    }
+
+    /// Les cas limites d'un fil : un barré groupé n'est pas listé, une
+    /// réponse orpheline devient un commentaire, un cycle ne boucle pas.
+    #[test]
+    fn fils_aux_cas_limites() {
+        let d = doc();
+        add_annotation(
+            &d,
+            &page0(&d),
+            &NewAnnotation::Replace {
+                quads: vec![Rect::new(10.0, 150.0, 60.0, 162.0)],
+                text: "neuf".into(),
+                strike: MarkupKind::StrikeOut.default_color(),
+                caret: CARET_COLOR,
+            },
+            None,
+        )
+        .unwrap();
+        // Une réponse à un objet absent.
+        raw_annotation(
+            &d,
+            &[
+                ("Subtype", name_obj("Text")),
+                ("Rect", reals(&[0.0, 0.0, 20.0, 20.0])),
+                (
+                    "IRT",
+                    Object::Reference(ObjectRef {
+                        number: 999,
+                        generation: 0,
+                    }),
+                ),
+                ("Contents", Object::String(b"orpheline".to_vec())),
+            ],
+        );
+        // Deux réponses qui se répondent l'une l'autre.
+        let a = d.add(Object::Null);
+        let b = d.add(Object::Null);
+        for (me, other) in [(a, b), (b, a)] {
+            let mut dict = Dict::new();
+            dict.insert(Name::new("Subtype"), name_obj("Text"));
+            dict.insert(Name::new("Rect"), reals(&[0.0, 0.0, 5.0, 5.0]));
+            dict.insert(Name::new("IRT"), Object::Reference(other));
+            d.set(me, Object::Dict(dict));
+        }
+        push_to_annots(&d, &page0(&d), &[a, b]).unwrap();
+        let threads = review::comment_threads(&d, &collect_pages(&d).unwrap());
+        let summary: Vec<(&str, bool)> = threads
+            .iter()
+            .map(|t| (t.subtype.as_str(), t.grouped))
+            .collect();
+        assert_eq!(summary, [("Caret", true), ("Text", false)]);
+        assert_eq!(threads[1].contents, "orpheline");
+    }
+
+    /// Supprimer un commentaire emporte ses réponses, ses états et sa
+    /// fenêtre ; les autres annotations restent, dans leur ordre.
+    #[test]
+    fn supprimer_emporte_le_fil() {
+        let d = doc();
+        let first = square(&d);
+        let note_ref = list_annotations(&d, &page0(&d)).unwrap()[first]
+            .reference
+            .unwrap();
+        let popup = d.add(Object::Null);
+        let mut note = raw(&d, &list_annotations(&d, &page0(&d)).unwrap()[first]);
+        note.insert(Name::new("Popup"), Object::Reference(popup));
+        d.set(note_ref, Object::Dict(note));
+        let mut pd = Dict::new();
+        pd.insert(Name::new("Subtype"), name_obj("Popup"));
+        pd.insert(Name::new("Parent"), Object::Reference(note_ref));
+        pd.insert(Name::new("Rect"), reals(&[90.0, 90.0, 180.0, 150.0]));
+        d.set(popup, Object::Dict(pd));
+        push_to_annots(&d, &page0(&d), &[popup]).unwrap();
+        let other = square(&d);
+        assert_eq!(other, 2);
+        let p = page0(&d);
+        review::add_reply(&d, &p, first, "réponse", &AnnotMeta::default()).unwrap();
+        review::add_reply(&d, &p, 3, "sous-réponse", &AnnotMeta::default()).unwrap();
+        review::set_state(
+            &d,
+            &p,
+            first,
+            review::StateChange::Marked(true),
+            &AnnotMeta::default(),
+        )
+        .unwrap();
+        assert_eq!(list_annotations(&d, &page0(&d)).unwrap().len(), 6);
+        remove_annotation(&d, &page0(&d), first).unwrap();
+        let left = list_annotations(&d, &page0(&d)).unwrap();
+        assert_eq!(left.len(), 1, "{left:?}");
+        assert_eq!(left[0].subtype, "Square");
+        assert_eq!(left[0].index, 0);
+    }
+
+    #[test]
+    fn dates_lisibles() {
+        assert_eq!(readable_date("D:20240312103015+01'00'"), "2024-03-12 10:30");
+        assert_eq!(readable_date("D:20240312"), "2024-03-12");
+        assert_eq!(readable_date("hier soir"), "hier soir");
+        assert_eq!(readable_date("D:2024"), "D:2024");
+    }
+
+    /// Cacher une annotation qui n'est pas de « remplir et signer » : le
+    /// bit 2 de `/F` se pose et se retire, les autres drapeaux restent.
+    #[test]
+    fn cacher_une_annotation() {
+        let d = doc();
+        let i = square(&d);
+        set_hidden(&d, &page0(&d), i, true).unwrap();
+        let a = &list_annotations(&d, &page0(&d)).unwrap()[i];
+        assert!(a.hidden());
+        assert_eq!(a.flags & 4, 4);
+        assert!(is_white(rendered(&d)(40.8, 60.0)));
+        set_hidden(&d, &page0(&d), i, false).unwrap();
+        assert!(!list_annotations(&d, &page0(&d)).unwrap()[i].hidden());
+    }
+
+    /// Une zone de texte change de couleur de texte et de texte : sa police
+    /// et son cadre restent, son apparence dit le nouveau texte.
+    #[test]
+    fn une_zone_de_texte_se_modifie() {
+        let d = doc();
+        add_annotation(
+            &d,
+            &page0(&d),
+            &NewAnnotation::FreeText {
+                rect: Rect::new(20.0, 100.0, 180.0, 140.0),
+                text: "Bonjour".into(),
+                font: StandardFont::Courier,
+                size: 14.0,
+                color: [0.0, 0.0, 0.0],
+                border: Some(([1.0, 0.0, 0.0], 1.0)),
+                fill: None,
+                align: TextAlign::Left,
+                callout: None,
+                rotation: 0,
+            },
+            None,
+        )
+        .unwrap();
+        let changes = AnnotChanges {
+            color: Some([0.0, 0.0, 1.0]),
+            contents: Some("Au revoir".into()),
+            ..AnnotChanges::default()
+        };
+        set_annotation_properties(&d, &page0(&d), 0, &changes).unwrap();
+        let d2 = reloaded(&d);
+        let a = &list_annotations(&d2, &page0(&d2)).unwrap()[0];
+        assert_eq!(a.color, Some([0.0, 0.0, 1.0]));
+        assert_eq!(a.contents.as_deref(), Some("Au revoir"));
+        let da = string(&d2, &raw(&d2, a), "DA").unwrap();
+        let parsed = appearance::parse_da(&da);
+        assert_eq!(parsed.font.as_deref(), Some("Cour"));
+        assert_eq!(parsed.stroke, Some([1.0, 0.0, 0.0]));
+        let (_, _, content) = normal_stream(&d2, a);
+        assert!(
+            String::from_utf8_lossy(&content).contains("Au revoir"),
+            "le nouveau texte est dans l'apparence"
+        );
+    }
+
+    /// Une annotation rendue seule : de la taille de sa zone d'arrivée,
+    /// transparente hors du trait.
+    #[test]
+    fn une_annotation_se_rend_seule() {
+        let d = doc();
+        let i = square(&d);
+        let img = acrux_render::render_annotation(
+            &d,
+            &page0(&d),
+            i,
+            2.0,
+            0,
+            Rect::new(100.0, 100.0, 180.0, 140.0),
+        )
+        .unwrap();
+        assert_eq!((img.width(), img.height()), (160, 80));
+        let edge = img.pixel(1, 40).unwrap();
+        assert!(edge[3] > 200 && edge[0] > 200, "trait : {edge:?}");
+        assert_eq!(img.pixel(80, 40).unwrap()[3], 0, "intérieur transparent");
+        assert!(
+            acrux_render::render_annotation(&d, &page0(&d), 9, 1.0, 0, Rect::default()).is_none()
+        );
     }
 }

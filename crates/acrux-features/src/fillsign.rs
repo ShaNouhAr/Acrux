@@ -85,8 +85,10 @@ use crate::stamp::{encode_win_ansi, pdf_literal, StandardFont};
 pub use ink::{InkPoint, Nib, Outline, Pen, Seg, Stroke, Weight};
 pub use marks::Mark;
 
-/// Clé privée qui signe nos annotations, et valeur de chaque sorte.
-const TAG: &str = "AKFillSign";
+/// Clé privée qui signe nos annotations, et valeur de chaque sorte. Le
+/// module des annotations la lit aussi : ce qui la porte se gère ici, et
+/// nulle part ailleurs.
+pub(crate) const TAG: &str = "AKFillSign";
 
 /// Familles manuscrites essayées pour une signature tapée, de la plus
 /// courante à la moins. Windows installe les quatre premières.

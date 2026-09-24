@@ -187,112 +187,152 @@ fn draw_annotations(doc: &Document, page: &Page, renderer: &mut Renderer<'_>, ba
         let Some(annot) = annot.as_dict() else {
             continue;
         };
-        let subtype = annot
-            .get(&Name::new("Subtype"))
-            .and_then(Object::as_name)
-            .map(|n| n.0.clone());
-        // Les fenêtres contextuelles ne sont dessinées qu'ouvertes, à l'écran.
-        if subtype.as_deref() == Some(b"Popup") {
-            continue;
-        }
-        let flags = doc
-            .dict_get(annot, "F")
-            .ok()
-            .flatten()
-            .and_then(|o| o.as_i64())
-            .unwrap_or(0);
-        if flags & (ANNOT_HIDDEN | ANNOT_NOVIEW) != 0 {
-            continue;
-        }
-        let Some(rect) = doc.dict_get(annot, "Rect").ok().flatten() else {
-            continue;
-        };
-        let r: Vec<f64> = rect
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|o| doc.resolve(o).ok().and_then(|v| v.as_f64()))
-                    .collect()
-            })
-            .unwrap_or_default();
-        if r.len() != 4 {
-            continue;
-        }
-        let rect = Rect::new(r[0], r[1], r[2], r[3]);
-        let Some(stream) = normal_appearance(doc, annot) else {
-            // Annotation sans flux d'apparence : on en synthétise une comme
-            // Acrobat (bordure des liens, formes, marquages de texte, encre).
-            match subtype.as_deref() {
-                Some(b"Link") => draw_link_border(doc, annot, &rect, renderer, base_ctm),
-                Some(kind) => draw_default_appearance(doc, annot, kind, &rect, renderer, base_ctm),
-                None => {}
-            }
-            continue;
-        };
-        let Object::Stream { dict, .. } = &stream else {
-            continue;
-        };
-        // Algorithme 8.1 : BBox transformée par Matrix, ajustée dans Rect.
-        let bbox: Vec<f64> = doc
-            .dict_get(dict, "BBox")
-            .ok()
-            .flatten()
-            .and_then(|b| {
-                b.as_array().map(|a| {
-                    a.iter()
-                        .filter_map(|o| doc.resolve(o).ok().and_then(|v| v.as_f64()))
-                        .collect()
-                })
-            })
-            .unwrap_or_default();
-        let m: Vec<f64> = doc
-            .dict_get(dict, "Matrix")
-            .ok()
-            .flatten()
-            .and_then(|b| {
-                b.as_array().map(|a| {
-                    a.iter()
-                        .filter_map(|o| doc.resolve(o).ok().and_then(|v| v.as_f64()))
-                        .collect()
-                })
-            })
-            .unwrap_or_default();
-        let matrix = if m.len() == 6 {
-            Matrix::new(m[0], m[1], m[2], m[3], m[4], m[5])
-        } else {
-            Matrix::IDENTITY
-        };
-        let a_matrix = if bbox.len() == 4 {
-            let tb = matrix.transform_rect(&Rect::new(bbox[0], bbox[1], bbox[2], bbox[3]));
-            let sx = if tb.width() > 1e-9 {
-                rect.width() / tb.width()
-            } else {
-                1.0
-            };
-            let sy = if tb.height() > 1e-9 {
-                rect.height() / tb.height()
-            } else {
-                1.0
-            };
-            Matrix::new(sx, 0.0, 0.0, sy, rect.x0 - tb.x0 * sx, rect.y0 - tb.y0 * sy)
-        } else {
-            Matrix::IDENTITY
-        };
-        let ctm = a_matrix.then(&base_ctm);
-        let mut resources = Dict::new();
-        if let Some(res) = doc.dict_get(dict, "Resources").ok().flatten() {
-            if let Some(d) = res.as_dict() {
-                resources = d.clone();
-            }
-        }
-        // Le formulaire est dessiné via `Do` sur un dictionnaire de ressources synthétique.
-        let mut xobjects = Dict::new();
-        xobjects.insert(Name::new("AkAnnot"), stream.clone());
-        let mut synthetic = Dict::new();
-        synthetic.insert(Name::new("XObject"), Object::Dict(xobjects));
-        let _ = resources;
-        renderer.run(b"/AkAnnot Do", &synthetic, GraphicsState::new(ctm));
+        draw_one(doc, annot, renderer, base_ctm);
     }
+}
+
+/// Vrai pour une réponse (une note `/Text` qui désigne son commentaire par
+/// `/IRT`, §12.5.6.2) : elle partage le rectangle de ce commentaire, et la
+/// dessiner poserait une seconde icône sur la première. Les lecteurs la
+/// montrent dans le fil du commentaire, pas sur la page.
+fn is_reply(annot: &Dict, subtype: Option<&[u8]>) -> bool {
+    subtype == Some(b"Text")
+        && annot.contains_key(&Name::new("IRT"))
+        && annot
+            .get(&Name::new("RT"))
+            .and_then(Object::as_name)
+            .is_none_or(|n| n.0 != b"Group")
+}
+
+/// Dessine une annotation, son apparence posée dans son rectangle (§12.5.5,
+/// algorithme 8.1), ou synthétisée quand elle n'en a pas. `base_ctm` mène
+/// de l'espace de la page aux pixels.
+fn draw_one(doc: &Document, annot: &Dict, renderer: &mut Renderer<'_>, base_ctm: Matrix) {
+    let subtype = annot
+        .get(&Name::new("Subtype"))
+        .and_then(Object::as_name)
+        .map(|n| n.0.clone());
+    // Les fenêtres contextuelles ne sont dessinées qu'ouvertes, à l'écran.
+    if subtype.as_deref() == Some(b"Popup") || is_reply(annot, subtype.as_deref()) {
+        return;
+    }
+    let flags = doc
+        .dict_get(annot, "F")
+        .ok()
+        .flatten()
+        .and_then(|o| o.as_i64())
+        .unwrap_or(0);
+    if flags & (ANNOT_HIDDEN | ANNOT_NOVIEW) != 0 {
+        return;
+    }
+    let Some(rect) = annot_rect(doc, annot) else {
+        return;
+    };
+    let Some(stream) = normal_appearance(doc, annot) else {
+        // Annotation sans flux d'apparence : on en synthétise une comme
+        // Acrobat (bordure des liens, formes, marquages de texte, encre).
+        match subtype.as_deref() {
+            Some(b"Link") => draw_link_border(doc, annot, &rect, renderer, base_ctm),
+            Some(kind) => draw_default_appearance(doc, annot, kind, &rect, renderer, base_ctm),
+            None => {}
+        }
+        return;
+    };
+    let Object::Stream { dict, .. } = &stream else {
+        return;
+    };
+    // Algorithme 8.1 : BBox transformée par Matrix, ajustée dans Rect.
+    let bbox = annot_numbers(doc, dict, "BBox").unwrap_or_default();
+    let m = annot_numbers(doc, dict, "Matrix").unwrap_or_default();
+    let matrix = if m.len() == 6 {
+        Matrix::new(m[0], m[1], m[2], m[3], m[4], m[5])
+    } else {
+        Matrix::IDENTITY
+    };
+    let a_matrix = if bbox.len() == 4 {
+        let tb = matrix.transform_rect(&Rect::new(bbox[0], bbox[1], bbox[2], bbox[3]));
+        let sx = if tb.width() > 1e-9 {
+            rect.width() / tb.width()
+        } else {
+            1.0
+        };
+        let sy = if tb.height() > 1e-9 {
+            rect.height() / tb.height()
+        } else {
+            1.0
+        };
+        Matrix::new(sx, 0.0, 0.0, sy, rect.x0 - tb.x0 * sx, rect.y0 - tb.y0 * sy)
+    } else {
+        Matrix::IDENTITY
+    };
+    let ctm = a_matrix.then(&base_ctm);
+    // Le formulaire est dessiné via `Do` sur un dictionnaire de ressources synthétique.
+    let mut xobjects = Dict::new();
+    xobjects.insert(Name::new("AkAnnot"), stream.clone());
+    let mut synthetic = Dict::new();
+    synthetic.insert(Name::new("XObject"), Object::Dict(xobjects));
+    renderer.run(b"/AkAnnot Do", &synthetic, GraphicsState::new(ctm));
+}
+
+/// `/Rect` d'une annotation, coins dans l'ordre ; `None` s'il est illisible.
+fn annot_rect(doc: &Document, annot: &Dict) -> Option<Rect> {
+    let r = annot_numbers(doc, annot, "Rect").filter(|r| r.len() == 4)?;
+    Some(Rect::new(
+        r[0].min(r[2]),
+        r[1].min(r[3]),
+        r[0].max(r[2]),
+        r[1].max(r[3]),
+    ))
+}
+
+/// Rend **une seule** annotation de la page — celle de rang `index` dans
+/// `/Annots` — sur fond transparent, déplacée et mise à l'échelle de son
+/// rectangle vers `to` (coordonnées de page), telle qu'elle apparaîtrait à
+/// l'écran à `scale` pixels par point, la page tournée de `rotate` degrés
+/// (sa rotation affichée, vue comprise).
+///
+/// L'image a la taille de `to` à l'écran. C'est l'aperçu d'un geste :
+/// l'annotation qu'on déplace ou qu'on agrandit suit le pointeur **telle
+/// qu'elle est**, sans que la page entière soit rendue à chaque mouvement.
+/// `None` si l'annotation n'existe pas ou n'a pas de rectangle.
+#[must_use]
+pub fn render_annotation(
+    doc: &Document,
+    page: &Page,
+    index: usize,
+    scale: f64,
+    rotate: i32,
+    to: Rect,
+) -> Option<Bitmap> {
+    let annots = doc.resolve(page.dict.get(&Name::new("Annots"))?).ok()?;
+    let annot = doc.resolve(annots.as_array()?.get(index)?).ok()?;
+    let annot = annot.as_dict()?;
+    let from = annot_rect(doc, annot)?;
+    let rotate = add_rotation(rotate, 0);
+    let (width, height) = pixel_size(&to, scale, rotate);
+    let base = base_matrix(&to, scale, rotate, width, height);
+    // Ancien rectangle → nouveau, par axe, avant de passer aux pixels : les
+    // types sans apparence (lignes, encre) suivent comme les autres.
+    let sx = if from.width() > 1e-9 {
+        to.width() / from.width()
+    } else {
+        1.0
+    };
+    let sy = if from.height() > 1e-9 {
+        to.height() / from.height()
+    } else {
+        1.0
+    };
+    let pre = Matrix::new(sx, 0.0, 0.0, sy, to.x0 - from.x0 * sx, to.y0 - from.y0 * sy);
+    let options = RenderOptions {
+        annotations: true,
+        time_budget: Some(std::time::Duration::from_secs(2)),
+        background: None,
+        ..RenderOptions::default()
+    };
+    let mut renderer = Renderer::new(doc, width, height, options);
+    draw_one(doc, annot, &mut renderer, pre.then(&base));
+    Some(renderer.into_bitmap())
 }
 
 /// Nombres d'un tableau de l'annotation (`/C`, `/IC`, `/L`, `/QuadPoints`…).

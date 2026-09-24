@@ -113,7 +113,21 @@ fn usage() {
     eprintln!("                                  --word ne prend que le mot entier ; une occurrence peut passer à la");
     eprintln!("                                  ligne dans un paragraphe (« documen- / tation »)");
     eprintln!("  bench   <fichier> [--dpi N]                    mesure ouverture, rendu et extraction de texte");
-    eprintln!("  annots  <fichier> [pages] [-v]                  liste les annotations ; -v : identifiants (/NM)");
+    eprintln!("  annots  <fichier> [pages] [-v]                  liste les annotations ; -v : identifiants (/NM) ;");
+    eprintln!("                                  sous chaque commentaire : date, statut, case cochée et réponses (↳)");
+    eprintln!(
+        "  annot-set <fichier> <page> <n°> [--rect x0,y0,x1,y1] [--move dx,dy] [--color RRGGBB]"
+    );
+    eprintln!("          [--fill RRGGBB|none] [--opacity 0..1] [--width N] [--text \"…\"]");
+    eprintln!("          [--state accepted|rejected|cancelled|completed|none] [--marked oui|non] [--author NOM] -o <sortie>");
+    eprintln!("                                  modifie une annotation (n° comme dans annots) : place, couleur,");
+    eprintln!("                                  fond, opacité, trait, texte ; l'apparence est redessinée ;");
+    eprintln!(
+        "                                  --state et --marked posent un statut de relecture"
+    );
+    eprintln!("  annot-remove <fichier> <page> <n°> -o <sortie> retire une annotation, avec ses réponses et sa fenêtre");
+    eprintln!("  reply   <fichier> <page> <n°> <texte> [--author NOM] -o <sortie>");
+    eprintln!("                                  répond à un commentaire (réponse /IRT, affichée dans son fil)");
     eprintln!("  links   <fichier> [pages]                       liste les liens et leurs cibles");
     eprintln!("  outline <fichier>                               affiche les signets (arbre)");
     eprintln!("  annotate <fichier> <page> <type> … -o <sortie>");
@@ -375,6 +389,9 @@ fn main() -> ExitCode {
         (Some("links"), Some(f)) => cmd_links(f, &args[2..]),
         (Some("outline"), Some(f)) => cmd_outline(f),
         (Some("annotate"), Some(f)) => cmd_annotate(f, &args[2..]),
+        (Some("annot-set"), Some(f)) => cmd_annot_set(f, &args[2..]),
+        (Some("annot-remove"), Some(f)) => cmd_annot_remove(f, &args[2..]),
+        (Some("reply"), Some(f)) => cmd_reply(f, &args[2..]),
         (Some("attachments"), Some(f)) => cmd_attachments(f),
         (Some("attach"), Some(f)) => cmd_attach(f, &args[2..]),
         (Some("detach"), Some(f)) => cmd_detach(f, &args[2..]),
@@ -1470,6 +1487,8 @@ fn positional(rest: &[String]) -> Vec<&String> {
                 | "--head"
                 | "--tail"
                 | "--points"
+                | "--state"
+                | "--marked"
         ) {
             skip = true;
             continue;
@@ -2013,6 +2032,8 @@ fn cmd_bench(path: &str, rest: &[String]) -> acrux_core::Result<()> {
 }
 
 fn cmd_annots(path: &str, rest: &[String]) -> acrux_core::Result<()> {
+    use acrux_features::annotations::review::comment_threads;
+    use acrux_features::annotations::{list_annotations, readable_date};
     let (doc, _) = open(path)?;
     let pages = collect_pages(&doc)?;
     // `-v` montre en plus l'identifiant de chaque annotation ; la sortie par
@@ -2026,11 +2047,21 @@ fn cmd_annots(path: &str, rest: &[String]) -> acrux_core::Result<()> {
         Some(spec) => acrux_features::pages::parse_page_spec(spec, pages.len())?,
         None => (0..pages.len()).collect(),
     };
+    // Les fils de discussion : les réponses et les statuts se lisent sous
+    // leur commentaire, plutôt qu'en lignes à part.
+    let threads = comment_threads(&doc, &pages);
+    let in_thread: std::collections::HashSet<(usize, usize)> = threads
+        .iter()
+        .flat_map(|t| t.replies.iter().map(|r| (r.page, r.index)))
+        .collect();
     let mut total = 0;
     for &i in &indices {
-        let list = acrux_features::annotations::list_annotations(&doc, &pages[i])?;
+        let list = list_annotations(&doc, &pages[i])?;
         for a in &list {
             total += 1;
+            if a.is_state() || in_thread.contains(&(i, a.index)) {
+                continue;
+            }
             println!(
                 "page {:>3}  #{:<3} {:<12} [{:.0} {:.0} {:.0} {:.0}]{}{}{}{}{}",
                 i + 1,
@@ -2066,10 +2097,286 @@ fn cmd_annots(path: &str, rest: &[String]) -> acrux_core::Result<()> {
                     .map_or(String::new(), |p| format!(" #{}", p.index + 1));
                 println!("            ↳ groupé avec{primary}");
             }
+            let Some(thread) = threads.iter().find(|t| t.page == i && t.index == a.index) else {
+                continue;
+            };
+            let mut detail: Vec<String> = Vec::new();
+            if let Some(date) = &thread.modified {
+                detail.push(format!("le {}", readable_date(date)));
+            }
+            if let Some((state, who)) = &thread.review {
+                detail.push(match who {
+                    Some(who) => format!("[{}, par {who}]", state.label()),
+                    None => format!("[{}]", state.label()),
+                });
+            }
+            if thread.marked {
+                detail.push("[✓]".to_string());
+            }
+            if !detail.is_empty() {
+                println!("            {}", detail.join(" · "));
+            }
+            for r in &thread.replies {
+                println!(
+                    "            {}↳ #{} {}{} : {}",
+                    "  ".repeat(r.depth.saturating_sub(1)),
+                    r.index + 1,
+                    r.author.as_deref().unwrap_or("?"),
+                    r.modified
+                        .as_deref()
+                        .map_or(String::new(), |d| format!(" ({})", readable_date(d))),
+                    r.contents.replace('\n', " ")
+                );
+            }
         }
     }
     println!("{total} annotation(s)");
     Ok(())
+}
+
+/// Page et rang (comptés à partir de 1 sur la ligne de commande, comme les
+/// affiche `annots`) d'une commande qui vise une annotation, vérifiés
+/// contre le document.
+fn annotation_target(
+    doc: &Document,
+    pos: &[&String],
+    usage: &str,
+) -> acrux_core::Result<(Vec<acrux_document::Page>, usize, usize)> {
+    let (Some(page), Some(number)) = (pos.first(), pos.get(1)) else {
+        return Err(acrux_core::Error::Corrupt(usage.to_string()));
+    };
+    let pages = collect_pages(doc)?;
+    let page = page
+        .parse::<usize>()
+        .ok()
+        .filter(|p| (1..=pages.len()).contains(p))
+        .ok_or_else(|| acrux_core::Error::Corrupt(format!("page « {page} » inexistante")))?
+        - 1;
+    let count = acrux_features::annotations::list_annotations(doc, &pages[page])?.len();
+    let index = number
+        .trim_start_matches('#')
+        .parse::<usize>()
+        .ok()
+        .filter(|n| (1..=count).contains(n))
+        .ok_or_else(|| {
+            acrux_core::Error::Corrupt(format!(
+                "annotation « {number} » inexistante en page {} ({count} annotation(s))",
+                page + 1
+            ))
+        })?
+        - 1;
+    Ok((pages, page, index))
+}
+
+/// Couleur en ligne de commande : « RRGGBB » (ou « #RRGGBB »), comme la
+/// barre de propriétés, ou « r,g,b » de 0 à 1, comme `annotate`.
+fn color_arg(spec: &str) -> acrux_core::Result<[f64; 3]> {
+    let hex = spec.trim().trim_start_matches('#');
+    if hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        let byte =
+            |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).map_or(0.0, |b| f64::from(b) / 255.0);
+        return Ok([byte(0), byte(2), byte(4)]);
+    }
+    parse_rgb(spec)
+}
+
+/// Usage de `annot-set`.
+const ANNOT_SET_USAGE: &str =
+    "usage : annot-set <fichier> <page> <n°> [--rect x0,y0,x1,y1] [--move dx,dy] \
+[--color RRGGBB] [--fill RRGGBB|none] [--opacity 0..1] [--width N] [--text \"…\"] \
+[--state accepted|rejected|cancelled|completed|none] [--marked oui|non] [--author NOM] -o <sortie>";
+
+/// Statut de relecture nommé en ligne de commande, en anglais comme dans le
+/// fichier ou en français.
+fn review_state_arg(
+    rest: &[String],
+) -> acrux_core::Result<Option<acrux_features::annotations::review::ReviewState>> {
+    use acrux_features::annotations::review::ReviewState;
+    let Some(s) = option_value(rest, "--state").map(|s| s.to_lowercase()) else {
+        return Ok(None);
+    };
+    Ok(Some(match s.as_str() {
+        "accepted" | "accepte" | "accepté" => ReviewState::Accepted,
+        "rejected" | "refuse" | "refusé" => ReviewState::Rejected,
+        "cancelled" | "annule" | "annulé" => ReviewState::Cancelled,
+        "completed" | "termine" | "terminé" => ReviewState::Completed,
+        "none" | "aucun" => ReviewState::None,
+        _ => {
+            return Err(acrux_core::Error::Corrupt(format!(
+                "--state : statut inconnu « {s} »\n{ANNOT_SET_USAGE}"
+            )))
+        }
+    }))
+}
+
+/// `--marked oui|non`.
+fn marked_arg(rest: &[String]) -> acrux_core::Result<Option<bool>> {
+    let Some(s) = option_value(rest, "--marked").map(|s| s.to_lowercase()) else {
+        return Ok(None);
+    };
+    match s.as_str() {
+        "oui" | "yes" | "1" | "true" => Ok(Some(true)),
+        "non" | "no" | "0" | "false" => Ok(Some(false)),
+        _ => Err(acrux_core::Error::Corrupt(format!(
+            "--marked : « oui » ou « non » attendu, reçu « {s} »"
+        ))),
+    }
+}
+
+/// Ce que `annot-set` change à l'annotation, d'après ses options ; `current`
+/// est son rectangle actuel, d'où part `--move`.
+fn annot_changes_arg(
+    rest: &[String],
+    current: acrux_core::Rect,
+) -> acrux_core::Result<acrux_features::annotations::AnnotChanges> {
+    let mut changes = acrux_features::annotations::AnnotChanges::default();
+    if let Some(spec) = option_value(rest, "--rect") {
+        changes.rect = Some(parse_rect(spec)?);
+    }
+    if let Some(spec) = option_value(rest, "--move") {
+        let d: Vec<f64> = spec
+            .split(',')
+            .filter_map(|v| v.trim().parse().ok())
+            .filter(|v: &f64| v.is_finite())
+            .collect();
+        let [dx, dy] = d[..] else {
+            return Err(acrux_core::Error::Corrupt(format!(
+                "--move : « dx,dy » attendu, reçu « {spec} »"
+            )));
+        };
+        let r = changes.rect.unwrap_or(current);
+        changes.rect = Some(acrux_core::Rect::new(
+            r.x0 + dx,
+            r.y0 + dy,
+            r.x1 + dx,
+            r.y1 + dy,
+        ));
+    }
+    if let Some(spec) = option_value(rest, "--color") {
+        changes.color = Some(color_arg(spec)?);
+    }
+    if let Some(spec) = option_value(rest, "--fill") {
+        changes.fill = Some(if matches!(spec.as_str(), "none" | "aucun" | "aucune") {
+            None
+        } else {
+            Some(color_arg(spec)?)
+        });
+    }
+    changes.opacity = number_option(rest, "--opacity")?;
+    changes.width = number_option(rest, "--width")?;
+    changes.contents = option_value(rest, "--text").map(|t| cli_text(t));
+    Ok(changes)
+}
+
+fn cmd_annot_set(path: &str, rest: &[String]) -> acrux_core::Result<()> {
+    use acrux_features::annotations::review::{set_state, StateChange};
+    use acrux_features::annotations::{set_annotation_properties, AnnotMeta};
+    let out = output_arg(rest)?;
+    let (doc, _) = open(path)?;
+    let pos = positional(rest);
+    let (pages, page, index) = annotation_target(&doc, &pos, ANNOT_SET_USAGE)?;
+    let current = acrux_features::annotations::list_annotations(&doc, &pages[page])?
+        .get(index)
+        .map_or_else(acrux_core::Rect::default, |a| a.rect);
+    let changes = annot_changes_arg(rest, current)?;
+    let state = review_state_arg(rest)?;
+    let marked = marked_arg(rest)?;
+    if changes.is_empty() && state.is_none() && marked.is_none() {
+        return Err(acrux_core::Error::Corrupt(format!(
+            "rien à changer\n{ANNOT_SET_USAGE}"
+        )));
+    }
+    let author = option_value(rest, "--author").map_or("acr", String::as_str);
+    if !changes.is_empty() {
+        set_annotation_properties(&doc, &pages[page], index, &changes)?;
+        println!("annotation #{} de la page {} modifiée", index + 1, page + 1);
+    }
+    let mut states = Vec::new();
+    if let Some(s) = state {
+        states.push((StateChange::Review(s), s.label()));
+    }
+    if let Some(m) = marked {
+        states.push((
+            StateChange::Marked(m),
+            if m { "case cochée" } else { "case décochée" },
+        ));
+    }
+    for (change, label) in states {
+        let pages = collect_pages(&doc)?;
+        set_state(
+            &doc,
+            &pages[page],
+            index,
+            change,
+            &AnnotMeta::fresh(Some(author)),
+        )?;
+        println!("statut : {label}");
+    }
+    save(&doc, &out, rest)
+}
+
+fn cmd_annot_remove(path: &str, rest: &[String]) -> acrux_core::Result<()> {
+    let usage = "usage : annot-remove <fichier> <page> <n°> -o <sortie>";
+    let out = output_arg(rest)?;
+    let (doc, _) = open(path)?;
+    let pos = positional(rest);
+    let (pages, page, index) = annotation_target(&doc, &pos, usage)?;
+    let list = acrux_features::annotations::list_annotations(&doc, &pages[page])?;
+    // Un élément de « remplir et signer » se retire par `fillsign`, un champ
+    // par les commandes des formulaires : on ne supprime jamais l'annotation
+    // d'un autre module par une erreur de numéro.
+    if let Some(a) = list
+        .get(index)
+        .filter(|a| a.fill_sign || a.subtype == "Widget")
+    {
+        return Err(acrux_core::Error::Corrupt(format!(
+            "l'annotation #{} est {} : elle se retire avec sa propre commande",
+            index + 1,
+            if a.fill_sign {
+                "un élément de « remplir et signer »"
+            } else {
+                "un champ de formulaire"
+            }
+        )));
+    }
+    acrux_features::annotations::remove_annotation(&doc, &pages[page], index)?;
+    let pages = collect_pages(&doc)?;
+    let after = acrux_features::annotations::list_annotations(&doc, &pages[page])?.len();
+    println!(
+        "annotation #{} de la page {} retirée ({} annotation(s) en moins, réponses comprises)",
+        index + 1,
+        page + 1,
+        list.len().saturating_sub(after)
+    );
+    save(&doc, &out, rest)
+}
+
+fn cmd_reply(path: &str, rest: &[String]) -> acrux_core::Result<()> {
+    use acrux_features::annotations::AnnotMeta;
+    let usage = "usage : reply <fichier> <page> <n°> <texte> [--author NOM] -o <sortie>";
+    let out = output_arg(rest)?;
+    let (doc, _) = open(path)?;
+    let pos = positional(rest);
+    let (pages, page, index) = annotation_target(&doc, &pos, usage)?;
+    let text = pos
+        .get(2)
+        .map(|t| cli_text(t))
+        .filter(|t| !t.trim().is_empty())
+        .ok_or_else(|| acrux_core::Error::Corrupt(usage.into()))?;
+    let author = option_value(rest, "--author").map_or("acr", String::as_str);
+    acrux_features::annotations::review::add_reply(
+        &doc,
+        &pages[page],
+        index,
+        &text,
+        &AnnotMeta::fresh(Some(author)),
+    )?;
+    println!(
+        "réponse de {author} ajoutée à l'annotation #{} de la page {}",
+        index + 1,
+        page + 1
+    );
+    save(&doc, &out, rest)
 }
 
 /// Identifiant d'annotation raccourci pour l'affichage. Ceux d'Acrux
@@ -2421,22 +2728,6 @@ fn cmd_annotate(path: &str, rest: &[String]) -> acrux_core::Result<()> {
     save(&doc, &out, rest)
 }
 
-/// Date PDF `D:AAAAMMJJHHmmSS…` rendue lisible ; la chaîne est rendue telle
-/// quelle si elle n'a pas cette forme (les fichiers réels en contiennent de
-/// toutes sortes).
-fn readable_date(raw: &str) -> String {
-    let digits: Vec<char> = raw.trim_start_matches("D:").chars().collect();
-    if digits.len() < 8 || !digits[..8].iter().all(char::is_ascii_digit) {
-        return raw.to_string();
-    }
-    let part = |a: usize, b: usize| -> String { digits[a..b.min(digits.len())].iter().collect() };
-    let date = format!("{}-{}-{}", part(0, 4), part(4, 6), part(6, 8));
-    if digits.len() >= 12 && digits[8..12].iter().all(char::is_ascii_digit) {
-        return format!("{date} {}:{}", part(8, 10), part(10, 12));
-    }
-    date
-}
-
 fn cmd_attachments(path: &str) -> acrux_core::Result<()> {
     let (doc, _) = open(path)?;
     let list = acrux_features::attach::list_attachments(&doc)?;
@@ -2448,9 +2739,10 @@ fn cmd_attachments(path: &str) -> acrux_core::Result<()> {
             a.mime.as_deref().unwrap_or("type inconnu"),
             a.page
                 .map_or(String::new(), |p| format!("  page {}", p + 1)),
-            a.modified
-                .as_ref()
-                .map_or(String::new(), |d| format!("  {}", readable_date(d))),
+            a.modified.as_ref().map_or(String::new(), |d| format!(
+                "  {}",
+                acrux_features::annotations::readable_date(d)
+            )),
             a.description
                 .as_ref()
                 .map_or(String::new(), |d| format!("  « {d} »")),
@@ -4849,6 +5141,50 @@ Ligne 2"
             number_option(&args(&["--opacity", "0,5"]), "--opacity").unwrap(),
             Some(0.5)
         );
+    }
+
+    /// Les options d'`annot-set` : couleur en hexadécimal ou en « r,g,b »,
+    /// déplacement relatif au rectangle actuel, fond retiré, statut en
+    /// français ou en anglais.
+    #[test]
+    #[allow(clippy::float_cmp)] // des huitièmes d'octet : des valeurs exactes
+    fn annot_set_lit_ses_options() {
+        use acrux_features::annotations::review::ReviewState;
+        assert_eq!(color_arg("FF8000").unwrap(), [1.0, 128.0 / 255.0, 0.0]);
+        assert_eq!(color_arg("#0000ff").unwrap(), [0.0, 0.0, 1.0]);
+        assert_eq!(color_arg("0,1,0").unwrap(), [0.0, 1.0, 0.0]);
+        assert!(color_arg("vert").is_err());
+        let rect = acrux_core::Rect::new(10.0, 10.0, 50.0, 30.0);
+        let c = annot_changes_arg(
+            &args(&["--move", "5,-2", "--fill", "none", "--text", "a\nb"]),
+            rect,
+        )
+        .unwrap();
+        assert_eq!(c.rect, Some(acrux_core::Rect::new(15.0, 8.0, 55.0, 28.0)));
+        assert_eq!(c.fill, Some(None));
+        assert_eq!(
+            c.contents.as_deref(),
+            Some(
+                "a
+b"
+            )
+        );
+        assert!(annot_changes_arg(&args(&["--move", "5"]), rect).is_err());
+        assert!(annot_changes_arg(&args(&[]), rect).unwrap().is_empty());
+        assert_eq!(
+            review_state_arg(&args(&["--state", "Accepté"])).unwrap(),
+            Some(ReviewState::Accepted)
+        );
+        assert_eq!(
+            review_state_arg(&args(&["--state", "none"])).unwrap(),
+            Some(ReviewState::None)
+        );
+        assert!(review_state_arg(&args(&["--state", "peut-être"])).is_err());
+        assert_eq!(marked_arg(&args(&["--marked", "oui"])).unwrap(), Some(true));
+        assert!(marked_arg(&args(&["--marked", "bof"])).is_err());
+        let pos = args(&["1", "3", "--state", "accepted", "--marked", "non"]);
+        let pos: Vec<&str> = positional(&pos).into_iter().map(String::as_str).collect();
+        assert_eq!(pos, ["1", "3"]);
     }
 
     #[test]

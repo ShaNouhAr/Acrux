@@ -33,7 +33,7 @@ pub use content::{parse_content, ContentLexer, InlineImage, Operation};
 pub use function::Function;
 pub use interpreter::{layers, Layer, RenderOptions, Renderer};
 pub use page::{
-    add_rotation, page_pixel_size, page_pixel_size_rotated, render_page, render_page_rotated,
-    RenderedPage,
+    add_rotation, page_pixel_size, page_pixel_size_rotated, render_annotation, render_page,
+    render_page_rotated, RenderedPage,
 };
 pub use state::GraphicsState;
