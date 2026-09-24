@@ -98,7 +98,13 @@ acr info fichier.pdf
 
 `info`, `pages`, `dump`, `check` inspectent un fichier (y compris cassé ou chiffré avec un mot
 de passe vide) ; `rotate`, `delete`, `reorder`, `extract`, `merge`, `rewrite` le modifient
-(enregistrement incrémental par défaut, `--full` pour une réécriture complète ; `rewrite --compress`
+(enregistrement incrémental par défaut, `--full` pour une réécriture complète ; `extract --each`
+écrit un fichier par page ; `insert-blank <f> 4` insère une page vierge au format de sa voisine,
+`replace <f> 2-3 source.pdf` remplace le contenu de pages en gardant leurs signets, liens et
+commentaires ; `split` **fractionne** : `--every 10`, `--bookmarks` (un fichier par signet de
+premier niveau, son titre dans le nom), `--max-size 2M`, `--each`, dans le dossier du document
+ou `-d <dossier>`, en `rapport-01.pdf`… et sans jamais écraser un fichier sans `--force` ;
+`rewrite --compress`
 recompresse les flux en Flate avec notre propre compresseur, `rewrite --compact` y ajoute les flux
 d'objets et une table xref compressée) ;
 `create` **fabrique** un PDF : `--blank` (page vierge, `--size A4|lettre|légal|tabloïd|dl|c5|210x297mm`,
@@ -263,7 +269,7 @@ jamais joindre deux paragraphes ; l'apostrophe typographique, l'espace insécabl
 
 **Ctrl+Maj+P ouvre la palette de commandes.** Elle liste tout ce que l'application sait faire
 avec le raccourci de chaque entrée, se filtre en tapant (sans accents, et « rotation » trouve
-« Pivoter la page »), et remplace la barre de menus que ce logiciel n'a pas. Les commandes y
+« Pivoter les pages »), et remplace la barre de menus que ce logiciel n'a pas. Les commandes y
 suivent l'ordre de l'usage — ouvrir, enregistrer, rechercher, imprimer, remplir et signer… —,
 précédées des cinq dernières lancées depuis la palette, retenues d'une séance à l'autre. Les
 lettres trouvées s'éclairent ; la liste défile avec la sélection (flèches, `PgUp` / `PgDn`,
@@ -274,7 +280,10 @@ aide-mémoire.
 **Le clic droit ouvre un menu** (ou la touche « menu » du clavier, ou `Maj+F10`) : sur la page
 (copier, surligner, souligner, barrer, souligner d'un trait ondulé, remplacer le texte, poser une
 note ici, insérer du texte ici, tout sélectionner, pivoter la page, imprimer, propriétés),
-sur une vignette (pivoter, dupliquer, extraire, supprimer **cette** page), sur un onglet (fermer,
+sur une vignette (pivoter, dupliquer, insérer une page vierge avant ou après, insérer des pages,
+remplacer, extraire, supprimer, tout sélectionner — pour **les vignettes sélectionnées** : un clic
+droit hors de la sélection la remplace par cette seule vignette, comme dans l'Explorateur), sur
+un onglet (fermer,
 fermer les autres, copier le chemin, ouvrir le dossier du fichier) et sur un document récent de
 l'accueil (ouvrir, copier le chemin, ouvrir le dossier, retirer de la liste). Chaque élément lance
 la commande de la palette et affiche son raccourci ; flèches, `Entrée`, `Échap` et l'initiale d'un
@@ -350,10 +359,12 @@ blanche, ou de l'image ou du texte copiés.
 
 | Modifier | |
 | --- | --- |
-| `R` / `Maj+R` | pivoter la page courante |
-| `Ctrl+Suppr` | supprimer la page (confirmation) |
+| « Organiser les pages » (colonne de droite, palette) | le panneau des vignettes s'ouvre et prend le clavier : **`Ctrl+clic`** ajoute ou retire une vignette de la sélection, **`Maj+clic`** (ou `Maj+↑` / `Maj+↓`) sélectionne une plage, **`Ctrl+A`** (panneau survolé ou au clavier) sélectionne tout, `Ctrl+Espace` bascule la vignette du focus, `Échap` lève la sélection ; **glisser** une vignette sélectionnée déplace tout le bloc. Les vignettes sélectionnées portent un voile d'accent : c'est exactement ce sur quoi agissent les commandes de page |
+| `R` / `Maj+R` | pivoter les pages sélectionnées, sinon la page courante (une seule modification, un seul `Ctrl+Z`) |
+| `Ctrl+Suppr`, `Suppr` dans le panneau | supprimer les pages sélectionnées (confirmation ; tout supprimer est refusé) |
 | `Ctrl+I` | insérer les pages d'un autre fichier avant la page courante |
-| palette, clic droit sur une vignette | dupliquer la page, extraire la page dans un nouveau fichier |
+| palette, colonne d'outils, clic droit sur une vignette | **page vierge** avant ou après (format et orientation de la voisine), dupliquer (les copies suivent le bloc), **remplacer des pages** par celles d'un autre fichier (signets, liens et commentaires gardés), extraire dans un fichier ou **un fichier par page** |
+| « Fractionner le document… » (palette, colonne d'outils) | par **nombre de pages**, par **signets de premier niveau**, par **taille maximale** (« 2 », « 2,5 » Mo ou « 500 Ko ») ou une page par fichier ; le dossier se choisit dans « Enregistrer sous » (`rapport-1.pdf` donne `rapport-01.pdf`…), les fichiers s'écrivent en arrière-plan, rien n'est écrasé (« (2) ») et le document est fractionné tel qu'il s'affiche |
 | `E` | modifier le texte sélectionné (même police, la ligne se recompose) |
 | `H`, `Maj+H` | surligner la sélection, la surligner en y joignant un commentaire |
 | `U`, `Maj+U` | souligner la sélection, la souligner en y joignant un commentaire |

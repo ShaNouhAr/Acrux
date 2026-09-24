@@ -378,6 +378,13 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   dans l'onglet : `acrux_render::render_page_rotated` ajoute ses degrés au `/Rotate` de la page, et
   toute conversion page ↔ écran passe par `shown_rotation` ; rien n'est écrit dans le document, et
   l'impression comme la vignette de l'accueil l'ignorent.
+- `viewer/organize` : **organiser les pages**. La sélection des vignettes (`ui/panel::PageSelection`)
+  vit dans l'onglet ; tant qu'elle est vide, c'est la page courante. Toutes les commandes de page
+  passent par `target_pages` : ce qui est sous le voile d'accent est exactement ce sur quoi elles
+  agissent, et un geste sur plusieurs pages est **une** `EditOp`. Après chaque modification, la
+  sélection suit ses pages par `history::page_after`, comme l'historique de la vue. Le
+  fractionnement se fait sur le fil de rendu (`WorkerMessage::Split`, un seul avis à la fin), sur
+  son document qui a rejoué l'historique : on fractionne ce qu'on voit.
 - La **décoration de la fenêtre** suit le thème : `WindowHandle::set_frame_theme` demande le mode
   sombre (`DWMWA_USE_IMMERSIVE_DARK_MODE`) puis, quand le système sait les prendre, la couleur
   exacte de la barre de titre, de son texte et de la bordure. Les attributs inconnus d'un système

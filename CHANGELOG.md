@@ -9,6 +9,41 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 
 ## 0.23.0 — non publiée
 
+- **Organiser les pages, plusieurs à la fois.** Dans le panneau des
+  vignettes, `Ctrl+clic` ajoute ou retire une page de la sélection,
+  `Maj+clic` (ou `Maj+↑` / `Maj+↓`) prend une plage, `Ctrl+A` — le pointeur
+  sur le panneau — les prend toutes ; les pages choisies portent un voile
+  d'accent. Pivoter (`R`, `Maj+R`), supprimer (`Suppr`, `Ctrl+Suppr`),
+  dupliquer, extraire : tout agit sur **ce qui est sélectionné**, et un seul
+  `Ctrl+Z` défait le geste entier. Glisser une vignette sélectionnée déplace
+  **tout le bloc**. « Organiser les pages » (colonne d'outils, palette) ouvre
+  le panneau au clavier ; le clic droit sur une vignette propose tout cela
+  pour la sélection.
+- **Page vierge avant ou après**, au format et à l'orientation de la page
+  voisine (palette, colonne d'outils, clic droit sur une vignette).
+- **Remplacer des pages** par celles d'un autre fichier : la page garde ses
+  signets, ses liens, son étiquette et ses commentaires, seul son contenu
+  change. Un fichier protégé par un mot de passe se prend une fois ouvert
+  dans un onglet.
+- **Fractionner le document** : par nombre de pages, par signets de premier
+  niveau (le titre entre dans le nom du fichier), par taille maximale
+  (« 2 », « 2,5 » Mo, « 500 Ko ») ou une page par fichier. Le dossier se
+  choisit dans « Enregistrer sous », les fichiers (`rapport-01.pdf`…)
+  s'écrivent en arrière-plan sans figer la fenêtre, et un fichier déjà là
+  n'est jamais écrasé (« rapport-01 (2).pdf »). **Extraire** plusieurs pages
+  les met dans un seul fichier ou un fichier par page.
+- **`acr split`** (`--every N`, `--bookmarks`, `--max-size 2M`, `--each`,
+  `-d <dossier>`, `--prefix`, `--force`), **`acr extract --each`**,
+  **`acr insert-blank`** et **`acr replace`**.
+- Une page extraite ne traîne plus les autres : un lien « voir page 40 »
+  faisait entrer la page 40 entière, images comprises, dans le fichier
+  extrait. Le lien reste, vers la page extraite s'il la vise, sans
+  destination sinon. Les calques masqués restent masqués.
+- Une page dupliquée a **ses propres commentaires** : déplacer une note sur
+  la copie la déplaçait aussi sur l'original.
+- Une fenêtre de question à plusieurs réponses s'élargit plutôt que de
+  laisser ses boutons déborder.
+
 - **Tamponner, comme dans Acrobat.** L'outil « Tamponner » (barre des
   commentaires, colonne d'outils, palette) déroule les douze tampons
   d'Acrobat — Approuvé, Refusé, Brouillon, Confidentiel, Final, Terminé,
