@@ -74,6 +74,10 @@ const CLICK_TEXT_WIDTH: f64 = 200.0;
 /// Largeur de la zone d'une légende, en points.
 const CALLOUT_WIDTH: f64 = 150.0;
 
+/// Écart, en points, entre le bord de la page et une zone de texte qu'on
+/// y ramène.
+const PAGE_MARGIN: f64 = 4.0;
+
 /// Distance, en pixels d'écran, en deçà de laquelle un geste est un clic.
 const CLICK_SLOP: i32 = 3;
 
@@ -495,6 +499,27 @@ pub(super) fn callout_box(anchor: Point, to: Point, moved: bool, height: f64) ->
     Rect::new(x0, y0, x0 + CALLOUT_WIDTH, y0 + height)
 }
 
+/// La même zone, glissée à l'intérieur de `bounds` (la page, dans le même
+/// repère) à [`PAGE_MARGIN`] du bord, sans changer de taille : une légende
+/// désignée près du bord droit s'étendait hors de la page, et son texte
+/// s'y tapait sans se voir. Plus large que la page, elle s'aligne à gauche.
+pub(super) fn keep_inside(r: Rect, bounds: &Rect) -> Rect {
+    let shift = |lo: f64, hi: f64, min: f64, max: f64| {
+        if hi > max {
+            (max - hi).max(min - lo)
+        } else if lo < min {
+            min - lo
+        } else {
+            0.0
+        }
+    };
+    let (min_x, max_x) = (bounds.x0 + PAGE_MARGIN, bounds.x1 - PAGE_MARGIN);
+    let (min_y, max_y) = (bounds.y0 + PAGE_MARGIN, bounds.y1 - PAGE_MARGIN);
+    let dx = shift(r.x0, r.x1, min_x, max_x);
+    let dy = shift(r.y0, r.y1, min_y, max_y);
+    Rect::new(r.x0 + dx, r.y0 + dy, r.x1 + dx, r.y1 + dy)
+}
+
 /// Annotation que donne un brouillon, et sa page ; rien pour un geste qui
 /// ne laisse rien (une ligne sans longueur, un dessin sans trait, une zone
 /// de texte vide).
@@ -882,7 +907,7 @@ impl Viewer {
                 } else {
                     let right = self.crop_of(page).map_or(from.x + CLICK_TEXT_WIDTH, |c| {
                         (from.x + CLICK_TEXT_WIDTH)
-                            .min(back.transform_rect(&c).x1 - 4.0)
+                            .min(back.transform_rect(&c).x1 - PAGE_MARGIN)
                             .max(from.x + 40.0)
                     });
                     (Rect::new(from.x, from.y - 10.0, right, from.y), 0.0)
@@ -897,17 +922,8 @@ impl Viewer {
                 moved,
                 ..
             } => {
-                let height = freetext::fit_height(
-                    "",
-                    self.draw_style.font,
-                    self.draw_style.text_size,
-                    CALLOUT_WIDTH,
-                    TEXT_BORDER,
-                );
                 let rotation = self.page_rotation(page);
-                let back = freetext::upright(-rotation);
-                let anchor = back.apply(from);
-                let rect = callout_box(anchor, back.apply(to), moved, height);
+                let (rect, anchor) = self.callout_frame(page, rotation, from, to, moved);
                 self.open_text(page, rotation, rect, 0.0, Some(anchor));
             }
             Draft::Shape { .. } => {
@@ -930,6 +946,33 @@ impl Viewer {
                 self.draft = Some(Draft::Text(t));
             }
         }
+    }
+
+    /// Zone d'une légende désignée en `from` (l'ancre) et relâchée en `to`,
+    /// et son ancre, dans le repère droit de `rotation` : celle que montre
+    /// l'aperçu et celle qui s'ouvre, gardée dans la page.
+    fn callout_frame(
+        &self,
+        page: usize,
+        rotation: i32,
+        from: Point,
+        to: Point,
+        moved: bool,
+    ) -> (Rect, Point) {
+        let height = freetext::fit_height(
+            "",
+            self.draw_style.font,
+            self.draw_style.text_size,
+            CALLOUT_WIDTH,
+            TEXT_BORDER,
+        );
+        let back = freetext::upright(-rotation);
+        let anchor = back.apply(from);
+        let rect = callout_box(anchor, back.apply(to), moved, height);
+        let rect = self
+            .crop_of(page)
+            .map_or(rect, |c| keep_inside(rect, &back.transform_rect(&c)));
+        (rect, anchor)
     }
 
     /// Ouvre une zone de texte à taper ; `rect` et `anchor` sont dans le
@@ -1686,8 +1729,7 @@ impl Viewer {
                     return;
                 }
                 let to = constrain(*from, *to, *tool, *shift);
-                let rotation = self.page_rotation(draft.page());
-                self.paint_shape(frame, &m, *tool, [*from, to], rotation);
+                self.paint_shape(frame, &m, *tool, [*from, to], draft.page());
             }
             Draft::Ink { strokes, .. } => {
                 let shape = style.shape(AnnotTool::Pencil);
@@ -1770,16 +1812,15 @@ impl Viewer {
         );
     }
 
-    /// Aperçu d'une forme en cours de tracé, avec les réglages en cours ;
-    /// `rotation` est celle de la page à l'écran (la zone d'une légende se
-    /// place dans son repère droit).
+    /// Aperçu d'une forme en cours de tracé sur la page `page`, avec les
+    /// réglages en cours.
     fn paint_shape(
         &mut self,
         frame: &mut Frame<'_>,
         m: &Matrix,
         tool: AnnotTool,
         [from, to]: [Point; 2],
-        rotation: i32,
+        page: usize,
     ) {
         let style = self.draw_style;
         let shape = style.shape(tool);
@@ -1834,15 +1875,10 @@ impl Viewer {
                 };
                 self.stroke_preview(frame, &polyline(&[from, to]), m, &line, true);
                 self.paint_ending(frame, m, [from, to], &line, LineEnding::OpenArrow);
-                let height = freetext::fit_height(
-                    "",
-                    style.font,
-                    style.text_size,
-                    CALLOUT_WIDTH,
-                    TEXT_BORDER,
-                );
-                let back = freetext::upright(-rotation);
-                let local = callout_box(back.apply(from), back.apply(to), true, height);
+                // La zone dans le repère droit de la page à l'écran, là où
+                // elle s'ouvrira.
+                let rotation = self.page_rotation(page);
+                let (local, _) = self.callout_frame(page, rotation, from, to, true);
                 let m_local = freetext::upright(rotation).then(m);
                 self.dashed_frame(frame, &m_local, &local);
             }
@@ -2215,6 +2251,28 @@ mod tests {
         assert_eq!((r.x1, r.y1), (50.0, 60.0));
         let r = callout_box(a, a, false, 20.0);
         assert!(r.x0 > a.x && r.y0 > a.y);
+    }
+
+    /// Désignée près du bord droit de la page, la zone d'une légende y est
+    /// ramenée, sans changer de taille ; déjà dedans, elle ne bouge pas.
+    #[test]
+    fn la_legende_reste_dans_la_page() {
+        let page = Rect::new(0.0, 0.0, 612.0, 792.0);
+        let r = callout_box(p(500.0, 700.0), p(560.0, 780.0), true, 20.0);
+        assert!(r.x1 > page.x1 && r.y1 > page.y1);
+        let inside = keep_inside(r, &page);
+        assert_eq!((inside.width(), inside.height()), (r.width(), r.height()));
+        assert_eq!((inside.x1, inside.y1), (608.0, 788.0));
+        let low = callout_box(p(100.0, 30.0), p(40.0, 10.0), true, 20.0);
+        assert_eq!(
+            (keep_inside(low, &page).x0, keep_inside(low, &page).y0),
+            (4.0, 4.0)
+        );
+        let fine = Rect::new(100.0, 100.0, 250.0, 120.0);
+        assert_eq!(keep_inside(fine, &page), fine);
+        // Plus large que la page : alignée à gauche.
+        let wide = keep_inside(Rect::new(10.0, 100.0, 710.0, 120.0), &page);
+        assert!((wide.x0 - 4.0).abs() < 1e-9, "{wide:?}");
     }
 
     #[test]
