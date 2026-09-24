@@ -11,6 +11,7 @@ qui travaille sur la machine. L'application peint dans son tampon (que l'on réc
 . .\tools\headless.ps1
 Start-App "tests\corpus\reels\chrome-skia-2pages-texte-tableau-svg.pdf"
 Key 0x73          # F4 : panneau latéral
+Key 0x72 -Shift   # Maj+F3 : occurrence précédente (-Shift tient Maj le temps de la touche)
 Key 0x75          # F6 : zone suivante
 Click 300 85      # clic en coordonnées client
 Hover 300 85      # survol seul, sans clic (état survolé, position d'une note)
@@ -100,13 +101,20 @@ Le journal note `zoom : 300 % vers (x, y)` à chaque changement de zoom, `aperç
 une page est montrée étirée, et `rendu : page N en M ms` pour chaque rendu (la barre d'état ne
 l'affiche plus).
 
+La recherche note ce qu'elle fait dans le journal : `recherche : ouverte « … »`, `recherche :
+« mot » : 12 occurrence(s)` à la fin de chaque parcours, `recherche : « mot » 3 sur 12` à
+chaque saut, `recherche : respecter la casse activé`, `recherche : fermée`. Un parcours
+interrompu par une frappe ne note pas de total. Pour sélectionner un mot de la page avant
+`Chord "f"`, un `Drag` doit **commencer sur le texte** : parti de la marge, le geste fait
+glisser la page au lieu de sélectionner.
+
 `WM_MOUSEWHEEL` est le seul message de souris dont la position est en coordonnées
 **d'écran** : `Wheel` applique l'échelle puis convertit le point (`ClientToScreen`), comme le
 fait Windows, et l'application le reconvertit. Poster à la main un `WM_MOUSEWHEEL` avec des
 coordonnées client viserait donc à côté. Le journal (`Journal "Wheel"`) montre la position
 reçue, en coordonnées de la capture.
 
-Codes de touches utiles : `0x73` F4, `0x74` F5, `0x75` F6, `0x7A` F11, `0x0D` Entrée, `0x1B` Échap,
+Codes de touches utiles : `0x72` F3, `0x73` F4, `0x74` F5, `0x75` F6, `0x7A` F11, `0x0D` Entrée, `0x1B` Échap,
 `0x09` Tab, `0x20` Espace, `0x25` à `0x28` flèches gauche, haut, droite, bas, `0x21`/`0x22` page
 précédente et suivante, `0x24`/`0x23` Origine et Fin.
 

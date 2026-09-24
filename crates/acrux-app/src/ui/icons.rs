@@ -96,8 +96,13 @@ pub enum Icon {
     Lock,
     /// Coche : l'élément en vigueur d'une liste (le zoom en cours).
     Check,
-    /// Chevron vers le bas : un bouton qui déroule une liste.
+    /// Chevron vers le bas : un bouton qui déroule une liste, ou
+    /// l'occurrence suivante d'une recherche.
     ChevronDown,
+    /// Chevron vers le haut : l'occurrence précédente d'une recherche.
+    ChevronUp,
+    /// Croix : fermer (la carte de recherche).
+    Close,
 }
 
 /// Contour d'une page, motif commun à beaucoup d'icônes.
@@ -474,6 +479,11 @@ pub fn geometry(icon: Icon) -> (Path, Path) {
         }
         Icon::Check => polyline(&mut lines, &[(5.0, 12.5), (10.0, 17.5), (19.0, 7.5)]),
         Icon::ChevronDown => polyline(&mut lines, &[(7.0, 10.0), (12.0, 15.0), (17.0, 10.0)]),
+        Icon::ChevronUp => polyline(&mut lines, &[(7.0, 14.0), (12.0, 9.0), (17.0, 14.0)]),
+        Icon::Close => {
+            polyline(&mut lines, &[(7.0, 7.0), (17.0, 17.0)]);
+            polyline(&mut lines, &[(17.0, 7.0), (7.0, 17.0)]);
+        }
         Icon::Redact => {
             page(&mut lines, 5.0, 3.5, 14.0, 17.0);
             bar(&mut fills, 7.5, 9.5, 9.0, 5.0);
@@ -678,6 +688,8 @@ mod tests {
             Icon::ViewMode,
             Icon::Check,
             Icon::ChevronDown,
+            Icon::ChevronUp,
+            Icon::Close,
         ];
         let mut raster = Rasterizer::new();
         for icon in icons {

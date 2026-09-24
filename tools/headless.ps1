@@ -92,10 +92,19 @@ function LParam($x, $y) {
 # second appui et fabrique un second WM_CHAR (deux espaces pour une barre d'espace).
 $script:KeyUp = [IntPtr]0xC0000001L
 
-function Key($vk) {
+# -Shift tient Maj enfoncee le temps de la touche (Maj+F3, Maj+Entree, Maj+F4).
+function Key($vk, [switch]$Shift) {
+    if ($Shift) {
+        [W.HL]::PostMessage($script:Hwnd, 0x0100, [IntPtr]0x10, [IntPtr]1) | Out-Null
+        Start-Sleep -Milliseconds 60
+    }
     [W.HL]::PostMessage($script:Hwnd, 0x0100, [IntPtr]$vk, [IntPtr]1) | Out-Null
     Start-Sleep -Milliseconds 90
     [W.HL]::PostMessage($script:Hwnd, 0x0101, [IntPtr]$vk, $script:KeyUp) | Out-Null
+    if ($Shift) {
+        Start-Sleep -Milliseconds 60
+        [W.HL]::PostMessage($script:Hwnd, 0x0101, [IntPtr]0x10, $script:KeyUp) | Out-Null
+    }
     Start-Sleep -Milliseconds 350
 }
 

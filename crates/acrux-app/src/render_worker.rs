@@ -17,6 +17,7 @@ use acrux_features::export::{
 };
 use acrux_features::forms::{set_field_value, FieldValue};
 use acrux_features::redact::{apply_redactions, mark_redactions, RedactionMark};
+use acrux_features::text::SearchOptions;
 use acrux_graphics::{Bitmap, Color};
 use acrux_render::{render_page, RenderOptions};
 
@@ -79,10 +80,13 @@ pub enum EditOp {
     },
     /// Remplacer un texte partout dans le document.
     ReplaceAll {
-        /// Texte cherché (la casse est ignorée).
+        /// Texte cherché.
         find: String,
         /// Texte de remplacement.
         with: String,
+        /// Casse et mot entier, comme la recherche qui a trouvé les
+        /// occurrences : on remplace ce qui était surligné, rien d'autre.
+        options: SearchOptions,
     },
     /// Modifier un objet de la page : déplacer, redimensionner, supprimer,
     /// réordonner.
@@ -268,7 +272,11 @@ impl EditOp {
                     style: None,
                 }],
             ),
-            EditOp::ReplaceAll { find, with } => replace_all(doc, find, with).map(|_| ()),
+            EditOp::ReplaceAll {
+                find,
+                with,
+                options,
+            } => replace_all_with(doc, find, with, *options).map(|_| ()),
             EditOp::EditObject { page, edits } => {
                 let pages = acrux_document::collect_pages(doc)?;
                 let target = pages.get(*page).ok_or_else(|| {
@@ -706,16 +714,33 @@ impl Drop for RenderWorker {
     }
 }
 
-/// Remplace toutes les occurrences d'un texte dans le document.
-///
-/// La réécriture est **chirurgicale** : chaque occurrence garde la police,
-/// le corps et la couleur de ce qu'elle remplace, et le reste de la page ne
-/// bouge pas d'un glyphe. Rend le nombre d'occurrences remplacées.
+/// Remplace toutes les occurrences d'un texte dans le document, sans tenir
+/// compte de la casse (voir [`replace_all_with`]).
 ///
 /// # Errors
 /// Page illisible, ou réécriture impossible.
 pub fn replace_all(doc: &Document, find: &str, with: &str) -> acrux_core::Result<usize> {
-    if find.is_empty() {
+    replace_all_with(doc, find, with, SearchOptions::default())
+}
+
+/// Remplace toutes les occurrences d'un texte dans le document, selon les
+/// options de la recherche (casse, mot entier).
+///
+/// La réécriture est **chirurgicale** : chaque occurrence garde la police,
+/// le corps et la couleur de ce qu'elle remplace, et le reste de la page ne
+/// bouge pas d'un glyphe. Une occurrence à cheval sur deux lignes (une
+/// césure) n'est pas touchée : une édition réécrit une ligne à la fois. Rend
+/// le nombre d'occurrences remplacées.
+///
+/// # Errors
+/// Page illisible, ou réécriture impossible.
+pub fn replace_all_with(
+    doc: &Document,
+    find: &str,
+    with: &str,
+    options: SearchOptions,
+) -> acrux_core::Result<usize> {
+    if find.trim().is_empty() {
         return Ok(0);
     }
     let pages = acrux_document::collect_pages(doc)?;
@@ -724,7 +749,7 @@ pub fn replace_all(doc: &Document, find: &str, with: &str) -> acrux_core::Result
         let Ok(text) = acrux_features::text::extract_page_text(doc, page) else {
             continue;
         };
-        for target in acrux_features::edit_text::find_ranges(&text, find) {
+        for target in acrux_features::edit_text::find_ranges_with(&text, find, options) {
             edits.push(TextEdit {
                 page: index,
                 target,
@@ -810,6 +835,7 @@ mod tests {
                 EditOp::ReplaceAll {
                     find: "a".into(),
                     with: "b".into(),
+                    options: SearchOptions::default(),
                 },
                 Right::Modify,
             ),

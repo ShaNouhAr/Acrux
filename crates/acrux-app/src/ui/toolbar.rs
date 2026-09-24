@@ -1308,7 +1308,7 @@ mod tests {
         assert!(afficher.ends_with("(F4)"), "{afficher}");
         assert!(tip_text(&outils, &with_document())
             .unwrap_or_default()
-            .ends_with("(F3)"));
+            .ends_with("(Maj+F4)"));
     }
 
     #[test]

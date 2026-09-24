@@ -98,6 +98,10 @@ pub enum Command {
     ToggleTheme,
     /// Rechercher.
     Search,
+    /// Occurrence suivante de la recherche (F3).
+    FindNext,
+    /// Occurrence précédente de la recherche (Maj+F3).
+    FindPrevious,
     /// Rechercher et remplacer.
     Replace,
     /// Copier la sélection.
@@ -203,6 +207,8 @@ impl Command {
             Command::GoToPage => "go-to-page",
             Command::ToggleTheme => "toggle-theme",
             Command::Search => "search",
+            Command::FindNext => "find-next",
+            Command::FindPrevious => "find-previous",
             Command::Replace => "replace",
             Command::Copy => "copy",
             Command::SelectAll => "select-all",
@@ -279,6 +285,8 @@ fn shortcut_in_lang(shortcut: &'static str, english: bool) -> &'static str {
         "Ctrl+Maj+S" => "Ctrl+Shift+S",
         "Ctrl+Maj+E" => "Ctrl+Shift+E",
         "Maj+R" => "Shift+R",
+        "Maj+F3" => "Shift+F3",
+        "Maj+F4" => "Shift+F4",
         "Maj+M" => "Shift+M",
         "Ctrl+Suppr" => "Ctrl+Del",
         "Ctrl+Page préc." => "Ctrl+Page Up",
@@ -397,6 +405,20 @@ const ENTRIES: &[Entry] = &[
         shortcut: "Ctrl+G",
         keywords: "atteindre saut numero etiquette folio romain i ii iii annexe",
         command: Command::GoToPage,
+        needs_document: true,
+    },
+    Entry {
+        label: "Occurrence suivante",
+        shortcut: "F3",
+        keywords: "recherche suivant trouver encore prochaine",
+        command: Command::FindNext,
+        needs_document: true,
+    },
+    Entry {
+        label: "Occurrence précédente",
+        shortcut: "Maj+F3",
+        keywords: "recherche precedent trouver arriere",
+        command: Command::FindPrevious,
         needs_document: true,
     },
     Entry {
@@ -555,7 +577,7 @@ const ENTRIES: &[Entry] = &[
     },
     Entry {
         label: "Barre des outils",
-        shortcut: "F3",
+        shortcut: "Maj+F4",
         keywords: "outils colonne droite modifier signer biffer",
         command: Command::ToggleTools,
         needs_document: false,

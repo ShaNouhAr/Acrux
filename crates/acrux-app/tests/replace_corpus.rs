@@ -187,3 +187,66 @@ fn un_mot_absent_ne_touche_a_rien() {
     assert_eq!(replace_all(&doc, "", "rien").unwrap(), 0);
     assert_eq!(before, pages_text(&doc));
 }
+
+/// Nombre d'apparitions exactes (casse comprise) d'un mot dans le texte de
+/// tout le document.
+fn exact_count(pages: &[Vec<(String, acrux_core::Rect)>], word: &str) -> usize {
+    pages
+        .iter()
+        .flat_map(|p| p.iter())
+        .map(|(line, _)| line.matches(word).count())
+        .sum()
+}
+
+/// « Respecter la casse » ne remplace que la forme exacte : le mot en
+/// capitale disparaît, le même mot en minuscules reste lisible, et l'on
+/// n'en remplace jamais plus que sans l'option.
+#[test]
+fn respecter_la_casse_ne_remplace_que_la_forme_exacte() {
+    use acrux_app::render_worker::replace_all_with;
+    use acrux_features::text::SearchOptions;
+    let case = SearchOptions {
+        match_case: true,
+        whole_word: false,
+    };
+    let mut tested = 0;
+    for path in corpus_files() {
+        let Ok(doc) = Document::load(&path) else {
+            continue;
+        };
+        let before = pages_text(&doc);
+        let Some(word) = common_word(&before) else {
+            continue;
+        };
+        let mut chars = word.chars();
+        let Some(first) = chars.next() else { continue };
+        let capital: String = first.to_uppercase().chain(chars).collect();
+        let lower_before = exact_count(&before, &word);
+        let Ok(exact) = replace_all_with(&doc, &capital, "zoubidou", case) else {
+            continue;
+        };
+        let after = pages_text(&doc);
+        assert_eq!(
+            exact_count(&after, &capital),
+            0,
+            "{} : « {capital} » reste après remplacement",
+            path.display()
+        );
+        assert_eq!(
+            exact_count(&after, &word),
+            lower_before,
+            "{} : « {word} », en minuscules, ne devait pas être touché",
+            path.display()
+        );
+        // Sans l'option, sur une copie neuve : au moins autant.
+        let Ok(fresh) = Document::load(&path) else {
+            continue;
+        };
+        let Ok(any) = replace_all(&fresh, &capital, "zoubidou") else {
+            continue;
+        };
+        assert!(exact <= any, "{} : {exact} > {any}", path.display());
+        tested += 1;
+    }
+    assert!(tested >= 3, "seulement {tested} document(s) éprouvé(s)");
+}

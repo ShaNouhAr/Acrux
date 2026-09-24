@@ -15,7 +15,7 @@
 //! | `lang`    | langue de l'interface : français ou anglais           |
 //! | `menu`    | menu contextuel du clic droit et listes déroulantes : éléments, raccourcis, clavier |
 //! | `modal`   | modèle commun des cartes modales : carte, fondu, rangée de boutons, invite |
-//! | `input`   | champ de saisie sur une ligne                         |
+//! | `input`   | champ de saisie sur une ligne, avec sélection (Ctrl+A, Maj+flèches) |
 //! | `icons`   | icônes vectorielles rasterisées à la demande          |
 //! | `toolbar` | barre d'outils (boutons, champ de page, zoom, annuler / rétablir, bascules) |
 //! | `panel`   | panneau latéral (vignettes, signets)                  |

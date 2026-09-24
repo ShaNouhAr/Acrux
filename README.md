@@ -119,6 +119,9 @@ produit des PNG (`--dpi`) ; `export` convertit (`--format png|jpeg|images|html|d
 `--dpi`, `--quality`, `--pages`, `--flow`) : pages en PNG ou en JPEG, images incorporées extraites
 dans leur format d'origine, page HTML fidèle (texte positionné, images en `data:`, polices du PDF
 en WOFF) ou refluée, document Word `.docx` et classeur Excel `.xlsx` des tableaux détectés ;
+`find <f> <texte>` cherche avec le moteur de l'application (une ligne par occurrence :
+page, ligne, contexte ; `--case` respecte la casse, `--word` ne prend que le mot entier,
+`--page N`), et une occurrence peut passer à la ligne dans un paragraphe ;
 `text` extrait le texte dans l'ordre de lecture (paragraphes, colonnes,
 tableaux, en-têtes et pieds de page ; `--markdown` et `--html` conservent titres, gras, italique,
 listes et tableaux, `--layout` garde le texte positionné comme sur la page) ; `annots` et `annotate` listent et
@@ -150,7 +153,7 @@ le rectangle exact des mots, sans rien dessiner, et `link` en pose un à la main
 (`link <f> <page> <x0,y0,x1,y1> <cible>`, la cible étant une adresse, `page:12`,
 `fichier.pdf#4` ou `nommee:NextPage`) ;
 `edit-text` **modifie le texte dans la page** (`--find`, `--replace`, `--page`, `--all`, `--size`,
-`--color r,g,b`, `--font`, `--bold`, `--italic`) : le flux de contenu est réécrit octet pour octet
+`--color r,g,b`, `--font`, `--bold`, `--italic`, `--case`, `--word`) : le flux de contenu est réécrit octet pour octet
 sauf le mot visé, réencodé avec la police en place (complétée depuis la police système si un
 caractère manque), et le texte qui suit ne bouge pas d'un point ; `reflow` recompose un paragraphe
 entier dans sa boîte (`--page`, `--paragraph`, `--text`, `--shrink`) en conservant interligne,
@@ -232,6 +235,15 @@ en retire un, `flatten` les fond définitivement dans les pages ;
 
 L'application graphique : `acrux.exe fichier.pdf` (ou Ctrl+O, ou déposer un fichier).
 
+**La recherche (Ctrl+F)** est une carte flottante en haut à droite : le champ, « Aa » (respecter
+la casse), « Mot entier », occurrence précédente et suivante, et une croix pour fermer ; en
+dessous, « 3 sur 12 », ou « Aucun résultat » en rouge avec le champ cerclé de rouge. La première
+occurrence montrée est la première **à partir de la page affichée**, comme dans Acrobat, et un
+gros document se parcourt par tranches sans figer la fenêtre. Une expression coupée par une fin
+de ligne se trouve, césure comprise (« docu- / mentation » en tapant « documentation »), sans
+jamais joindre deux paragraphes ; l'apostrophe typographique, l'espace insécable et les ligatures
+(« ﬁ ») ne font plus échouer une recherche tapée au clavier.
+
 **Ctrl+Maj+P ouvre la palette de commandes.** Elle liste tout ce que l'application sait faire
 avec le raccourci de chaque entrée, se filtre en tapant (sans accents, et « rotation » trouve
 « Pivoter la page »), et remplace la barre de menus que ce logiciel n'a pas. Les commandes y
@@ -302,7 +314,9 @@ l'A4 sur un écran à 150 %) ; la barre d'état le dit quand on bute dessus.
 | glisser sur le texte | sélectionner (double-clic : mot, triple-clic : ligne, `Maj+clic` : étendre) |
 | `Ctrl+C`, `Ctrl+A` | copier, tout sélectionner |
 | `Ctrl+D` | propriétés du document : fichier, taille, pages, version, métadonnées, protection |
-| `Ctrl+F` | rechercher (`Entrée` / `Maj+Entrée` : occurrence suivante / précédente) |
+| `Ctrl+F` | rechercher : le texte sélectionné sur la page devient la requête ; carte déjà ouverte, la requête est sélectionnée (on la relance ou on tape par-dessus) |
+| `Entrée` / `Maj+Entrée`, `F3` / `Maj+F3` | occurrence suivante / précédente (`F3` carte fermée relance la dernière recherche) |
+| « Aa », « Mot entier », ‹ › et × de la carte | respecter la casse, mot entier, précédente / suivante, fermer (`Échap`) |
 | `Ctrl+H` | rechercher et remplacer (`Tab` : d'un champ à l'autre, `Entrée` : remplacer, ou « Tout remplacer ») |
 
 Un **modèle 3D** (annotation `/3D` au format U3D) s'affiche sur la page ; un clic l'active, on le
@@ -321,7 +335,7 @@ une page par feuille, et `Ctrl+S` demande où ranger le document obtenu.
 | `H`, `Maj+H` | surligner la sélection, la surligner en y joignant un commentaire |
 | `N` | poser une note à la position de la souris |
 | clic sur une vidéo ou un son | lecture ; re-clic pour mettre en pause, clic sur la ligne de temps pour se déplacer |
-| `F3` | barre des outils, à droite (modifier, commenter, signer, pages, biffer) |
+| `Maj+F4` | barre des outils, à droite (modifier, commenter, signer, pages, biffer) |
 | `Ctrl+Maj+E` | **modifier le PDF** : on clique dans un texte et on tape ; ailleurs, on pose une zone |
 | `O` | modifier les objets : sélection, poignées, ordre, suppression |
 | `S` | remplir et signer : signature, paraphe, texte tapé sur la page, stylo, marques (encre au choix) |

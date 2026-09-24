@@ -3,9 +3,9 @@
 //! une barre d'état dessinée par le toolkit interne. Les pages sont rendues
 //! sur un fil séparé (`render_worker`) : l'interface ne se fige jamais.
 //!
-//! Fonctions : recherche (Ctrl+F), sélection de texte à la souris (simple,
-//! double et triple clic), copie (Ctrl+C), tout sélectionner (Ctrl+A),
-//! saisie du mot de passe des documents chiffrés.
+//! Fonctions : recherche (Ctrl+F, `viewer/search.rs`), sélection de texte à
+//! la souris (simple, double et triple clic), copie (Ctrl+C), tout
+//! sélectionner (Ctrl+A), saisie du mot de passe des documents chiffrés.
 //!
 //! Pas encore de barre d'outils ni de panneaux (voir ROADMAP.md phase 3).
 
@@ -35,7 +35,7 @@ use acrux_features::navigation::{
     flatten_outline, outline, page_links, Action, Destination, Link, PageIndex, View,
 };
 use acrux_features::redact::RedactionMark;
-use acrux_features::text::{extract_page_text, find, PageText};
+use acrux_features::text::{extract_page_text, PageText, SearchOptions};
 use acrux_graphics::{Bitmap, Color, Rasterizer};
 use acrux_render::page::base_matrix;
 use acrux_render::{page_pixel_size, render_page, RenderOptions};
@@ -48,9 +48,9 @@ use crate::render_worker::ExportFormat;
 use crate::render_worker::{EditOp, RenderWorker};
 use crate::selection::{SelectableText, Selection, TextPos};
 use crate::ui::anim::{ease_out, Anim, Clock};
-use crate::ui::input::{InputAction, TextInput};
+use crate::ui::input::TextInput;
 use crate::ui::lang::{self, Lang};
-use crate::ui::modal::{ButtonRow, PromptAct, PromptCard, PromptContent, PromptFocus, RowButton};
+use crate::ui::modal::{PromptAct, PromptCard, PromptContent, PromptFocus};
 use crate::ui::objects::{self as objects_ui, Handle, ViewRect};
 use crate::ui::paint::{round_rect, round_rect_alpha, round_rect_outline, shadow};
 use crate::ui::palette::{Command, Palette, PaletteDown};
@@ -74,6 +74,7 @@ mod context;
 mod dialogs;
 mod editmode;
 mod protect;
+mod search;
 mod status;
 mod three_d;
 mod zoom;
@@ -83,6 +84,7 @@ use context::{ContextMenu, Target};
 use dialogs::{Asking, Then};
 use editmode::EditMode;
 use protect::OwnerThen;
+use search::{Search, SearchFocus};
 use status::StatusSeg;
 use zoom::ZoomAnchor;
 
@@ -126,7 +128,7 @@ fn log_event(event: &Event) {
 /// Vrai pour les touches qui commandent la disposition de la fenêtre : elles
 /// gardent le même effet quelle que soit la zone qui tient le focus.
 fn is_global_key(key: Key) -> bool {
-    matches!(key, Key::F(4 | 5 | 6 | 11))
+    matches!(key, Key::F(3 | 4 | 5 | 6 | 11))
 }
 
 /// Zone de l'interface qui reçoit les touches. F6 passe de l'une à l'autre,
@@ -692,6 +694,9 @@ pub struct Viewer {
     status_hover: Option<StatusSeg>,
     /// Recherche en cours (Ctrl+F).
     search: Option<Search>,
+    /// Dernière recherche fermée, requête et options : F3 la relance, et
+    /// Ctrl+F la propose de nouveau.
+    last_search: Option<(String, SearchOptions)>,
     /// Sélection de texte.
     selection: Option<Selection>,
     /// Un glisser de sélection est en cours.
@@ -846,41 +851,6 @@ pub struct Viewer {
     command_target: Target,
 }
 
-/// Où est le focus clavier de la carte de recherche.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SearchFocus {
-    /// Le champ « rechercher ».
-    Find,
-    /// Le champ « remplacer par ».
-    With,
-    /// Un bouton : 0 remplace l'occurrence courante, 1 les remplace toutes.
-    Button(usize),
-}
-
-/// État de la recherche dans le document.
-struct Search {
-    input: TextInput,
-    /// Champ « remplacer par », quand on l'a demandé (Ctrl+H).
-    replace: Option<TextInput>,
-    /// Élément qui a le focus clavier.
-    focus: SearchFocus,
-    /// Champs dessinés au dernier tour, pour les cliquer.
-    fields: Vec<SearchTarget>,
-    /// « Remplacer », « Tout remplacer » : la rangée commune des cartes.
-    row: ButtonRow,
-    /// Rectangle de la carte au dernier dessin (repère de la vue).
-    card: (i32, i32, i32, i32),
-    /// Occurrences : (page, boîte en espace PDF).
-    hits: Vec<(usize, Rect)>,
-    /// Occurrence courante.
-    current: usize,
-    /// Dernière requête évaluée.
-    last_query: String,
-    /// Nombre de pages déjà parcourues : la recherche avance par tranches
-    /// pour ne jamais figer l'interface sur un gros document.
-    scanned: usize,
-}
-
 /// Vrai si ces octets sont ceux d'une image que nous savons lire.
 ///
 /// La signature vaut mieux que l'extension : un fichier mal nommé s'ouvre
@@ -892,165 +862,6 @@ fn is_image(data: &[u8]) -> bool {
         || data.starts_with(b"GIF8")
         || data.starts_with(b"II* ")
         || data.starts_with(b"MM *")
-}
-
-impl Search {
-    /// Carte neuve : le champ « rechercher » seul, qui a le focus.
-    fn new() -> Self {
-        Self {
-            input: TextInput::new(lang::tr("Rechercher dans le document")),
-            replace: None,
-            focus: SearchFocus::Find,
-            fields: Vec::new(),
-            row: ButtonRow::default(),
-            card: (0, 0, 0, 0),
-            hits: Vec::new(),
-            current: 0,
-            last_query: String::new(),
-            scanned: 0,
-        }
-    }
-
-    /// Le clavier va au champ de remplacement.
-    fn on_replace(&self) -> bool {
-        self.focus == SearchFocus::With
-    }
-
-    /// Place le focus ; seul le champ qui l'a montre son caret.
-    fn set_focus(&mut self, focus: SearchFocus) {
-        self.focus = focus;
-        self.input.focused = focus == SearchFocus::Find;
-        if let Some(r) = &mut self.replace {
-            r.focused = focus == SearchFocus::With;
-        }
-    }
-
-    /// Tab (ou Maj+Tab) : rechercher → remplacer → les boutons, s'il y a de
-    /// quoi remplacer → rechercher.
-    fn tab(&mut self, back: bool) {
-        let mut stops = vec![SearchFocus::Find];
-        if self.replace.is_some() {
-            stops.push(SearchFocus::With);
-            if !self.hits.is_empty() {
-                stops.push(SearchFocus::Button(0));
-                stops.push(SearchFocus::Button(1));
-            }
-        }
-        let n = stops.len();
-        let at = stops.iter().position(|s| *s == self.focus).unwrap_or(0);
-        let next = if back { (at + n - 1) % n } else { (at + 1) % n };
-        self.set_focus(stops[next]);
-    }
-}
-
-/// Un champ cliquable de la carte de recherche : sa position, sa taille,
-/// et lequel c'est.
-type SearchTarget = (i32, i32, i32, i32, SearchFocus);
-
-/// Ce que l'on touche en cliquant dans la carte de recherche.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SearchPart {
-    /// Un champ.
-    Field(SearchFocus),
-    /// Un bouton de la rangée.
-    Button(usize),
-    /// Le reste de la carte : le clic s'arrête là, il ne va pas à la page.
-    Card,
-}
-
-/// Dessine la carte de recherche, flottante en haut à droite : le champ, le
-/// champ de remplacement s'il est ouvert, le compteur et les boutons.
-///
-/// C'est la carte commune (`modal::card` : même rayon, même ombre), mais
-/// sans titre ni voile : elle n'est pas modale, on lit la page à côté, comme
-/// avec la barre de recherche de Windows ou d'Acrobat — un titre lui
-/// volerait de la hauteur au-dessus du document.
-///
-/// Les boutons ne répondent que s'il y a quelque chose à remplacer.
-#[allow(clippy::many_single_char_names)] // une carte : x, y, s(…), thème
-fn paint_search_card(
-    frame: &mut Frame<'_>,
-    text: &mut TextRenderer,
-    search: &mut Search,
-    theme: &Theme,
-    dpi: f32,
-    page_count: usize,
-) {
-    let t = theme;
-    let s = |v: f32| (v * dpi).round() as i32;
-    let size = t.font_size * dpi;
-    let (card_w, pad, field_h, gap, footer_h) = (s(340.0), s(12.0), s(32.0), s(8.0), s(30.0));
-    let rows = if search.replace.is_some() { 2 } else { 1 };
-    let card_h = pad * 2 + field_h * rows + gap * rows + footer_h;
-    let x = frame.width as i32 - card_w - s(12.0);
-    let y = s(12.0);
-    crate::ui::modal::card(frame, t, dpi, x, y, card_w, card_h, 1.0);
-    search.card = (x, y, card_w, card_h);
-
-    search.fields.clear();
-    let (fx, fw) = (x + pad, card_w - 2 * pad);
-    let mut fy = y + pad;
-    search.input.draw(frame, text, t, dpi, fx, fy, fw, field_h);
-    search.fields.push((fx, fy, fw, field_h, SearchFocus::Find));
-    fy += field_h + gap;
-    if let Some(r) = &search.replace {
-        r.draw(frame, text, t, dpi, fx, fy, fw, field_h);
-        search.fields.push((fx, fy, fw, field_h, SearchFocus::With));
-        fy += field_h + gap;
-    }
-
-    // Le pied : le compteur à gauche, les boutons groupés à droite.
-    let scanning = search.scanned < page_count;
-    let counter = if search.input.value.is_empty() {
-        lang::tr("Entrée : suivante · Maj+Entrée : précédente").to_string()
-    } else if scanning {
-        lang::trf(
-            "{} trouvée(s), recherche…",
-            &[&search.hits.len().to_string()],
-        )
-    } else if search.hits.is_empty() {
-        lang::tr("aucun résultat").to_string()
-    } else {
-        format!("{} / {}", search.current + 1, search.hits.len())
-    };
-    let baseline = fy as f32 + f32::midpoint(footer_h as f32, text.ascent(size)) - 1.0;
-    let mut right = fx + fw;
-    if search.replace.is_some() {
-        // Dans l'ordre de Windows : l'action principale d'abord.
-        let usable = !search.hits.is_empty();
-        search.row.buttons = vec![
-            RowButton {
-                label: lang::tr("Remplacer").into(),
-                primary: true,
-                enabled: usable,
-            },
-            RowButton {
-                label: lang::tr("Tout remplacer").into(),
-                primary: false,
-                enabled: usable,
-            },
-        ];
-        right = search
-            .row
-            .layout_right(text, size, dpi, fx + fw, fy, footer_h)
-            - gap;
-        let focus = match search.focus {
-            SearchFocus::Button(i) => Some(i),
-            _ => None,
-        };
-        search.row.paint(frame, text, t, dpi, focus);
-    } else {
-        search.row.buttons.clear();
-    }
-    text.draw_clipped(
-        frame,
-        (fx + s(4.0)) as f32,
-        baseline,
-        size * 0.92,
-        &counter,
-        t.text_dim,
-        (right - fx - s(8.0)).max(0) as f32,
-    );
 }
 
 impl Viewer {
@@ -1108,6 +919,7 @@ impl Viewer {
             status_hits: Vec::new(),
             status_hover: None,
             search: None,
+            last_search: None,
             selection: None,
             sel_dragging: false,
             last_click: None,
@@ -1832,6 +1644,20 @@ impl Viewer {
         let thumb = render_thumbnail(&path, 186.0 * scale, 148.0 * scale);
         self.welcome_thumbs.insert(path, (thumb, Instant::now()));
         true
+    }
+
+    /// Fin d'une image : une vignette de l'accueil, s'il en manque, puis
+    /// **un** réveil s'il reste du travail par tranches (`searching` : la
+    /// tranche de recherche prise avant de peindre n'a pas tout parcouru).
+    /// C'est la peinture qui relance, jamais la boucle d'événements (voir la
+    /// fin de `handle_event`) : la fenêtre se repeint entre deux pas.
+    fn after_paint(&mut self, searching: bool) {
+        let thumbs = self.step_welcome_thumbs();
+        if searching || thumbs {
+            if let Some(w) = &self.waker {
+                w.wake();
+            }
+        }
     }
 
     /// Onglet qui porte déjà ce fichier, s'il y en a un.
@@ -2703,9 +2529,11 @@ impl Viewer {
     /// ne bouge pas : sans ce réveil, l'info-bulle n'arriverait jamais).
     fn update_tip(&mut self, window: &mut dyn WindowHandle) {
         let info = self.toolbar_info();
+        // La carte de recherche d'abord : elle flotte par-dessus tout le
+        // reste, et le survol de la barre d'outils peut être resté levé.
         let tip = self
-            .toolbar
-            .hover_tip(&info)
+            .search_tip()
+            .or_else(|| self.toolbar.hover_tip(&info))
             .or_else(|| self.tab_tip())
             .or_else(|| self.recent_tip())
             .or_else(|| self.status_tip());
@@ -2880,15 +2708,8 @@ impl Viewer {
             for c in text.chars().filter(|c| !c.is_control()) {
                 let _ = self.edit_popup_char(c, window);
             }
-        } else if let Some(s) = &mut self.search {
-            if s.on_replace() {
-                if let Some(r) = s.replace.as_mut() {
-                    let _ = r.paste(&text);
-                }
-            } else if s.focus == SearchFocus::Find && s.input.paste(&text) == InputAction::Changed {
-                self.update_search();
-                self.scroll_to_hit();
-            }
+        } else if self.search.is_some() {
+            self.search_paste(&text);
         }
         window.request_redraw();
         true
@@ -2918,136 +2739,6 @@ impl Viewer {
                 y: pt.y,
             },
         ));
-    }
-
-    /// Recalcule les occurrences si la requête a changé.
-    fn update_search(&mut self) {
-        let Some(s) = &mut self.search else { return };
-        if s.input.value == s.last_query {
-            return;
-        }
-        // Nouvelle requête : on repart de la première page.
-        s.last_query.clone_from(&s.input.value);
-        s.hits.clear();
-        s.current = 0;
-        s.scanned = 0;
-        self.step_search();
-    }
-
-    /// Vrai s'il reste des pages à parcourir pour la recherche en cours.
-    fn search_scanning(&self) -> bool {
-        let count = self.loaded.as_ref().map_or(0, |l| l.pages.len());
-        self.search.as_ref().is_some_and(|s| s.scanned < count)
-    }
-
-    /// Parcourt quelques pages de plus (budget de temps court, pour rendre la
-    /// main à la boucle d'événements) ; vrai s'il en reste.
-    fn step_search(&mut self) -> bool {
-        let count = self.loaded.as_ref().map_or(0, |l| l.pages.len());
-        {
-            let Some(s) = &mut self.search else {
-                return false;
-            };
-            if s.scanned >= count {
-                return false;
-            }
-            if s.input.value.trim().is_empty() {
-                s.scanned = count;
-                return false;
-            }
-        }
-        let had_hits = self.search.as_ref().is_some_and(|s| !s.hits.is_empty());
-        let deadline = Instant::now() + Duration::from_millis(12);
-        {
-            let Some(l) = &mut self.loaded else {
-                return false;
-            };
-            let Some(s) = &mut self.search else {
-                return false;
-            };
-            while s.scanned < count {
-                let page = s.scanned;
-                let text = &l.text(page).0;
-                for r in find(text, &s.input.value) {
-                    s.hits.push((page, r));
-                }
-                s.scanned += 1;
-                if Instant::now() >= deadline {
-                    break;
-                }
-            }
-        }
-        // Dès que la première occurrence apparaît, on s'y rend.
-        if !had_hits && self.search.as_ref().is_some_and(|s| !s.hits.is_empty()) {
-            self.scroll_to_hit();
-        }
-        self.search_scanning()
-    }
-
-    /// Fait défiler jusqu'à l'occurrence courante.
-    #[allow(clippy::many_single_char_names)] // coordonnées et matrices
-    fn scroll_to_hit(&mut self) {
-        let Some(s) = &self.search else { return };
-        let Some(&(page, rect)) = s.hits.get(s.current) else {
-            return;
-        };
-        if self.view_mode.is_paged() {
-            self.anchor = page;
-        }
-        let layout = self.layout();
-        let Some(&PageBox { y, w, h, .. }) = layout.get(page) else {
-            return;
-        };
-        let Some(l) = &self.loaded else { return };
-        let p = &l.pages[page];
-        let m = base_matrix(&p.crop_box(&l.doc), self.scale(), p.rotate(&l.doc), w, h);
-        let dev = m.transform_rect(&rect);
-        let target = f64::from(y) + dev.y0 - f64::from(self.view_height()) / 2.0;
-        self.scroll_y = target;
-        self.clamp_scroll();
-    }
-
-    /// Dessine les surlignages des occurrences et le champ de recherche.
-    #[allow(clippy::many_single_char_names)] // coordonnées et matrices
-    fn paint_search(&mut self, frame: &mut Frame<'_>) {
-        let Some(s) = &self.search else { return };
-        let t = self.theme;
-        let dpi = self.dpi_scale as f32;
-        let layout = self.layout();
-        let view_h = self.view_height() as i32;
-        if let Some(l) = &self.loaded {
-            let scale = self.scale();
-            for (idx, (page, rect)) in s.hits.iter().enumerate() {
-                let Some(&PageBox { w, h, .. }) = layout.get(*page) else {
-                    continue;
-                };
-                let Some((x0, top)) = self.page_screen(&layout, *page) else {
-                    continue;
-                };
-                let p = &l.pages[*page];
-                let m = base_matrix(&p.crop_box(&l.doc), scale, p.rotate(&l.doc), w, h);
-                let dev = m.transform_rect(rect);
-                let sx = (x0 + dev.x0).round() as i32;
-                let sy = (top + dev.y0).round() as i32;
-                let sw = dev.width().round().max(2.0) as i32;
-                let sh = dev.height().round().max(2.0) as i32;
-                if sy + sh < 0 || sy > view_h {
-                    continue;
-                }
-                let color = if idx == s.current {
-                    (255, 140, 0)
-                } else {
-                    (255, 230, 0)
-                };
-                fill_rect_blend(frame, sx, sy, sw, sh.min(view_h - sy), color, 110);
-            }
-        }
-        // La carte en haut à droite : champs, compteur, boutons.
-        let pages = self.loaded.as_ref().map_or(0, |l| l.pages.len());
-        let (Some(text), Some(s)) = (self.text.as_mut(), self.search.as_mut()) else {
-            return;
-        };
-        paint_search_card(frame, text, s, &t, dpi, pages);
     }
 
     fn open(&mut self, path: &Path, window: &mut dyn WindowHandle) {
@@ -3267,7 +2958,7 @@ impl Viewer {
         self.scroll_y = 0.0;
         self.scroll_x = 0.0;
         self.selection = None;
-        self.search = None;
+        self.close_search();
         self.focus_field = None;
         self.anchor = 0;
         self.title_dirty = true;
@@ -4086,7 +3777,9 @@ impl Viewer {
                 self.toolbar.focus_page(&info);
             }
             Command::ToggleTheme => self.toggle_theme(window),
-            Command::Search => self.open_search(),
+            Command::Search => self.open_search_ui(),
+            Command::FindNext => self.find_again(true),
+            Command::FindPrevious => self.find_again(false),
             Command::Replace => self.open_replace(),
             Command::Copy => self.copy_selection(window),
             Command::SelectAll => self.select_all(),
@@ -4163,7 +3856,10 @@ impl Viewer {
         l.labels = collect_labels(&l.doc);
         l.modified = true;
         self.selection = None;
-        self.search = None;
+        // Le document a changé sous la recherche : ses occurrences ne
+        // désignent plus rien. Elle se ferme, sa requête retenue (F3 la
+        // relance) ; le remplacement la met de côté avant et la rend après.
+        self.close_search();
         // Le modèle activé décrivait un document qui vient de changer.
         self.three_d = None;
         self.title_dirty = true;
@@ -4407,209 +4103,6 @@ impl Viewer {
         }
     }
 
-    /// Ouvre le champ de recherche.
-    fn open_search(&mut self) {
-        if self.loaded.is_some() {
-            self.search = Some(Search::new());
-        }
-    }
-
-    /// Ouvre la recherche **avec** le champ de remplacement.
-    ///
-    /// C'est le « Rechercher et remplacer » d'Acrobat : on cherche un texte,
-    /// on en donne un autre, et le document est réécrit sans que rien ne
-    /// bouge autour — chaque occurrence garde sa police et sa couleur.
-    fn open_replace(&mut self) {
-        if self.loaded.is_none() {
-            return;
-        }
-        if self.search.is_none() {
-            self.open_search();
-        }
-        if let Some(s) = &mut self.search {
-            if s.replace.is_none() {
-                s.replace = Some(TextInput::new(lang::tr("Remplacer par…")));
-            }
-            // Le clavier va au champ qui manque : on ne remplace rien tant
-            // qu'on n'a pas dit quoi chercher.
-            let focus = if s.input.value.is_empty() {
-                SearchFocus::Find
-            } else {
-                SearchFocus::With
-            };
-            s.set_focus(focus);
-        }
-    }
-
-    /// Ce que vise un point de la fenêtre dans la carte de recherche, s'il y
-    /// tombe. Les rectangles ont été relevés au dernier dessin, dans le
-    /// repère de la vue : on y ramène le point.
-    fn search_hit(&self, x: i32, y: i32) -> Option<SearchPart> {
-        let s = self.search.as_ref()?;
-        let x = x - self.view_left() as i32;
-        let y = y - self.view_top() as i32;
-        if let Some(i) = s.row.hit(x, y) {
-            return Some(SearchPart::Button(i));
-        }
-        if let Some(field) = s
-            .fields
-            .iter()
-            .find(|(fx, fy, fw, fh, _)| x >= *fx && x < fx + fw && y >= *fy && y < fy + fh)
-        {
-            return Some(SearchPart::Field(field.4));
-        }
-        crate::ui::modal::inside(s.card, x, y).then_some(SearchPart::Card)
-    }
-
-    /// Relâchement sur la carte de recherche : le bouton enfoncé agit, si le
-    /// pointeur est resté dessus.
-    fn search_mouse_up(&mut self, x: i32, y: i32) {
-        let (vx, vy) = (x - self.view_left() as i32, y - self.view_top() as i32);
-        match self.search.as_mut().and_then(|s| s.row.mouse_up(vx, vy)) {
-            Some(0) => {
-                log_line("recherche : remplacer");
-                self.replace_current();
-            }
-            Some(_) => {
-                log_line("recherche : tout remplacer");
-                self.replace_all();
-            }
-            None => {}
-        }
-    }
-
-    /// Survol de la carte de recherche : le bouton survolé s'éclaire, le
-    /// pointeur devient une main sur un bouton, une barre sur un champ. Rend
-    /// vrai si le pointeur est sur la carte — la page dessous n'a alors rien
-    /// à en savoir.
-    fn search_hover(&mut self, x: i32, y: i32, window: &mut dyn WindowHandle) -> bool {
-        let part = self.search_hit(x, y);
-        let (vx, vy) = (x - self.view_left() as i32, y - self.view_top() as i32);
-        let Some(s) = &mut self.search else {
-            return false;
-        };
-        let changed = if part.is_some() {
-            s.row.mouse_move(vx, vy)
-        } else {
-            s.row.leave()
-        };
-        if changed {
-            window.request_redraw();
-        }
-        match part {
-            Some(SearchPart::Button(_)) => window.set_cursor(Cursor::Hand),
-            Some(SearchPart::Field(_)) => window.set_cursor(Cursor::IBeam),
-            Some(SearchPart::Card) => window.set_cursor(Cursor::Arrow),
-            None => return false,
-        }
-        true
-    }
-
-    /// Remplace l'occurrence courante, puis passe à la suivante.
-    fn replace_current(&mut self) {
-        let Some((find, with, hit)) = self.search.as_ref().and_then(|s| {
-            let with = s.replace.as_ref()?.value.clone();
-            let hit = s.hits.get(s.current).copied()?;
-            Some((s.input.value.clone(), with, hit))
-        }) else {
-            return;
-        };
-        if find.is_empty() {
-            return;
-        }
-        let page = hit.0;
-        // On retrouve la plage **par son rang** : les boîtes surlignées et les
-        // plages éditables sortent du même parcours de la page, dans le même
-        // ordre. C'est donc bien l'occurrence que l'utilisateur voit qui est
-        // remplacée, et non la première venue du document.
-        let rank = self.search.as_ref().map_or(0, |s| {
-            s.hits[..s.current].iter().filter(|h| h.0 == page).count()
-        });
-        let target = self.loaded.as_mut().and_then(|l| {
-            let text = &l.text(page).0;
-            let ranges = acrux_features::edit_text::find_ranges(text, &find);
-            // Par prudence : si les deux parcours ne comptent pas le même
-            // nombre d'occurrences, on préfère ne rien toucher.
-            if ranges.len() != acrux_features::text::find(text, &find).len() {
-                return None;
-            }
-            ranges.get(rank).copied()
-        });
-        let Some(target) = target else {
-            self.set_notice(crate::ui::lang::tr("occurrence introuvable").into());
-            return;
-        };
-        // Une modification referme la recherche (le document a changé sous
-        // elle) : on la met de côté pour la rendre telle quelle, et l'on
-        // reparcourt le document. Le rang courant ne bouge pas : l'occurrence
-        // remplacée ayant disparu, c'est la suivante qui se trouve surlignée.
-        let saved = self.search.take();
-        self.apply_edit(EditOp::EditText {
-            page,
-            line: target.line,
-            start: target.start,
-            end: target.end,
-            text: with,
-        });
-        self.restore_search(saved);
-    }
-
-    /// Rend au bandeau de recherche l'état qu'il avait avant une
-    /// modification, et refait le tour du document.
-    fn restore_search(&mut self, saved: Option<Search>) {
-        let Some(mut s) = saved else { return };
-        s.hits.clear();
-        s.fields.clear();
-        s.scanned = 0;
-        // Vider la dernière requête force le nouveau parcours.
-        s.last_query.clear();
-        let current = s.current;
-        self.search = Some(s);
-        self.update_search();
-        while self.step_search() {}
-        if let Some(s) = &mut self.search {
-            s.current = if s.hits.is_empty() {
-                0
-            } else {
-                current.min(s.hits.len() - 1)
-            };
-            // Plus rien à remplacer : les boutons se grisent, et le focus
-            // revient au champ plutôt que de rester sur un bouton muet.
-            if s.hits.is_empty() && matches!(s.focus, SearchFocus::Button(_)) {
-                s.set_focus(SearchFocus::With);
-            }
-        }
-        self.scroll_to_hit();
-    }
-
-    /// Remplace toutes les occurrences du document, d'un seul geste
-    /// annulable.
-    fn replace_all(&mut self) {
-        let Some((find, with)) = self
-            .search
-            .as_ref()
-            .and_then(|s| Some((s.input.value.clone(), s.replace.as_ref()?.value.clone())))
-        else {
-            return;
-        };
-        if find.is_empty() {
-            return;
-        }
-        let found = self.search.as_ref().map_or(0, |s| s.hits.len());
-        let mut saved = self.search.take();
-        if let Some(s) = &mut saved {
-            s.current = 0;
-        }
-        let replaced = self.apply_edit(EditOp::ReplaceAll { find, with });
-        self.restore_search(saved);
-        if replaced {
-            self.set_notice(crate::ui::lang::trf(
-                "{} occurrence(s) remplacée(s)",
-                &[&found.to_string()],
-            ));
-        }
-    }
-
     fn toggle_theme(&mut self, window: &mut dyn WindowHandle) {
         self.theme = if self.theme.is_dark() {
             Theme::light()
@@ -4654,7 +4147,7 @@ impl Viewer {
             // largeur, page. Une liste déroulante pour trois choix serait plus
             // lourde à ouvrir qu'un clic de plus.
             ToolAction::FitWidth => self.set_fit(self.fit.next()),
-            ToolAction::Search => self.open_search(),
+            ToolAction::Search => self.open_search_ui(),
             ToolAction::ToggleTheme => self.toggle_theme(window),
             ToolAction::TogglePanel => self.toggle_panel(),
             ToolAction::ToggleTools => self.run_command(Command::ToggleTools, window),
@@ -5075,7 +4568,7 @@ impl Viewer {
         self.scroll_y = 0.0;
         self.anchor = 0;
         self.selection = None;
-        self.search = None;
+        self.close_search();
         self.focus_field = None;
         self.panel = Panel::new();
         self.title_dirty = true;
@@ -7245,68 +6738,9 @@ impl Viewer {
                 }
                 window.request_redraw();
             }
-            Event::Key(key, m) if self.search.is_some() => {
-                let focus = self.search.as_ref().map_or(SearchFocus::Find, |s| s.focus);
-                let on_replace = focus == SearchFocus::With;
-                let action = self
-                    .search
-                    .as_mut()
-                    .map_or(InputAction::None, |s| match focus {
-                        SearchFocus::With => s
-                            .replace
-                            .as_mut()
-                            .map_or(InputAction::None, |r| r.key(key, m.shift)),
-                        SearchFocus::Find => s.input.key(key, m.shift),
-                        // Sur un bouton, seul Échap compte : il ferme la
-                        // recherche, comme partout ailleurs dans la carte.
-                        SearchFocus::Button(_) if key == Key::Escape => InputAction::Cancel,
-                        SearchFocus::Button(_) => InputAction::None,
-                    });
-                match action {
-                    InputAction::Cancel => self.search = None,
-                    // Entrée dans le champ de remplacement remplace
-                    // l'occurrence courante ; dans l'autre, elle passe à la
-                    // suivante.
-                    InputAction::Submit if on_replace => self.replace_current(),
-                    InputAction::Submit => {
-                        self.update_search();
-                        if let Some(s) = &mut self.search {
-                            if !s.hits.is_empty() {
-                                let n = s.hits.len();
-                                s.current = if m.shift {
-                                    (s.current + n - 1) % n
-                                } else {
-                                    (s.current + 1) % n
-                                };
-                            }
-                        }
-                        self.scroll_to_hit();
-                    }
-                    InputAction::Changed if on_replace => {}
-                    InputAction::Changed => {
-                        self.update_search();
-                        self.scroll_to_hit();
-                    }
-                    InputAction::None => {}
-                }
-                window.request_redraw();
-            }
+            Event::Key(key, m) if self.search.is_some() => self.search_key(key, m, window),
             Event::Char(c, m) if self.search.is_some() && !m.ctrl => {
-                let focus = self.search.as_ref().map_or(SearchFocus::Find, |s| s.focus);
-                if let Some(s) = &mut self.search {
-                    // Les caractères ne vont qu'à un champ : sur un bouton, la
-                    // barre d'espace le presse (plus haut), elle ne s'écrit pas.
-                    if focus == SearchFocus::With {
-                        if let Some(r) = s.replace.as_mut() {
-                            let _ = r.insert_char(c);
-                        }
-                    } else if focus == SearchFocus::Find
-                        && s.input.insert_char(c) == InputAction::Changed
-                    {
-                        self.update_search();
-                        self.scroll_to_hit();
-                    }
-                }
+                self.search_char(c);
                 window.request_redraw();
             }
             Event::Key(key, m) => self.key(key, m, window),
@@ -7347,9 +6781,15 @@ impl Viewer {
                         'e' | 'E' => self.export(window),
                         'i' | 'I' => self.insert_pages(window),
                         'c' | 'C' => self.copy_selection(window),
-                        'a' | 'A' => self.select_all(),
+                        // Carte de recherche ouverte, Ctrl+A choisit tout
+                        // son champ, pas tout le document.
+                        'a' | 'A' => {
+                            if !self.search_select_all() {
+                                self.select_all();
+                            }
+                        }
                         'd' | 'D' | '\u{4}' => self.show_properties(),
-                        'f' | 'F' | '\u{6}' => self.open_search(),
+                        'f' | 'F' | '\u{6}' => self.open_search_ui(),
                         // Ctrl+G : le champ de page prend le focus, prêt à
                         // recevoir un numéro ou une étiquette.
                         'g' | 'G' | '\u{7}' => {
@@ -7419,20 +6859,9 @@ impl Viewer {
                     return;
                 }
                 // La carte de recherche flotte au-dessus de la page : ses
-                // champs et ses boutons se cliquent avant elle. Un champ prend
-                // le focus tout de suite ; un bouton s'enfonce seulement, et
-                // agira au relâchement (`search_mouse_up`).
-                if let Some(part) = self.search_hit(x, y) {
-                    let (vx, vy) = (x - self.view_left() as i32, y - self.view_top() as i32);
-                    if let Some(s) = &mut self.search {
-                        match part {
-                            SearchPart::Field(focus) => s.set_focus(focus),
-                            SearchPart::Button(_) => {
-                                s.row.mouse_down(vx, vy);
-                            }
-                            SearchPart::Card => {}
-                        }
-                    }
+                // champs et ses boutons se cliquent avant elle, et un clic
+                // dans ses marges s'y arrête.
+                if self.search_mouse_down(x, y) {
                     window.request_redraw();
                     return;
                 }
@@ -7594,10 +7023,9 @@ impl Viewer {
             }
             // Un bouton de la carte de recherche enfoncé agit au relâchement,
             // pointeur dessus — avant que l'outil en cours ne le prenne.
-            Event::MouseUp { x, y, .. }
-                if self.search.as_ref().is_some_and(|s| s.row.is_pressed()) =>
-            {
+            Event::MouseUp { x, y, .. } if self.search_pressed() => {
                 self.search_mouse_up(x, y);
+                window.request_redraw();
             }
             Event::MouseUp { .. } if self.edit_menu_open() => {
                 self.edit_popup_up();
@@ -7609,7 +7037,7 @@ impl Viewer {
             // pointeur même bouton tenu, pour remonter quand on glisse dehors.
             Event::MouseMove { x, y, dragging }
                 if self.palette.is_none()
-                    && (!dragging || self.search.as_ref().is_some_and(|s| s.row.is_pressed()))
+                    && (!dragging || self.search_pressed())
                     && self.search_hover(x, y, window) => {}
             Event::MouseUp { .. } if self.objects.is_some() => {
                 self.objects_mouse_up();
@@ -7831,26 +7259,15 @@ impl Viewer {
         if self.title_dirty {
             self.update_title(window);
         }
-        // La recherche avance par petites tranches : chaque réveil en traite
-        // une, ce qui laisse passer les événements de l'utilisateur entre-temps.
-        // Les vignettes de l'écran d'accueil se calculent une par réveil :
-        // la fenêtre reste vive, et la grille se remplit sous les yeux.
-        if self.step_welcome_thumbs() {
-            if self.waker.is_none() {
-                self.waker = Some(window.waker());
-            }
-            if let Some(w) = &self.waker {
-                w.wake();
-            }
-            window.request_redraw();
-        }
-        if self.step_search() {
-            if self.waker.is_none() {
-                self.waker = Some(window.waker());
-            }
-            if let Some(w) = &self.waker {
-                w.wake();
-            }
+        // La recherche et les vignettes de l'écran d'accueil avancent par
+        // petites tranches, **pendant la peinture** (`paint_all`), qui
+        // demande un réveil par image tant qu'il en reste. Surtout pas
+        // d'ici : cette fonction traite aussi les réveils, et chacun en
+        // posterait un autre — la file ne se viderait plus, et Windows, qui
+        // ne repeint que file vide, figerait la fenêtre jusqu'à la fin du
+        // travail. Il suffit que le réveil existe avant la peinture.
+        if self.waker.is_none() && (self.search_scanning() || self.welcome_pending()) {
+            self.waker = Some(window.waker());
         }
         window.request_redraw();
     }
@@ -7859,6 +7276,9 @@ impl Viewer {
     fn paint_all(&mut self, frame: &mut Frame<'_>) {
         self.collect_results();
         self.poll_updates();
+        // Avant de peindre : ce que trouve la recherche, et le défilement
+        // vers sa première occurrence, se voient dans cette image-ci.
+        let searching = self.search_scanning() && self.step_search();
         let t = self.theme;
         log_line(&format!("peinture : canvas {:?}", t.canvas));
         frame.clear(t.canvas.0, t.canvas.1, t.canvas.2);
@@ -7960,6 +7380,7 @@ impl Viewer {
         self.paint_context_menu(frame);
         self.paint_dialog(frame);
         dump_frame(frame);
+        self.after_paint(searching);
     }
 }
 
@@ -7972,7 +7393,10 @@ impl Viewer {
         }
         let page_h = f64::from(self.view_height());
         match key {
-            Key::F(3) => {
+            // F3 est la touche « suivante » de Windows ; la colonne des
+            // outils passe à Maj+F4, le raccourci du volet Outils d'Acrobat.
+            Key::F(3) => self.find_again(!m.shift),
+            Key::F(4) if m.shift => {
                 self.tools_open = !self.tools_open;
                 self.wake_anim();
                 self.clamp_scroll();

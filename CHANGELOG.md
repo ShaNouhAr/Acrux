@@ -9,6 +9,55 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 
 ## 0.23.0 — non publiée
 
+- **La recherche est complète.** La carte de Ctrl+F gagne « Aa » (respecter la
+  casse), « Mot entier », les flèches occurrence précédente et suivante et une
+  croix pour fermer, chacun avec son info-bulle ; le compteur dit « 3 sur 12 »,
+  et une recherche vaine dit « Aucun résultat » en rouge, le champ cerclé de
+  rouge et les flèches grisées. Changer une option relance la recherche.
+- **La recherche trouve ce qu'on lit.** Une expression coupée par une fin de
+  ligne se trouve (« de première / ligne »), une césure se referme
+  (« docu- / mentation » se trouve en tapant « documentation »), sans jamais
+  joindre deux paragraphes ni deux cellules de tableau ; l'occurrence est
+  surlignée sur ses deux lignes. L'apostrophe typographique (« l’article »),
+  l'espace insécable et les ligatures (« ﬁ ») ne font plus échouer une
+  recherche tapée au clavier. Un caractère dont la minuscule s'écrit en deux
+  (« İ ») ne décale plus les surlignages de la ligne.
+- **F3 et Maj+F3** passent à l'occurrence suivante ou précédente, comme
+  Entrée et Maj+Entrée ; carte fermée, F3 relance la dernière recherche. **La
+  colonne des outils passe de F3 à Maj+F4**, le raccourci du volet Outils
+  d'Acrobat. La palette propose « Occurrence suivante » et « Occurrence
+  précédente ».
+- **Ctrl+F reprend le texte sélectionné** sur la page comme requête ; la carte
+  déjà ouverte, Ctrl+F **sélectionne** la requête au lieu de l'effacer : Entrée
+  la relance, ou l'on tape la suivante par-dessus. Les champs de saisie ont
+  enfin une sélection : Ctrl+A choisit tout le champ (plus tout le document
+  sous la carte), Maj+flèches, Maj+Origine et Maj+Fin l'étendent, et la
+  frappe, le collage ou le retour arrière la remplacent.
+- **La première occurrence montrée est la première à partir de la page
+  affichée**, comme dans Acrobat, et non plus celle de la page 1. La vue ne
+  saute plus quand l'occurrence suivante est déjà bien visible, et se décale
+  aussi de côté quand une page zoomée la cache. Page précédente, page suivante
+  et les flèches font défiler le document sans fermer la carte.
+- **Remplacer ne remplace que ce qui est surligné** : la recherche, « Remplacer »
+  et « Tout remplacer » sortent du même moteur, avec la casse et le mot entier.
+  Une occurrence à cheval sur deux lignes, qu'une édition ne sait pas réécrire,
+  grise « Remplacer » ; « Tout remplacer » la laisse et le dit (« 5
+  occurrence(s) remplacée(s), 1 ignorée(s) »). Les occurrences ne se
+  chevauchent plus (« aa » se trouve deux fois dans « aaaa », pas trois).
+- **La fenêtre se repeint pendant une longue recherche.** Le parcours par
+  tranches se relançait depuis la boucle d'événements à chaque réveil : la file
+  ne se vidait jamais, et Windows ne repeignait qu'à la fin — sur un gros
+  document, le compteur et les premières occurrences n'apparaissaient qu'une
+  fois tout parcouru. Chaque tranche est désormais prise pendant la peinture,
+  qui demande un réveil par image. Les vignettes de l'écran d'accueil, qui se
+  calculaient de la même façon, suivent le même chemin.
+- `acr find <fichier> <texte>` cherche avec le moteur de l'application : une
+  ligne par occurrence (page, ligne, contexte, « sur deux lignes »), puis le
+  total ; `--case`, `--word`, `--page N`. `acr edit-text` accepte aussi `--case`
+  et `--word`.
+- Le harnais invisible gagne `Key … -Shift` (Maj+F3, Maj+Entrée, Maj+F4) ; le
+  journal note l'ouverture, le total de chaque parcours et chaque saut
+  (`recherche : « mot » 3 sur 12`).
 - **Ctrl+molette zoome vers le pointeur**, comme dans Acrobat : ce qui est sous
   la souris y reste, au pixel près. Avant, seul le centre gardait sa hauteur et
   la page glissait de côté à chaque cran — viser un coin de tableau le faisait
