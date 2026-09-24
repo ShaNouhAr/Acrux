@@ -22,8 +22,25 @@ use crate::ui::theme::Theme;
 pub struct TabInfo {
     /// Nom affiché (nom de fichier).
     pub title: String,
+    /// Chemin complet, tel que l'info-bulle de l'onglet le montre : deux
+    /// « facture.pdf » de dossiers différents ne se distinguent que par là.
+    /// Vide pour un document qui n'a pas encore de fichier à lui (une image
+    /// ouverte, pas encore enregistrée).
+    pub path: String,
     /// Modifications non enregistrées.
     pub modified: bool,
+}
+
+/// Rectangle `(x, y, largeur, hauteur)` en pixels de la bande.
+pub type TabRect = (i32, i32, i32, i32);
+
+/// Partie d'un onglet sous le pointeur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabPart {
+    /// Le titre, c'est-à-dire tout l'onglet hors de sa croix.
+    Title,
+    /// La croix de fermeture.
+    Close,
 }
 
 /// Ce que l'utilisateur demande.
@@ -139,11 +156,7 @@ impl Tabs {
             } else {
                 // Sur un onglet inactif et non survolé, la croix se fait
                 // discrète : une rangée de croix fatigue le regard.
-                (
-                    u8::midpoint(t.text_dim.0, t.bar.0),
-                    u8::midpoint(t.text_dim.1, t.bar.1),
-                    u8::midpoint(t.text_dim.2, t.bar.2),
-                )
+                t.disabled()
             };
             let glyph = "×";
             let gs = size * 1.15;
@@ -202,6 +215,24 @@ impl Tabs {
         }
         Self::at(&self.hits, x, y).map_or(TabAction::None, TabAction::Select)
     }
+
+    /// Clic du milieu : ferme l'onglet visé, croix comprise, comme dans
+    /// les navigateurs. Ailleurs, rien.
+    #[must_use]
+    pub fn middle_click(&self, x: i32, y: i32) -> TabAction {
+        Self::at(&self.hits, x, y).map_or(TabAction::None, TabAction::Close)
+    }
+
+    /// Onglet survolé, la partie visée et son rectangle (en coordonnées de
+    /// la bande) : de quoi placer l'info-bulle sous ce qu'elle décrit.
+    #[must_use]
+    pub fn hovered(&self) -> Option<(usize, TabPart, TabRect)> {
+        if let Some(i) = self.hover_close {
+            return Some((i, TabPart::Close, *self.closes.get(i)?));
+        }
+        let i = self.hover?;
+        Some((i, TabPart::Title, *self.hits.get(i)?))
+    }
 }
 
 #[cfg(test)]
@@ -246,5 +277,27 @@ mod tests {
         assert_eq!(t.hover_close, Some(0));
         assert!(t.mouse_leave());
         assert!(!t.mouse_leave());
+    }
+
+    #[test]
+    fn middle_click_closes_the_tab_under_the_pointer() {
+        let t = placed();
+        assert_eq!(t.middle_click(20, 14), TabAction::Close(0));
+        assert_eq!(t.middle_click(120, 14), TabAction::Close(1));
+        // Sur la croix aussi : c'est toujours cet onglet.
+        assert_eq!(t.middle_click(186, 14), TabAction::Close(1));
+        assert_eq!(t.middle_click(500, 14), TabAction::None);
+    }
+
+    #[test]
+    fn hovered_reports_part_and_rect() {
+        let mut t = placed();
+        assert_eq!(t.hovered(), None);
+        t.mouse_move(20, 14);
+        assert_eq!(t.hovered(), Some((0, TabPart::Title, (0, 0, 100, 28))));
+        t.mouse_move(186, 14);
+        assert_eq!(t.hovered(), Some((1, TabPart::Close, (180, 6, 16, 16))));
+        t.mouse_leave();
+        assert_eq!(t.hovered(), None);
     }
 }

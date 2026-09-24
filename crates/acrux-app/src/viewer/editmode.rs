@@ -2225,11 +2225,26 @@ impl Viewer {
         a.last_caret = a.buffer.caret;
     }
 
+    /// Ce que le bloc en cours de saisie a à défaire et à refaire, dans cet
+    /// ordre. `(false, false)` quand aucun bloc n'est ouvert.
+    ///
+    /// C'est le point où la barre d'outils lit l'état d'« Annuler » et de
+    /// « Rétablir » au-delà de l'historique du document : tout futur mode
+    /// qui tient sa propre pile d'étapes (saisie dans un formulaire, zone de
+    /// texte ajoutée) doit s'y ajouter, sans quoi les boutons resteraient
+    /// grisés pendant qu'on y tape.
+    pub(super) fn block_history(&self) -> (bool, bool) {
+        self.edit
+            .as_ref()
+            .and_then(|e| e.active.as_ref())
+            .map_or((false, false), |a| (!a.undo.is_empty(), !a.redo.is_empty()))
+    }
+
     /// Défait la dernière étape **dans le bloc**, sans fermer la saisie.
     ///
     /// Rend faux quand il n'y a plus rien à défaire ici : c'est alors à
     /// l'annulation du document de jouer.
-    fn undo_step(&mut self, window: &mut dyn WindowHandle) -> bool {
+    pub(super) fn undo_step(&mut self, window: &mut dyn WindowHandle) -> bool {
         let Some(a) = self.edit.as_mut().and_then(|e| e.active.as_mut()) else {
             return false;
         };
@@ -2251,7 +2266,7 @@ impl Viewer {
     }
 
     /// Refait l'étape défaite.
-    fn redo_step(&mut self, window: &mut dyn WindowHandle) -> bool {
+    pub(super) fn redo_step(&mut self, window: &mut dyn WindowHandle) -> bool {
         let Some(a) = self.edit.as_mut().and_then(|e| e.active.as_mut()) else {
             return false;
         };

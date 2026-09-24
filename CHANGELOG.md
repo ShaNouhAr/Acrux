@@ -9,6 +9,39 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 
 ## 0.23.0 — non publiée
 
+- **Annuler et Rétablir dans la barre d'outils**, en tête du groupe des
+  modifications : grisés quand il n'y a rien à défaire ou à refaire, ils
+  s'allument dès la première frappe dans « Modifier le PDF ». Comme Ctrl+Z, ils
+  défont d'abord **dans le bloc en cours de saisie**, étape par étape ; la
+  palette et le clic droit font désormais de même, alors qu'ils refermaient le
+  bloc et emportaient toute la frappe d'un coup.
+- **Les bascules disent leur état.** Les boutons du panneau latéral et des
+  outils s'allument (fond et icône d'accent) quand ce qu'ils montrent est
+  affiché. Le bouton du thème montre où l'on va : la lune en thème clair, le
+  soleil en sombre, avec « Passer au thème sombre (T) » en info-bulle ; celles
+  des bascules disent aussi ce que le clic fera (« Masquer le panneau
+  latéral », « Tous les outils »).
+- **Enregistrer est une disquette** : la flèche sur un bac se lisait
+  « télécharger ».
+- **Un bouton grisé se voit grisé**, nettement plus pâle qu'avant, et n'a plus
+  d'info-bulle qui promettait une action refusée au clic. Au clavier, Entrée ne
+  déclenche plus un bouton devenu grisé (Annuler, une fois tout annulé), et la
+  flèche repart de sa place au lieu de sauter au bord de la barre.
+- **Le champ de page est encadré** au repos — on voit qu'on peut y taper — et
+  dit au survol « Aller à une page (Ctrl+G) ». Atteint au clavier (F6 puis les
+  flèches), il porte enfin l'anneau de focus ; celui des boutons est arrondi
+  comme eux.
+- **Fenêtre étroite** : les boutons secondaires (disposition, ajustement,
+  imprimer, pivoter, accueil, puis le zoom et les pages, par paires)
+  s'effacent au lieu de repousser la recherche, les outils, les paramètres et
+  le thème hors de la fenêtre.
+- **Onglets** : le survol montre le chemin complet du document (deux
+  « facture.pdf » se distinguent enfin) et « modifications non enregistrées »
+  s'il y a lieu ; la croix dit « Fermer l'onglet ». Le **clic du milieu ferme
+  l'onglet**, en proposant d'abord d'enregistrer un document modifié ; il ne
+  fait plus glisser la page quand on l'emploie dans les barres.
+- Le harnais invisible gagne `MiddleClick` et `Resize` (fenêtre étroite, sans
+  jamais l'afficher).
 - **Sécurité : la clé d'un document protégé ne se devine plus.** Jusqu'ici, la
   clé AES-256, les sels et `/Perms` sortaient d'un générateur semé par « taille
   du fichier ^ heure » : qui connaissait l'heure d'enregistrement retrouvait la

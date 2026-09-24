@@ -305,6 +305,39 @@ pub fn focus_ring(
     );
 }
 
+/// Anneau de focus tracé **à l'intérieur** d'un rectangle arrondi : son bord
+/// extérieur suit celui de l'élément, au même rayon.
+///
+/// C'est celui des boutons de barre, posés à deux pixels les uns des autres :
+/// l'anneau extérieur de [`focus_ring`] mordrait sur le voisin. Ces boutons
+/// n'ont pas de fond au repos, rien ne le cache donc à l'intérieur.
+pub fn inner_ring(
+    frame: &mut Frame<'_>,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    radius: f32,
+    dpi: f32,
+    color: Rgb,
+) {
+    let ring = (2.0 * dpi).round().max(1.0);
+    // Même principe que `focus_ring` : le trait est centré sur le contour,
+    // qu'on rentre d'une demi-épaisseur pour que le bord extérieur du trait
+    // tombe pile sur celui de l'élément.
+    let half = ring / 2.0;
+    round_rect_outline_f(
+        frame,
+        x as f32 + half,
+        y as f32 + half,
+        w as f32 - ring,
+        h as f32 - ring,
+        (radius - half).max(0.0),
+        ring,
+        color,
+    );
+}
+
 /// Moyenne de deux couleurs.
 fn mix(a: Rgb, b: Rgb) -> Rgb {
     (a.0.midpoint(b.0), a.1.midpoint(b.1), a.2.midpoint(b.2))

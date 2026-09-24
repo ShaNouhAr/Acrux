@@ -139,6 +139,7 @@ static TABLE: &[(&str, &str)] = &[
     ("Acrux est à jour.", "Acrux is up to date."),
     ("Acrux {} est disponible.", "Acrux {} is available."),
     ("Afficher la page entière", "Show the whole page"),
+    ("Afficher le panneau latéral", "Show side panel"),
     ("Ajouter", "Add"),
     ("Ajouter du texte", "Add text"),
     ("Ajouter une signature", "Add a signature"),
@@ -259,6 +260,8 @@ static TABLE: &[(&str, &str)] = &[
     ("Les restrictions exigent un mot de passe des permissions", "Restrictions need a permissions password"),
     ("Lire, modifier, remplir et signer un PDF.", "Read, edit, fill in and sign a PDF."),
     ("Marques", "Marks"),
+    ("Masquer le panneau latéral", "Hide side panel"),
+    ("Masquer les outils", "Hide tools"),
     ("Mises à jour", "Updates"),
     ("Modification interdite", "Change not allowed"),
     ("Modifier", "Edit"),
@@ -301,6 +304,8 @@ static TABLE: &[(&str, &str)] = &[
     ("Paramètres", "Settings"),
     ("Paramètres…", "Settings…"),
     ("Paraphe", "Initials"),
+    ("Passer au thème clair", "Switch to light theme"),
+    ("Passer au thème sombre", "Switch to dark theme"),
     ("Permissions", "Permissions"),
     ("Pivoter", "Rotate"),
     ("Pivoter la page", "Rotate the page"),
@@ -361,6 +366,7 @@ static TABLE: &[(&str, &str)] = &[
     ("Texte à répartir dans les {} cases :", "Text to spread over the {} boxes:"),
     ("Thème clair / sombre", "Light / dark theme"),
     ("Titre", "Title"),
+    ("Tous les outils", "All tools"),
     ("Tout enregistrer", "Save all"),
     ("Tout remplacer", "Replace all"),
     ("Tout sélectionner", "Select all"),
@@ -411,6 +417,7 @@ static TABLE: &[(&str, &str)] = &[
     ("mises à jour : recherche au démarrage", "updates: checking at startup"),
     ("mises à jour : recherche désactivée", "updates: checking off"),
     ("modification interdite", "changes not allowed"),
+    ("modifications non enregistrées", "unsaved changes"),
     ("non", "no"),
     ("occurrence introuvable", "occurrence not found"),
     ("ou déposez un PDF sur la fenêtre · Ctrl+Maj+P pour toutes les commandes", "or drop a PDF on the window · Ctrl+Shift+P for every command"),
@@ -474,6 +481,25 @@ mod tests {
             to_english("Phrase absente de la table"),
             "Phrase absente de la table"
         );
+    }
+
+    /// Les info-bulles de la barre d'outils et des onglets ont leur anglais :
+    /// une bascule qui dirait « Passer au thème sombre » à un anglophone
+    /// passerait pour un oubli.
+    #[test]
+    fn les_bulles_de_la_barre_ont_leur_anglais() {
+        for (fr, en) in [
+            ("Passer au thème sombre", "Switch to dark theme"),
+            ("Passer au thème clair", "Switch to light theme"),
+            ("Afficher le panneau latéral", "Show side panel"),
+            ("Masquer le panneau latéral", "Hide side panel"),
+            ("Tous les outils", "All tools"),
+            ("Masquer les outils", "Hide tools"),
+            ("Fermer l'onglet", "Close the tab"),
+            ("modifications non enregistrées", "unsaved changes"),
+        ] {
+            assert_eq!(to_english(fr), en);
+        }
     }
 
     #[test]

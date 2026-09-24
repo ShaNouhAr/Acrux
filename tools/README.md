@@ -61,12 +61,21 @@ Les coordonnées se donnent **comme on les lit sur la capture** : le harnais cal
 entre le tampon dessiné et les coordonnées des messages de souris (la fenêtre n'étant jamais
 montrée, les deux diffèrent quand l'écran n'est pas à 100 %).
 
-Le clic droit et le menu contextuel au clavier ont les leurs :
+Le clic droit, le clic du milieu et le menu contextuel au clavier ont les leurs :
 
 ```powershell
 RightClick 450 344   # clic droit (survol, appui, relâchement) : le menu s'ouvre à l'appui
+MiddleClick 120 75   # clic du milieu : ferme l'onglet visé, ou saisit la page pour la faire glisser
 ShiftF10             # Maj+F10 ; la touche « menu » du clavier est Key 0x5D
 ```
+
+`Resize 820 700` redimensionne la fenêtre invisible (taille extérieure en pixels physiques) sans
+jamais la montrer ni lui donner le premier plan : c'est l'essai d'une fenêtre étroite, où la barre
+d'outils efface ses boutons secondaires. L'échelle des coordonnées est recalculée après.
+
+Une info-bulle n'apparaît qu'après un délai de survol : `Hover x y`, puis
+`Start-Sleep -Milliseconds 900` avant le `Shot`. Le réveil qui la fait peindre part de la
+fenêtre elle-même, le harnais n'a rien à poster de plus.
 
 Le relâchement sur place ne choisit rien, comme sous Windows : on choisit ensuite au clavier
 (`Key 0x28` puis `Key 0x0D`), par l'initiale (`Typing "c"`) ou d'un `Click` sur l'élément. En mode

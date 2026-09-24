@@ -17,7 +17,7 @@
 //! | `modal`   | modèle commun des cartes modales : carte, fondu, rangée de boutons, invite |
 //! | `input`   | champ de saisie sur une ligne                         |
 //! | `icons`   | icônes vectorielles rasterisées à la demande          |
-//! | `toolbar` | barre d'outils (boutons, champ de page, zoom)         |
+//! | `toolbar` | barre d'outils (boutons, champ de page, zoom, annuler / rétablir, bascules) |
 //! | `panel`   | panneau latéral (vignettes, signets)                  |
 //! | `prefs`   | réglages persistants et modes d'affichage             |
 //! | `settings` | fiche « Paramètres » : langue, apparence, mises à jour |

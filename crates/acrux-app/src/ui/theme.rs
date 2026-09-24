@@ -92,4 +92,61 @@ impl Theme {
             font_size: 13.0,
         }
     }
+
+    /// Vrai pour un thème sombre. On juge sur la luminance des barres, pas
+    /// sur l'égalité avec [`Theme::dark`] : un thème retouché ou ajouté plus
+    /// tard (contraste élevé) garde ainsi le bon bouton, la bonne barre de
+    /// titre et la bonne préférence enregistrée.
+    #[must_use]
+    pub fn is_dark(&self) -> bool {
+        let (r, g, b) = self.bar;
+        // Pondération de Rec. 601, en entiers : assez fine pour séparer un
+        // fond sombre d'un fond clair.
+        u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114 < 128 * 1000
+    }
+
+    /// Encre d'un contrôle **désactivé** : à mi-chemin entre le texte
+    /// secondaire et le fond des barres.
+    ///
+    /// `text_dim` seul ne suffisait pas : un bouton grisé restait presque
+    /// aussi lisible qu'un bouton actif, et l'on cliquait dessus pour rien.
+    /// À mi-chemin, l'icône se lit encore — on sait ce qu'elle ferait — mais
+    /// se voit nettement éteinte.
+    #[must_use]
+    pub const fn disabled(&self) -> Rgb {
+        (
+            self.text_dim.0.midpoint(self.bar.0),
+            self.text_dim.1.midpoint(self.bar.1),
+            self.text_dim.2.midpoint(self.bar.2),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chaque_theme_se_reconnait() {
+        assert!(Theme::dark().is_dark());
+        assert!(!Theme::light().is_dark());
+    }
+
+    /// L'encre désactivée tombe entre le texte secondaire et le fond, dans
+    /// les deux thèmes : plus pâle que `text_dim`, jamais invisible.
+    #[test]
+    fn le_desactive_est_entre_le_texte_et_le_fond() {
+        for t in [Theme::dark(), Theme::light()] {
+            let d = t.disabled();
+            for (c, (lo, hi)) in [
+                (d.0, (t.text_dim.0, t.bar.0)),
+                (d.1, (t.text_dim.1, t.bar.1)),
+                (d.2, (t.text_dim.2, t.bar.2)),
+            ] {
+                assert!(c > lo.min(hi) && c < lo.max(hi), "{d:?}");
+            }
+        }
+        assert_eq!(Theme::dark().disabled(), (0x65, 0x67, 0x6B));
+        assert_eq!(Theme::light().disabled(), (0xAF, 0xB0, 0xB3));
+    }
 }

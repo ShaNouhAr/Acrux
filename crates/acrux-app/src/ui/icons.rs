@@ -42,13 +42,21 @@ pub enum Icon {
     FitWidth,
     /// Loupe (rechercher).
     Search,
-    /// Soleil (thème clair / sombre).
+    /// Soleil (passer au thème clair). Le bouton montre où l'on va : en thème
+    /// sombre, le soleil ; en thème clair, [`Icon::Moon`].
     Theme,
+    /// Croissant de lune (passer au thème sombre).
+    Moon,
     /// Panneau latéral (rectangle avec une colonne à gauche).
     Sidebar,
     /// Flèche en arc (pivoter).
     Rotate,
-    /// Flèche vers un bac (enregistrer).
+    /// Flèche qui revient sur ses pas (annuler la modification).
+    Undo,
+    /// La même, en miroir (rétablir la modification).
+    Redo,
+    /// Disquette (enregistrer). La flèche sur un bac qu'elle remplace se
+    /// lisait « télécharger », partout ailleurs sur l'écran de la personne.
     Save,
     /// Imprimante.
     Print,
@@ -149,6 +157,76 @@ fn magnifier(path: &mut Path) {
     polyline(path, &[(15.0, 15.0), (20.5, 20.5)]);
 }
 
+/// Tracé de la flèche « annuler » : la pointe tournée vers la gauche, la
+/// tige, puis la boucle qui revient en bas. « Rétablir » est le même tracé
+/// en miroir ([`mirror`]) : les deux boutons, voisins dans la barre, sont
+/// symétriques par construction et non à l'œil.
+fn undo_points() -> [Vec<(f64, f64)>; 3] {
+    let head = vec![(8.5, 5.5), (4.0, 10.0), (8.5, 14.5)];
+    let stem = vec![(4.0, 10.0), (14.5, 10.0)];
+    // Demi-cercle de centre (14,5 ; 14,5) et de rayon 4,5, du haut vers le
+    // bas en passant par la droite, puis retour vers la gauche.
+    let mut hook: Vec<(f64, f64)> = (0..=12)
+        .map(|i| {
+            let a = (-90.0 + 180.0 * f64::from(i) / 12.0_f64).to_radians();
+            (14.5 + 4.5 * a.cos(), 14.5 + 4.5 * a.sin())
+        })
+        .collect();
+    hook.push((10.0, 19.0));
+    [head, stem, hook]
+}
+
+/// Retourne un tracé de gauche à droite dans la boîte 24 × 24.
+fn mirror(points: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    points.iter().map(|&(x, y)| (24.0 - x, y)).collect()
+}
+
+/// Croissant de lune plein : le disque `C1` privé du disque `C2` qui le
+/// mord en haut à droite.
+///
+/// Les deux arcs se rejoignent aux intersections des cercles, calculées
+/// exactement : des points posés à l'œil laisseraient une pointe émoussée
+/// ou un petit bec, visibles à vingt pixels.
+fn crescent(path: &mut Path) {
+    let (c1, r1) = ((12.0_f64, 12.0_f64), 8.0_f64);
+    let (c2, r2) = ((16.5_f64, 8.0_f64), 6.5_f64);
+    let (dx, dy) = (c2.0 - c1.0, c2.1 - c1.1);
+    let d = dx.hypot(dy);
+    // Distance de C1 à la corde commune, puis demi-longueur de la corde.
+    let a = (r1 * r1 - r2 * r2 + d * d) / (2.0 * d);
+    let h = (r1 * r1 - a * a).max(0.0).sqrt();
+    let (ux, uy) = (dx / d, dy / d);
+    let base = (c1.0 + a * ux, c1.1 + a * uy);
+    let p1 = (base.0 - h * uy, base.1 + h * ux);
+    let p2 = (base.0 + h * uy, base.1 - h * ux);
+    let angle = |c: (f64, f64), p: (f64, f64)| (p.1 - c.1).atan2(p.0 - c.0);
+    let tau = std::f64::consts::TAU;
+    // Grand arc de C1, de P1 à P2, du côté opposé à C2 : les angles
+    // croissent (sens horaire, y vers le bas).
+    let (a1, mut a2) = (angle(c1, p1), angle(c1, p2));
+    while a2 <= a1 {
+        a2 += tau;
+    }
+    // Petit arc de C2, de P2 à P1, à l'intérieur de C1 : les angles
+    // décroissent.
+    let (b1, mut b2) = (angle(c2, p2), angle(c2, p1));
+    while b2 >= b1 {
+        b2 -= tau;
+    }
+    let steps = 16_u32;
+    let mut pts = Vec::new();
+    for i in 0..=steps {
+        let t = a1 + (a2 - a1) * f64::from(i) / f64::from(steps);
+        pts.push((c1.0 + r1 * t.cos(), c1.1 + r1 * t.sin()));
+    }
+    for i in 1..steps {
+        let t = b1 + (b2 - b1) * f64::from(i) / f64::from(steps);
+        pts.push((c2.0 + r2 * t.cos(), c2.1 + r2 * t.sin()));
+    }
+    polyline(path, &pts);
+    path.close();
+}
+
 /// Chemin de l'icône dans la boîte 24 × 24 : lignes médianes (à épaissir)
 /// et surfaces pleines, retournés séparément.
 #[must_use]
@@ -201,13 +279,38 @@ pub fn geometry(icon: Icon) -> (Path, Path) {
             polyline(&mut lines, &pts);
             polyline(&mut lines, &[(13.5, 3.5), (18.0, 7.5), (13.0, 10.5)]);
         }
+        Icon::Undo => {
+            for part in undo_points() {
+                polyline(&mut lines, &part);
+            }
+        }
+        Icon::Redo => {
+            for part in undo_points() {
+                polyline(&mut lines, &mirror(&part));
+            }
+        }
         Icon::Save => {
+            // Le boîtier au coin coupé, le volet de métal en haut, l'étiquette
+            // en bas : les trois traits qui font une disquette.
             polyline(
                 &mut lines,
-                &[(4.0, 14.0), (4.0, 19.5), (20.0, 19.5), (20.0, 14.0)],
+                &[
+                    (4.0, 4.0),
+                    (16.5, 4.0),
+                    (20.0, 7.5),
+                    (20.0, 20.0),
+                    (4.0, 20.0),
+                    (4.0, 4.0),
+                ],
             );
-            polyline(&mut lines, &[(12.0, 4.0), (12.0, 15.0)]);
-            polyline(&mut lines, &[(8.0, 11.0), (12.0, 15.0), (16.0, 11.0)]);
+            polyline(
+                &mut lines,
+                &[(8.0, 4.0), (8.0, 9.0), (15.0, 9.0), (15.0, 4.0)],
+            );
+            polyline(
+                &mut lines,
+                &[(7.5, 20.0), (7.5, 14.0), (16.5, 14.0), (16.5, 20.0)],
+            );
         }
         Icon::Print => {
             polyline(
@@ -480,6 +583,9 @@ pub fn geometry(icon: Icon) -> (Path, Path) {
                 );
             }
         }
+        // Plein, comme le disque du soleil qu'il remplace : les deux états
+        // du même bouton ont le même poids.
+        Icon::Moon => crescent(&mut fills),
     }
     (lines, fills)
 }
@@ -558,6 +664,9 @@ mod tests {
             Icon::Theme,
             Icon::Sidebar,
             Icon::Rotate,
+            Icon::Undo,
+            Icon::Redo,
+            Icon::Moon,
             Icon::Save,
             Icon::Print,
             Icon::ViewMode,
@@ -574,6 +683,36 @@ mod tests {
                 "{icon:?} déborde"
             );
         }
+    }
+
+    /// « Rétablir » est « annuler » retourné : mêmes bornes, en miroir.
+    #[test]
+    fn redo_mirrors_undo() {
+        let undo = outline(Icon::Undo).bounds().unwrap_or_default();
+        let redo = outline(Icon::Redo).bounds().unwrap_or_default();
+        assert!(
+            (redo.x0 - (24.0 - undo.x1)).abs() < 1e-6,
+            "{undo:?} / {redo:?}"
+        );
+        assert!(
+            (redo.x1 - (24.0 - undo.x0)).abs() < 1e-6,
+            "{undo:?} / {redo:?}"
+        );
+        assert!((redo.y0 - undo.y0).abs() < 1e-6 && (redo.y1 - undo.y1).abs() < 1e-6);
+    }
+
+    /// La lune est un croissant : le bord gauche du disque est plein, le
+    /// creux mordu en haut à droite est vide.
+    #[test]
+    fn moon_is_a_crescent() {
+        let mut raster = Rasterizer::new();
+        let m = Matrix::new(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+        let mask = raster.path_coverage(&outline(Icon::Moon), &m, FillRule::NonZero, 24, 24);
+        let at = |x: usize, y: usize| mask.data()[y * 24 + x];
+        assert!(at(5, 12) > 200, "bord gauche : {}", at(5, 12));
+        assert!(at(12, 18) > 200, "bas du croissant : {}", at(12, 18));
+        assert_eq!(at(17, 8), 0, "le creux doit rester vide");
+        assert_eq!(at(13, 10), 0, "le cœur du disque est mordu");
     }
 
     #[test]

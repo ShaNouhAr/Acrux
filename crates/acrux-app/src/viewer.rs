@@ -61,7 +61,7 @@ use crate::ui::prefs::{Fit, Prefs, ViewMode};
 use crate::ui::settings::{SettingsAction, SettingsSheet, SettingsState, UpdateLine};
 use crate::ui::sign::{self, Capture, Item as SignItem, Saved};
 use crate::ui::signpanel::{Action as SignAction, SignPanel};
-use crate::ui::tabs::{TabAction, TabInfo, Tabs};
+use crate::ui::tabs::{TabAction, TabInfo, TabPart, Tabs};
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
 use crate::ui::toolbar::{ToolAction, Toolbar, ToolbarInfo};
@@ -1845,7 +1845,7 @@ impl Viewer {
                 log_line(&format!("réglage : langue {}", choice.key()));
             }
             SettingsAction::Dark(dark) => {
-                if dark != (self.theme.canvas == Theme::dark().canvas) {
+                if dark != self.theme.is_dark() {
                     self.toggle_theme(window);
                 }
                 log_line(if dark {
@@ -1910,7 +1910,7 @@ impl Viewer {
         SettingsState {
             language: Lang::from_key(&prefs.language),
             system: system_lang(),
-            dark: theme.canvas == Theme::dark().canvas,
+            dark: theme.is_dark(),
             auto_updates: prefs.check_updates,
             update,
             version: env!("CARGO_PKG_VERSION"),
@@ -2682,7 +2682,12 @@ impl Viewer {
     /// réveil qui la fera apparaître (rien ne se repeint tant que la souris
     /// ne bouge pas : sans ce réveil, l'info-bulle n'arriverait jamais).
     fn update_tip(&mut self, window: &mut dyn WindowHandle) {
-        let tip = self.toolbar.hover_tip().or_else(|| self.recent_tip());
+        let info = self.toolbar_info();
+        let tip = self
+            .toolbar
+            .hover_tip(&info)
+            .or_else(|| self.tab_tip())
+            .or_else(|| self.recent_tip());
         let same = match (&self.tip, &tip) {
             (Some((a, _, _)), Some((b, _))) => a == b,
             (None, None) => true,
@@ -2704,6 +2709,41 @@ impl Viewer {
                 });
         }
         window.request_redraw();
+    }
+
+    /// Info-bulle d'un onglet : le **chemin complet** du document, que
+    /// l'onglet réduit à son nom (deux « facture.pdf » ne se distinguaient
+    /// pas), et s'il reste des modifications à enregistrer. Sur la croix :
+    /// ce qu'elle fait.
+    fn tab_tip(&self) -> Option<(String, (i32, i32, i32, i32))> {
+        if self.tabs_height() == 0 {
+            return None;
+        }
+        let (index, part, (x, y, w, h)) = self.tabs.hovered()?;
+        let text = match part {
+            TabPart::Close => lang::tr("Fermer l'onglet").to_string(),
+            TabPart::Title => {
+                let infos = self.tab_infos();
+                let tab = infos.get(index)?;
+                let name = if tab.path.is_empty() {
+                    &tab.title
+                } else {
+                    &tab.path
+                };
+                if tab.modified {
+                    format!(
+                        "{name}   —   {}",
+                        lang::tr("modifications non enregistrées")
+                    )
+                } else {
+                    name.clone()
+                }
+            }
+        };
+        // La bande des onglets est sous la barre d'outils ; l'info-bulle se
+        // place en coordonnées de la fenêtre.
+        let top = Toolbar::height(&self.theme, self.dpi_scale as f32);
+        Some((text, (x, y + top, w, h)))
     }
 
     /// Info-bulle d'un document récent de l'accueil : son **chemin complet**,
@@ -3605,9 +3645,19 @@ impl Viewer {
             .saturating_sub(self.view_top())
     }
 
-    /// Ce que la barre d'outils affiche.
+    /// Ce que la barre d'outils affiche. Relu à chaque peinture : tout y est
+    /// en temps constant, et « Annuler » s'allume dès la première frappe.
     fn toolbar_info(&self) -> ToolbarInfo {
         let page = self.current_page();
+        let has_document = self.loaded.is_some() && !self.showing_home();
+        // Le bloc de texte en cours de saisie a sa propre pile d'étapes :
+        // « Annuler » y défait d'abord, comme Ctrl+Z. Refermer un bloc
+        // modifié inscrit une modification au document, ce qui vide la pile
+        // « rétablir » de celui-ci : tant qu'on y tape, elle ne compte plus.
+        let (block_undo, block_redo) = self.block_history();
+        let (history, redo) = self.loaded.as_ref().map_or((false, false), |l| {
+            (!l.history.is_empty(), !l.redo.is_empty())
+        });
         ToolbarInfo {
             page: page + 1,
             page_count: self.loaded.as_ref().map_or(0, |l| l.pages.len()),
@@ -3617,7 +3667,15 @@ impl Viewer {
                 .and_then(|l| l.labels.get(page))
                 .cloned(),
             zoom_percent: (self.effective_zoom() * 100.0).round() as u32,
-            has_document: self.loaded.is_some() && !self.showing_home(),
+            has_document,
+            can_undo: has_document && (history || block_undo),
+            can_redo: has_document && (block_redo || (redo && !block_undo)),
+            // « Allumé » veut dire « affiché » : le panneau des vignettes cède
+            // la place à celui de « remplir et signer », et la colonne des
+            // outils s'efface d'une fenêtre trop étroite pour elle.
+            panel_open: self.panel_open && self.sign_panel.is_none() && !self.reading,
+            tools_open: self.wanted_tools_width() > 0.0,
+            dark_theme: self.theme.is_dark(),
         }
     }
 
@@ -3991,8 +4049,8 @@ impl Viewer {
             Command::InsertPages => self.insert_pages(window),
             Command::DuplicatePage => self.duplicate_current(),
             Command::ExtractPage => self.extract_current(window),
-            Command::Undo => self.undo(window),
-            Command::Redo => self.redo_edit(window),
+            Command::Undo => self.undo_any(window),
+            Command::Redo => self.redo_any(window),
             Command::EditText => self.start_text_edit(window),
             Command::EditPdf => {
                 self.annot_tool = None;
@@ -4141,6 +4199,26 @@ impl Viewer {
         redo.push(op);
         log_line(&format!("annulation : {} restante(s)", ops.len()));
         self.replay(ops, redo, window);
+    }
+
+    /// Annule comme Ctrl+Z, d'où qu'on le demande (bouton, palette, clic
+    /// droit) : d'abord une étape du bloc de texte en cours de saisie, puis
+    /// la dernière modification du document.
+    ///
+    /// Aller droit à [`Viewer::undo`] refermerait le bloc — ce qui inscrit
+    /// la frappe au document — puis annulerait aussitôt cette inscription :
+    /// toute la saisie partirait d'un coup.
+    fn undo_any(&mut self, window: &mut dyn WindowHandle) {
+        if !self.undo_step(window) {
+            self.undo(window);
+        }
+    }
+
+    /// Rétablit comme Ctrl+Y : dans le bloc en cours de saisie d'abord.
+    fn redo_any(&mut self, window: &mut dyn WindowHandle) {
+        if !self.redo_step(window) {
+            self.redo_edit(window);
+        }
     }
 
     /// Rétablit la dernière modification annulée.
@@ -4486,7 +4564,7 @@ impl Viewer {
     }
 
     fn toggle_theme(&mut self, window: &mut dyn WindowHandle) {
-        self.theme = if self.theme.canvas == Theme::dark().canvas {
+        self.theme = if self.theme.is_dark() {
             Theme::light()
         } else {
             Theme::dark()
@@ -4498,7 +4576,7 @@ impl Viewer {
 
     /// Accorde la barre de titre du système au thème.
     fn apply_frame_theme(&self, window: &mut dyn WindowHandle) {
-        let dark = self.theme.canvas == Theme::dark().canvas;
+        let dark = self.theme.is_dark();
         // La barre de titre prolonge la barre d'outils : même couleur, même
         // texte. C'est ce qui fait que la fenêtre a l'air d'une seule pièce.
         window.set_frame_theme(dark, self.theme.bar, self.theme.text);
@@ -4533,6 +4611,8 @@ impl Viewer {
             ToolAction::ToggleTheme => self.toggle_theme(window),
             ToolAction::TogglePanel => self.toggle_panel(),
             ToolAction::ToggleTools => self.run_command(Command::ToggleTools, window),
+            ToolAction::Undo => self.undo_any(window),
+            ToolAction::Redo => self.redo_any(window),
             ToolAction::RotatePage => self.rotate_current(90),
             ToolAction::Save => {
                 self.save(false, window);
@@ -4801,6 +4881,13 @@ impl Viewer {
                 || "document".to_string(),
                 |n| n.to_string_lossy().into_owned(),
             ),
+            // Le chemin d'un document pas encore enregistré serait celui
+            // d'un fichier temporaire : il n'apprendrait rien.
+            path: if l.temporary {
+                String::new()
+            } else {
+                l.path.display().to_string()
+            },
             modified: l.modified,
         };
         let mut out: Vec<TabInfo> = self.others.iter().map(name).collect();
@@ -4836,6 +4923,40 @@ impl Viewer {
     /// Ferme un onglet (en proposant d'enregistrer s'il a des modifications).
     fn close_tab(&mut self, index: usize, window: &mut dyn WindowHandle) {
         self.guard_close_tab(index, window);
+    }
+
+    /// Bouton du milieu enfoncé. Sur un onglet, il le ferme, comme dans les
+    /// navigateurs ; sur la page, il la saisit pour la faire glisser.
+    ///
+    /// Dans les barres, il ne saisit jamais la page : il la faisait défiler
+    /// depuis un point hors de la vue, et un clic du milieu sur un onglet
+    /// aurait fermé l'onglet **et** fait glisser le document suivant.
+    fn middle_down(&mut self, x: i32, y: i32, window: &mut dyn WindowHandle) {
+        let top = self.view_top() as i32;
+        if y >= top {
+            self.drag_last = Some((x - self.view_left() as i32, y - top));
+            return;
+        }
+        let bar = Toolbar::height(&self.theme, self.dpi_scale as f32);
+        let tabs = self.tabs_height() as i32;
+        // Même garde que le clic gauche : une carte, la palette ou une
+        // liste ouverte ont la main.
+        if y < bar || y >= bar + tabs || self.menu_blocked() {
+            return;
+        }
+        if let TabAction::Close(index) = self.tabs.middle_click(x, y - bar) {
+            log_line(&format!(
+                "onglet {index} : clic du milieu, fermeture demandée"
+            ));
+            self.tip = None;
+            // Fermer passe par la même garde que la croix : un document
+            // modifié demande d'abord s'il faut l'enregistrer.
+            self.close_tab(index, window);
+            // Les onglets se sont décalés : le survol d'avant désignerait
+            // le voisin.
+            self.tabs.mouse_leave();
+            window.request_redraw();
+        }
     }
 
     /// Ferme un onglet sans rien demander.
@@ -6536,7 +6657,7 @@ impl Viewer {
 
     /// Recopie l'état courant dans les préférences et les enregistre.
     fn save_prefs(&mut self) {
-        self.prefs.dark_theme = self.theme.canvas == Theme::dark().canvas;
+        self.prefs.dark_theme = self.theme.is_dark();
         self.prefs.view_mode = self.view_mode;
         self.prefs.panel_open = self.panel_open;
         self.prefs.fit = self.fit;
@@ -7466,7 +7587,7 @@ impl Viewer {
                 x,
                 y,
                 ..
-            } => self.drag_last = Some((x - self.view_left() as i32, y - self.view_top() as i32)),
+            } => self.middle_down(x, y, window),
             Event::MouseUp { x, y, .. } if self.palette.is_some() => {
                 let chosen = self.palette.as_mut().and_then(|p| p.mouse_up(x, y));
                 if let Some(command) = chosen {
@@ -7581,13 +7702,16 @@ impl Viewer {
                 if self.annot_tool.is_some() {
                     hover_changed |= self.mode_bar.mouse_move(x, y);
                 }
-                if hover_changed {
-                    self.update_tip(window);
-                }
-                if self.tabs_height() > 0 && y >= bar && y < self.view_top() as i32 {
+                // Les onglets avant l'info-bulle : sans quoi leur survol ne
+                // la déclenchait jamais.
+                let tabs = self.tabs_height() as i32;
+                if tabs > 0 && y >= bar && y < bar + tabs {
                     hover_changed |= self.tabs.mouse_move(x, y - bar);
                 } else {
                     hover_changed |= self.tabs.mouse_leave();
+                }
+                if hover_changed {
+                    self.update_tip(window);
                 }
                 let in_sign_panel = self.sign_panel_open()
                     && x < self.view_left() as i32

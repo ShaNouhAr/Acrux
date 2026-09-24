@@ -19,7 +19,8 @@ use acrux_graphics::Rasterizer;
 use crate::platform::{Frame, Key};
 use crate::ui::icons::{self, Icon};
 use crate::ui::input::{InputAction, TextInput};
-use crate::ui::paint::round_rect;
+use crate::ui::lang::tr;
+use crate::ui::paint::{inner_ring, round_rect, round_rect_alpha, round_rect_outline};
 use crate::ui::palette::{describe, Command};
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
@@ -60,6 +61,11 @@ pub enum ToolAction {
     TogglePanel,
     /// Afficher / masquer la barre des outils, à droite.
     ToggleTools,
+    /// Annuler la dernière modification (Ctrl+Z) : d'abord dans le bloc de
+    /// texte en cours de saisie, puis dans l'historique du document.
+    Undo,
+    /// Rétablir la modification annulée (Ctrl+Y).
+    Redo,
     /// Pivoter la page courante de 90° (modification du document).
     RotatePage,
     /// Enregistrer.
@@ -88,6 +94,8 @@ impl ToolAction {
             ToolAction::ToggleTheme => Command::ToggleTheme,
             ToolAction::TogglePanel => Command::TogglePanel,
             ToolAction::ToggleTools => Command::ToggleTools,
+            ToolAction::Undo => Command::Undo,
+            ToolAction::Redo => Command::Redo,
             ToolAction::RotatePage => Command::RotateRight,
             ToolAction::Save => Command::Save,
             ToolAction::Print => Command::Print,
@@ -98,7 +106,10 @@ impl ToolAction {
 }
 
 /// Ce que la barre affiche.
-#[derive(Debug, Clone)]
+// Six états indépendants que la barre ne fait que lire : une énumération les
+// multiplierait sans rien apprendre de plus.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Default)]
 pub struct ToolbarInfo {
     /// Page courante (1 = première).
     pub page: usize,
@@ -112,7 +123,96 @@ pub struct ToolbarInfo {
     pub zoom_percent: u32,
     /// Un document est ouvert (sinon les boutons de navigation sont grisés).
     pub has_document: bool,
+    /// Il y a quelque chose à annuler : dans l'historique du document, ou
+    /// dans le bloc de texte en cours de saisie. Sinon « Annuler » est grisé.
+    pub can_undo: bool,
+    /// Il y a une modification annulée à rétablir.
+    pub can_redo: bool,
+    /// Le panneau latéral est ouvert : son bouton est « allumé ».
+    pub panel_open: bool,
+    /// La colonne des outils est ouverte : son bouton est « allumé ».
+    pub tools_open: bool,
+    /// Le thème en vigueur est sombre : le bouton du thème montre le soleil
+    /// (on passera au clair), sinon la lune.
+    pub dark_theme: bool,
 }
+
+/// Le bouton répond-il ? « Annuler » et « Rétablir » suivent l'historique ;
+/// les autres, la présence d'un document quand ils en ont besoin.
+fn enabled(action: &ToolAction, needs_document: bool, info: &ToolbarInfo) -> bool {
+    match action {
+        ToolAction::Undo => info.has_document && info.can_undo,
+        ToolAction::Redo => info.has_document && info.can_redo,
+        _ => info.has_document || !needs_document,
+    }
+}
+
+/// Le bouton est-il « allumé » ? Seules les bascules le sont, quand ce
+/// qu'elles montrent est affiché : on voit d'un coup d'œil ce qui est ouvert,
+/// et donc ce qu'un clic refermera.
+fn active(action: &ToolAction, info: &ToolbarInfo) -> bool {
+    match action {
+        ToolAction::TogglePanel => info.has_document && info.panel_open,
+        ToolAction::ToggleTools => info.has_document && info.tools_open,
+        _ => false,
+    }
+}
+
+/// Icône affichée : celle de l'élément, sauf pour le thème, dont le bouton
+/// montre **où l'on va** — la lune en thème clair, le soleil en sombre —
+/// comme les interrupteurs de thème des navigateurs et des systèmes.
+fn shown_icon(icon: Icon, action: &ToolAction, info: &ToolbarInfo) -> Icon {
+    match action {
+        ToolAction::ToggleTheme if !info.dark_theme => Icon::Moon,
+        _ => icon,
+    }
+}
+
+/// Texte de l'info-bulle d'un bouton : son libellé puis son raccourci, que
+/// la palette fournit. Les bascules disent ce que le clic **fera** — « Passer
+/// au thème sombre », « Masquer le panneau latéral » — plutôt que le nom
+/// neutre de la commande, qui laissait deviner dans quel sens on allait.
+fn tip_text(action: &ToolAction, info: &ToolbarInfo) -> Option<String> {
+    let (label, shortcut) = describe(action.command()?)?;
+    let label = match action {
+        ToolAction::ToggleTheme if info.dark_theme => tr("Passer au thème clair"),
+        ToolAction::ToggleTheme => tr("Passer au thème sombre"),
+        ToolAction::TogglePanel if info.panel_open => tr("Masquer le panneau latéral"),
+        ToolAction::TogglePanel => tr("Afficher le panneau latéral"),
+        ToolAction::ToggleTools if info.tools_open => tr("Masquer les outils"),
+        ToolAction::ToggleTools => tr("Tous les outils"),
+        _ => label,
+    };
+    Some(with_shortcut(label, shortcut))
+}
+
+/// « libellé  (raccourci) », ou le libellé seul s'il n'y a pas de raccourci.
+fn with_shortcut(label: &str, shortcut: &str) -> String {
+    if shortcut.is_empty() {
+        label.to_string()
+    } else {
+        format!("{label}  ({shortcut})")
+    }
+}
+
+/// Boutons qui s'effacent, dans cet ordre, quand la fenêtre est trop étroite
+/// pour toute la barre. Sans cela, le groupe de droite (rechercher, outils,
+/// paramètres, thème) était repoussé hors de la fenêtre. Chacun de ceux-ci
+/// garde un autre accès : un raccourci, la molette, la palette ou le clic
+/// droit. Restent jusqu'au bout le panneau, l'ouverture, le champ de page,
+/// le zoom affiché, Annuler, Rétablir et Enregistrer.
+///
+/// Les paires partent ensemble : un « + » sans son « − », une page suivante
+/// sans la précédente, se liraient comme des oublis.
+const DROP_ORDER: [&[ToolAction]; 7] = [
+    &[ToolAction::CycleViewMode],
+    &[ToolAction::FitWidth],
+    &[ToolAction::Print],
+    &[ToolAction::RotatePage],
+    &[ToolAction::Home],
+    &[ToolAction::ZoomOut, ToolAction::ZoomIn],
+    &[ToolAction::PrevPage, ToolAction::NextPage],
+];
 
 // Pas `Copy` : `Item::Button` porte une `ToolAction` qui ne l'est plus.
 #[derive(Debug, Clone)]
@@ -136,6 +236,9 @@ pub struct Toolbar {
     items: Vec<Item>,
     /// Rectangles `(x, y, w, h)` des éléments, calculés au dernier dessin.
     rects: Vec<(i32, i32, i32, i32)>,
+    /// Éléments effacés faute de place au dernier dessin ([`DROP_ORDER`]) :
+    /// ni dessinés, ni cliquables, ni atteignables au clavier.
+    hidden: Vec<bool>,
     hover: Option<usize>,
     /// Élément tenant le focus clavier, quand la barre l'a. Se déplace aux
     /// flèches, s'active par Entrée ou Espace : tout ce que la souris fait
@@ -154,6 +257,7 @@ impl Default for Toolbar {
 impl Toolbar {
     /// Barre standard du visualiseur.
     #[must_use]
+    #[allow(clippy::too_many_lines)] // un élément par bouton, dans l'ordre de la barre
     pub fn new() -> Self {
         use Item::{Button, PageBox, Separator, Spacer, ZoomLabel};
         let items = vec![
@@ -209,6 +313,19 @@ impl Toolbar {
                 needs_document: true,
             },
             Separator,
+            // Annuler et Rétablir ouvrent le groupe des modifications : on
+            // les cherche là, et à côté de ce qu'ils défont. Pas de
+            // séparateur de plus : la barre est déjà large.
+            Button {
+                icon: Icon::Undo,
+                action: ToolAction::Undo,
+                needs_document: true,
+            },
+            Button {
+                icon: Icon::Redo,
+                action: ToolAction::Redo,
+                needs_document: true,
+            },
             Button {
                 icon: Icon::Rotate,
                 action: ToolAction::RotatePage,
@@ -230,10 +347,12 @@ impl Toolbar {
                 action: ToolAction::Search,
                 needs_document: true,
             },
+            // La colonne des outils ne s'affiche pas sur l'accueil : sans
+            // document, le bouton n'aurait rien montré, il est donc grisé.
             Button {
                 icon: Icon::Tools,
                 action: ToolAction::ToggleTools,
-                needs_document: false,
+                needs_document: true,
             },
             Button {
                 icon: Icon::Settings,
@@ -248,6 +367,7 @@ impl Toolbar {
         ];
         Self {
             rects: vec![(0, 0, 0, 0); items.len()],
+            hidden: vec![false; items.len()],
             items,
             hover: None,
             focus: None,
@@ -288,9 +408,6 @@ impl Toolbar {
         theme: &Theme,
         info: &ToolbarInfo,
     ) {
-        let h = Self::height(theme, dpi);
-        let button = (32.0 * dpi).round() as i32;
-        let gap = (2.0 * dpi).round() as i32;
         let pad = (6.0 * dpi).round() as i32;
         let size = theme.font_size * dpi;
         // Le champ de page suit l'étiquette courante, sans descendre sous la
@@ -302,6 +419,17 @@ impl Toolbar {
             let wanted = text.measure(size, &Self::page_box_label(info));
             wanted.clamp(floor, ceiling).round() as i32 + 2 * pad
         };
+        let zoom_label = text.measure(size, "1000 %").round() as i32 + 2 * pad;
+        self.place(width, dpi, Self::height(theme, dpi), page_box, zoom_label);
+    }
+
+    /// Place les éléments de gauche à droite, une fois les textes mesurés :
+    /// la part de la disposition qui ne dépend pas de la police, et qu'une
+    /// épreuve peut donc exercer seule.
+    fn place(&mut self, width: i32, dpi: f32, h: i32, page_box: i32, zoom_label: i32) {
+        let button = (32.0 * dpi).round() as i32;
+        let gap = (2.0 * dpi).round() as i32;
+        let pad = (6.0 * dpi).round() as i32;
         let widths: Vec<i32> = self
             .items
             .iter()
@@ -309,16 +437,40 @@ impl Toolbar {
                 Item::Button { .. } => button,
                 Item::Separator => (9.0 * dpi).round() as i32,
                 Item::PageBox => page_box,
-                Item::ZoomLabel => text.measure(size, "1000 %").round() as i32 + 2 * pad,
+                Item::ZoomLabel => zoom_label,
                 Item::Spacer => 0,
             })
             .collect();
+        // Fenêtre étroite : les boutons les moins utiles s'effacent un à un
+        // jusqu'à ce que la barre tienne.
+        let mut hidden = vec![false; self.items.len()];
+        let span = |hidden: &[bool]| -> i32 {
+            let used: i32 = widths
+                .iter()
+                .zip(hidden)
+                .filter(|(_, gone)| !**gone)
+                .map(|(w, _)| w + gap)
+                .sum();
+            used + 2 * pad
+        };
+        for victims in DROP_ORDER {
+            if span(&hidden) <= width {
+                break;
+            }
+            for (i, it) in self.items.iter().enumerate() {
+                if matches!(it, Item::Button { action, .. } if victims.contains(action)) {
+                    hidden[i] = true;
+                }
+            }
+        }
         let after_spacer: i32 = self
             .items
             .iter()
             .zip(&widths)
-            .skip_while(|(it, _)| !matches!(it, Item::Spacer))
-            .map(|(_, w)| w + gap)
+            .zip(&hidden)
+            .skip_while(|((it, _), _)| !matches!(it, Item::Spacer))
+            .filter(|(_, gone)| !**gone)
+            .map(|((_, w), _)| w + gap)
             .sum();
         let mut x = pad;
         let y = (h - button) / 2;
@@ -328,9 +480,79 @@ impl Toolbar {
                 self.rects[i] = (x, y, 0, button);
                 continue;
             }
+            if hidden[i] {
+                self.rects[i] = (x, y, 0, button);
+                continue;
+            }
             self.rects[i] = (x, y, *w, button);
             x += w + gap;
         }
+        self.hidden = hidden;
+    }
+
+    /// Vrai si l'élément a été effacé faute de place.
+    fn is_hidden(&self, index: usize) -> bool {
+        self.hidden.get(index).copied().unwrap_or(false)
+    }
+
+    /// Dessine le champ « page / total », d'indice `i` dans la barre.
+    fn paint_page_box(
+        &self,
+        frame: &mut Frame<'_>,
+        text: &mut TextRenderer,
+        t: &Theme,
+        dpi: f32,
+        i: usize,
+        info: &ToolbarInfo,
+    ) {
+        let (x, y, w, bh) = self.rects[i];
+        let radius = 7.0 * dpi;
+        // Même case que le champ de saisie qui la remplace au clic
+        // (`TextInput::draw`, en y + 3 et h − 6) : rien ne saute quand on se
+        // met à taper.
+        let (fy, fh) = (y + 3, bh - 6);
+        if let Some(input) = &self.page_input {
+            input.draw(frame, text, t, dpi, x, fy, w, fh);
+            return;
+        }
+        // Au repos, le champ est **encadré** : on doit voir qu'on peut y
+        // taper un numéro. Le survol durcit le cadre au lieu de peindre un
+        // bouton.
+        if info.has_document {
+            round_rect(frame, x, fy, w, fh, radius, t.canvas);
+            let edge = if self.hover == Some(i) {
+                t.text_dim
+            } else {
+                t.separator
+            };
+            round_rect_outline(frame, x, fy, w, fh, radius, dpi.max(1.0), edge);
+        }
+        // Le champ atteint au clavier (F6 puis les flèches) porte l'anneau
+        // comme les boutons : il n'en avait aucun, et l'on ne savait plus où
+        // était le focus.
+        if self.focus == Some(i) {
+            inner_ring(frame, x, fy, w, fh, radius, dpi, t.accent);
+        }
+        let size = t.font_size * dpi;
+        let pad = (6.0 * dpi).round() as i32;
+        let label = Self::page_box_label(info);
+        let room = (w - pad) as f32;
+        let tw = text.measure(size, &label).min(room);
+        let baseline = y as f32 + (bh as f32 + text.ascent(size)) / 2.0 - 1.0;
+        let color = if info.has_document {
+            t.text
+        } else {
+            t.disabled()
+        };
+        text.draw_clipped(
+            frame,
+            x as f32 + (w as f32 - tw) / 2.0,
+            baseline,
+            size,
+            &label,
+            color,
+            room,
+        );
     }
 
     /// Dessine la barre en haut de la fenêtre.
@@ -358,27 +580,45 @@ impl Toolbar {
         );
         self.layout(width, dpi, text, t, info);
         let size = t.font_size * dpi;
-        let pad = (6.0 * dpi).round() as i32;
         let icon_px = (20.0 * dpi).round();
+        let radius = 7.0 * dpi;
         for (i, it) in self.items.iter().enumerate() {
             let (x, y, w, bh) = self.rects[i];
+            if self.is_hidden(i) {
+                continue;
+            }
             match it {
                 Item::Button {
                     icon,
+                    action,
                     needs_document,
-                    ..
                 } => {
-                    let enabled = info.has_document || !needs_document;
-                    if enabled && self.hover == Some(i) {
-                        round_rect(frame, x, y, w, bh, 7.0 * dpi, t.hover);
+                    let on = enabled(action, *needs_document, info);
+                    let lit = active(action, info);
+                    let hovered = on && self.hover == Some(i);
+                    // Une bascule allumée porte un fond d'accent léger, un peu
+                    // plus soutenu au survol ; les autres boutons n'ont de
+                    // fond qu'au survol.
+                    if lit {
+                        let alpha = if hovered { 0.28 } else { 0.18 };
+                        round_rect_alpha(frame, x, y, w, bh, radius, t.accent, alpha);
+                    } else if hovered {
+                        round_rect(frame, x, y, w, bh, radius, t.hover);
                     }
                     if self.focus == Some(i) {
-                        focus_ring(frame, t, x, y, w, bh);
+                        inner_ring(frame, x, y, w, bh, radius, dpi, t.accent);
                     }
-                    let color = if enabled { t.text } else { t.text_dim };
+                    let color = if !on {
+                        t.disabled()
+                    } else if lit {
+                        t.accent
+                    } else {
+                        t.text
+                    };
                     let ix = x + (w - icon_px as i32) / 2;
                     let iy = y + (bh - icon_px as i32) / 2;
-                    icons::draw(frame, raster, *icon, ix, iy, icon_px, color);
+                    let shown = shown_icon(*icon, action, info);
+                    icons::draw(frame, raster, shown, ix, iy, icon_px, color);
                 }
                 Item::Separator => {
                     let sx = x + w / 2;
@@ -392,33 +632,7 @@ impl Toolbar {
                         t.separator.2,
                     );
                 }
-                Item::PageBox => {
-                    if let Some(input) = &self.page_input {
-                        input.draw(frame, text, t, dpi, x, y + 3, w, bh - 6);
-                    } else {
-                        let label = Self::page_box_label(info);
-                        if info.has_document && self.hover == Some(i) {
-                            round_rect(frame, x, y, w, bh, 7.0 * dpi, t.hover);
-                        }
-                        let room = (w - pad) as f32;
-                        let tw = text.measure(size, &label).min(room);
-                        let baseline = y as f32 + (bh as f32 + text.ascent(size)) / 2.0 - 1.0;
-                        let color = if info.has_document {
-                            t.text
-                        } else {
-                            t.text_dim
-                        };
-                        text.draw_clipped(
-                            frame,
-                            x as f32 + (w as f32 - tw) / 2.0,
-                            baseline,
-                            size,
-                            &label,
-                            color,
-                            room,
-                        );
-                    }
-                }
+                Item::PageBox => self.paint_page_box(frame, text, t, dpi, i, info),
                 Item::ZoomLabel => {
                     let label = if info.has_document {
                         format!("{} %", info.zoom_percent)
@@ -455,19 +669,31 @@ impl Toolbar {
             })
     }
 
-    /// Déplacement de la souris : vrai si l'aspect a changé.
-    /// Texte de l'info-bulle du bouton survolé et rectangle de ce bouton.
+    /// Texte de l'info-bulle de l'élément survolé et rectangle de cet
+    /// élément.
+    ///
+    /// Un bouton grisé n'en a pas : l'info-bulle promettait une action que le
+    /// clic refusait ensuite. Le champ de page en a une, qui dit qu'on peut y
+    /// taper un numéro — et le raccourci pour y venir au clavier.
     #[must_use]
-    pub fn hover_tip(&self) -> Option<(String, (i32, i32, i32, i32))> {
-        let index = self.hover?;
-        let Item::Button { action, .. } = self.items.get(index)? else {
-            return None;
-        };
-        let (label, shortcut) = describe(action.command()?)?;
-        let text = if shortcut.is_empty() {
-            label.to_string()
-        } else {
-            format!("{label}  ({shortcut})")
+    pub fn hover_tip(&self, info: &ToolbarInfo) -> Option<(String, (i32, i32, i32, i32))> {
+        let index = self.hover.filter(|&i| !self.is_hidden(i))?;
+        let text = match self.items.get(index)? {
+            Item::Button {
+                action,
+                needs_document,
+                ..
+            } => {
+                if !enabled(action, *needs_document, info) {
+                    return None;
+                }
+                tip_text(action, info)?
+            }
+            Item::PageBox if info.has_document && self.page_input.is_none() => {
+                let (label, shortcut) = describe(Command::GoToPage)?;
+                with_shortcut(label, shortcut)
+            }
+            _ => return None,
         };
         Some((text, *self.rects.get(index)?))
     }
@@ -490,7 +716,7 @@ impl Toolbar {
                 needs_document,
                 ..
             } => {
-                if *needs_document && !info.has_document {
+                if !enabled(action, *needs_document, info) {
                     return None;
                 }
                 self.page_input = None;
@@ -573,15 +799,23 @@ impl Toolbar {
 
     // --- Focus clavier ---------------------------------------------------
 
-    /// Indices des éléments atteignables au clavier, dans l'ordre visuel.
+    /// Indices des éléments atteignables au clavier, dans l'ordre visuel :
+    /// ceux qui répondent et qui sont affichés.
     fn focusable(&self, info: &ToolbarInfo) -> Vec<usize> {
         self.items
             .iter()
             .enumerate()
-            .filter(|(_, it)| match it {
-                Item::Button { needs_document, .. } => info.has_document || !*needs_document,
-                Item::PageBox => info.has_document,
-                _ => false,
+            .filter(|(i, it)| {
+                !self.is_hidden(*i)
+                    && match it {
+                        Item::Button {
+                            action,
+                            needs_document,
+                            ..
+                        } => enabled(action, *needs_document, info),
+                        Item::PageBox => info.has_document,
+                        _ => false,
+                    }
             })
             .map(|(i, _)| i)
             .collect()
@@ -607,7 +841,16 @@ impl Toolbar {
             return self.focus_edge(!forward, info);
         };
         let Some(at) = targets.iter().position(|i| *i == current) else {
-            return self.focus_edge(!forward, info);
+            // L'élément qui avait le focus ne répond plus — « Annuler », une
+            // fois tout annulé. On repart de sa place, pas d'un bord de la
+            // barre : la flèche droite mène à son voisin de droite.
+            let next = if forward {
+                targets.iter().find(|&&i| i > current)
+            } else {
+                targets.iter().rev().find(|&&i| i < current)
+            };
+            self.focus = next.copied();
+            return self.focus.is_some();
         };
         let next = if forward {
             Some(at + 1)
@@ -640,33 +883,26 @@ impl Toolbar {
         self.focus.is_some()
     }
 
-    /// Active l'élément sous le focus (Entrée ou Espace).
+    /// Active l'élément sous le focus (Entrée ou Espace). Rien, s'il ne
+    /// répond pas : le focus peut rester sur « Annuler » après la dernière
+    /// annulation, et Entrée n'a alors plus rien à défaire.
     pub fn activate_focus(&mut self, info: &ToolbarInfo) -> Option<ToolAction> {
         let index = self.focus?;
+        if self.is_hidden(index) {
+            return None;
+        }
         match self.items.get(index)? {
-            Item::Button { action, .. } => Some(action.clone()),
+            Item::Button {
+                action,
+                needs_document,
+                ..
+            } => enabled(action, *needs_document, info).then(|| action.clone()),
             Item::PageBox => {
                 self.focus_page(info);
                 None
             }
             _ => None,
         }
-    }
-}
-
-/// Anneau de focus : deux cadres, l'un clair l'autre accentué, pour rester
-/// visible sur un fond sombre comme sur un fond clair.
-fn focus_ring(frame: &mut Frame<'_>, t: &Theme, x: i32, y: i32, w: i32, h: i32) {
-    let a = t.accent;
-    for (inset, color) in [(0, t.bar), (1, a), (2, a)] {
-        let (x, y, w, h) = (x + inset, y + inset, w - 2 * inset, h - 2 * inset);
-        if w <= 0 || h <= 0 {
-            continue;
-        }
-        frame.fill_rect(x, y, w, 1, color.0, color.1, color.2);
-        frame.fill_rect(x, y + h - 1, w, 1, color.0, color.1, color.2);
-        frame.fill_rect(x, y, 1, h, color.0, color.1, color.2);
-        frame.fill_rect(x + w - 1, y, 1, h, color.0, color.1, color.2);
     }
 }
 
@@ -681,9 +917,9 @@ mod tests {
         let info = ToolbarInfo {
             page: 3,
             page_count: 10,
-            page_label: None,
             zoom_percent: 100,
             has_document: true,
+            ..ToolbarInfo::default()
         };
         assert_eq!(tb.mouse_down(5, 5, &info), None);
         // On simule une disposition : le champ de page occupe (100, 0, 80, 32).
@@ -753,6 +989,7 @@ mod tests {
             page_label: Some("iii".into()),
             zoom_percent: 100,
             has_document: true,
+            ..ToolbarInfo::default()
         };
         assert_eq!(Toolbar::page_box_label(&info), "iii / 240");
         tb.focus_page(&info);
@@ -776,5 +1013,229 @@ mod tests {
         tb.focus_page(&none);
         assert!(!tb.has_focus());
         assert_eq!(Toolbar::page_box_label(&none), "– / –");
+    }
+
+    /// Indice du bouton qui porte cette action.
+    fn button(tb: &Toolbar, wanted: &ToolAction) -> usize {
+        tb.items
+            .iter()
+            .position(|it| matches!(it, Item::Button { action, .. } if action == wanted))
+            .unwrap_or(usize::MAX)
+    }
+
+    /// Un document ouvert, rien d'autre.
+    fn with_document() -> ToolbarInfo {
+        ToolbarInfo {
+            page: 1,
+            page_count: 4,
+            zoom_percent: 100,
+            has_document: true,
+            ..ToolbarInfo::default()
+        }
+    }
+
+    #[test]
+    fn undo_redo_follow_history() {
+        let mut tb = Toolbar::new();
+        let (undo, redo) = (
+            button(&tb, &ToolAction::Undo),
+            button(&tb, &ToolAction::Redo),
+        );
+        // Annuler et Rétablir ouvrent le groupe des modifications, avant
+        // Pivoter.
+        assert_eq!(redo, undo + 1);
+        assert_eq!(button(&tb, &ToolAction::RotatePage), redo + 1);
+        tb.rects[undo] = (0, 0, 32, 32);
+        tb.rects[redo] = (40, 0, 32, 32);
+        let rien = with_document();
+        assert_eq!(tb.mouse_down(10, 10, &rien), None);
+        assert_eq!(tb.mouse_down(50, 10, &rien), None);
+        let annulable = ToolbarInfo {
+            can_undo: true,
+            ..with_document()
+        };
+        assert_eq!(tb.mouse_down(10, 10, &annulable), Some(ToolAction::Undo));
+        assert_eq!(tb.mouse_down(50, 10, &annulable), None);
+        let retablissable = ToolbarInfo {
+            can_redo: true,
+            ..with_document()
+        };
+        assert_eq!(
+            tb.mouse_down(50, 10, &retablissable),
+            Some(ToolAction::Redo)
+        );
+        // Sans document, rien à annuler, quoi que disent les drapeaux.
+        let sans = ToolbarInfo {
+            has_document: false,
+            can_undo: true,
+            can_redo: true,
+            ..ToolbarInfo::default()
+        };
+        assert_eq!(tb.mouse_down(10, 10, &sans), None);
+        assert_eq!(tb.mouse_down(50, 10, &sans), None);
+    }
+
+    #[test]
+    fn disabled_buttons_have_no_tip() {
+        let mut tb = Toolbar::new();
+        let undo = button(&tb, &ToolAction::Undo);
+        tb.rects[undo] = (0, 0, 32, 32);
+        assert!(tb.mouse_move(10, 10));
+        assert_eq!(
+            tb.hover_tip(&with_document()),
+            None,
+            "grisé : pas d'info-bulle"
+        );
+        let annulable = ToolbarInfo {
+            can_undo: true,
+            ..with_document()
+        };
+        let (tip, rect) = tb.hover_tip(&annulable).unwrap_or_default();
+        assert!(tip.contains("Ctrl+Z"), "{tip}");
+        assert!(
+            tip.starts_with("Annuler") || tip.starts_with("Undo"),
+            "{tip}"
+        );
+        assert_eq!(rect, (0, 0, 32, 32));
+    }
+
+    #[test]
+    fn page_box_tip_says_it_can_be_typed_into() {
+        let mut tb = Toolbar::new();
+        let idx = tb
+            .items
+            .iter()
+            .position(|it| matches!(it, Item::PageBox))
+            .unwrap_or(0);
+        tb.rects[idx] = (100, 0, 80, 32);
+        tb.mouse_move(120, 10);
+        let (tip, _) = tb.hover_tip(&with_document()).unwrap_or_default();
+        assert!(tip.contains("Ctrl+G"), "{tip}");
+        // Sans document, le champ est éteint : pas d'info-bulle.
+        assert_eq!(tb.hover_tip(&ToolbarInfo::default()), None);
+    }
+
+    #[test]
+    fn theme_button_shows_where_it_goes() {
+        let clair = ToolbarInfo {
+            dark_theme: false,
+            ..ToolbarInfo::default()
+        };
+        let sombre = ToolbarInfo {
+            dark_theme: true,
+            ..ToolbarInfo::default()
+        };
+        let theme = ToolAction::ToggleTheme;
+        assert_eq!(shown_icon(Icon::Theme, &theme, &clair), Icon::Moon);
+        assert_eq!(shown_icon(Icon::Theme, &theme, &sombre), Icon::Theme);
+        // Les autres boutons gardent leur icône.
+        assert_eq!(
+            shown_icon(Icon::Save, &ToolAction::Save, &clair),
+            Icon::Save
+        );
+        let vers_sombre = tip_text(&theme, &clair).unwrap_or_default();
+        let vers_clair = tip_text(&theme, &sombre).unwrap_or_default();
+        assert_ne!(vers_sombre, vers_clair);
+        assert!(vers_sombre.ends_with("(T)"), "{vers_sombre}");
+        assert!(vers_clair.ends_with("(T)"), "{vers_clair}");
+    }
+
+    #[test]
+    fn toggles_report_their_state() {
+        let panneau = ToolAction::TogglePanel;
+        let outils = ToolAction::ToggleTools;
+        let ouvert = ToolbarInfo {
+            panel_open: true,
+            tools_open: true,
+            ..with_document()
+        };
+        assert!(active(&panneau, &ouvert));
+        assert!(active(&outils, &ouvert));
+        assert!(!active(&panneau, &with_document()));
+        assert!(!active(&outils, &with_document()));
+        // Sans document, rien n'est affiché : rien n'est allumé.
+        let accueil = ToolbarInfo {
+            has_document: false,
+            ..ouvert.clone()
+        };
+        assert!(!active(&panneau, &accueil));
+        assert!(!active(&outils, &accueil));
+        // Les autres boutons ne s'allument jamais.
+        assert!(!active(&ToolAction::Save, &ouvert));
+        // L'info-bulle dit ce que le clic fera, et le raccourci.
+        let masquer = tip_text(&panneau, &ouvert).unwrap_or_default();
+        let afficher = tip_text(&panneau, &with_document()).unwrap_or_default();
+        assert_ne!(masquer, afficher);
+        assert!(afficher.ends_with("(F4)"), "{afficher}");
+        assert!(tip_text(&outils, &with_document())
+            .unwrap_or_default()
+            .ends_with("(F3)"));
+    }
+
+    #[test]
+    fn keyboard_skips_and_ignores_disabled() {
+        let mut tb = Toolbar::new();
+        let undo = button(&tb, &ToolAction::Undo);
+        let redo = button(&tb, &ToolAction::Redo);
+        let rotate = button(&tb, &ToolAction::RotatePage);
+        let info = with_document();
+        assert!(!tb.focusable(&info).contains(&undo));
+        let annulable = ToolbarInfo {
+            can_undo: true,
+            ..with_document()
+        };
+        assert!(tb.focusable(&annulable).contains(&undo));
+        // Le focus resté sur Annuler, devenu grisé : Entrée ne fait rien…
+        tb.focus = Some(undo);
+        assert_eq!(tb.activate_focus(&info), None);
+        assert_eq!(tb.activate_focus(&annulable), Some(ToolAction::Undo));
+        // … et la flèche droite mène au voisin qui répond (Rétablir est
+        // grisé lui aussi), pas au bord de la barre.
+        assert!(tb.focus_step(true, &info));
+        assert_eq!(tb.focus, Some(rotate));
+        tb.focus = Some(redo);
+        assert!(tb.focus_step(false, &info));
+        assert!(tb.focus.is_some_and(|i| i < undo));
+    }
+
+    /// Fenêtre étroite : les boutons secondaires s'effacent, le groupe de
+    /// droite reste dans la fenêtre.
+    #[test]
+    fn narrow_window_drops_secondary_buttons() {
+        let mut tb = Toolbar::new();
+        let info = with_document();
+        // Sans police : le champ de page et le zoom prennent des largeurs
+        // typiques à 100 %.
+        tb.place(2000, 1.0, 40, 87, 57);
+        assert!(!tb.hidden.iter().any(|h| *h), "large : tout tient");
+        let theme = button(&tb, &ToolAction::ToggleTheme);
+        tb.place(700, 1.0, 40, 87, 57);
+        let (x, _, w, _) = tb.rects[theme];
+        assert!(
+            x + w <= 700,
+            "le bouton du thème sort de la fenêtre : {x} + {w}"
+        );
+        let view = button(&tb, &ToolAction::CycleViewMode);
+        assert!(tb.is_hidden(view), "la disposition s'efface la première");
+        assert!(!tb.is_hidden(button(&tb, &ToolAction::Undo)));
+        // Un bouton effacé ne se clique ni ne se cible.
+        assert_eq!(tb.rects[view].2, 0);
+        assert!(!tb.focusable(&info).contains(&view));
+        // Plus étroit encore : les boutons du zoom et des pages partent, par
+        // paires, mais les modifications et le groupe de droite restent.
+        tb.place(560, 1.0, 40, 87, 57);
+        let (x, _, w, _) = tb.rects[theme];
+        assert!(
+            x + w <= 560,
+            "le bouton du thème sort de la fenêtre : {x} + {w}"
+        );
+        assert!(tb.is_hidden(button(&tb, &ToolAction::ZoomIn)));
+        assert!(tb.is_hidden(button(&tb, &ToolAction::PrevPage)));
+        for kept in [ToolAction::Undo, ToolAction::Redo, ToolAction::Save] {
+            assert!(!tb.is_hidden(button(&tb, &kept)), "{kept:?}");
+        }
+        // La place revenue, tout revient.
+        tb.place(2000, 1.0, 40, 87, 57);
+        assert!(!tb.hidden.iter().any(|h| *h));
     }
 }

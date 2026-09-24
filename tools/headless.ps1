@@ -23,6 +23,11 @@ $sig2 = @'
 public struct POINT { public int X, Y; }
 '@
 if (-not ("W.HL2" -as [type])) { Add-Type -MemberDefinition $sig2 -Name HL2 -Namespace W | Out-Null }
+# Encore un type a part pour le redimensionnement, pour la meme raison.
+$sig3 = @'
+[DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+'@
+if (-not ("W.HL3" -as [type])) { Add-Type -MemberDefinition $sig3 -Name HL3 -Namespace W | Out-Null }
 
 # Echelle entre les pixels de la capture et ceux des messages de souris.
 # En mode invisible la fenetre n'est jamais montree : elle garde la taille
@@ -122,6 +127,17 @@ function RightClick($x, $y) {
     Start-Sleep -Milliseconds 500
 }
 
+# Clic du milieu en (x, y) : survol, appui (MK_MBUTTON), relachement. Sur un
+# onglet, il le ferme ; sur la page, il la saisit pour la faire glisser.
+function MiddleClick($x, $y) {
+    [W.HL]::PostMessage($script:Hwnd, 0x0200, [IntPtr]0, (LParam $x $y)) | Out-Null
+    Start-Sleep -Milliseconds 100
+    [W.HL]::PostMessage($script:Hwnd, 0x0207, [IntPtr]0x10, (LParam $x $y)) | Out-Null
+    Start-Sleep -Milliseconds 100
+    [W.HL]::PostMessage($script:Hwnd, 0x0208, [IntPtr]0, (LParam $x $y)) | Out-Null
+    Start-Sleep -Milliseconds 500
+}
+
 # Maj+F10 : l'autre facon d'ouvrir le menu contextuel au clavier (la touche
 # << menu >> du clavier est Key 0x5D). F10 est une touche systeme : elle
 # arrive en WM_SYSKEYDOWN, pas en WM_KEYDOWN.
@@ -172,6 +188,16 @@ function Wheel($x, $y, $notches) {
     $l = [IntPtr][int64]((($p.Y -band 0xFFFF) * 65536) -bor ($p.X -band 0xFFFF))
     [W.HL]::PostMessage($script:Hwnd, 0x020A, $w, $l) | Out-Null
     Start-Sleep -Milliseconds 350
+}
+
+# Redimensionne la fenetre invisible (largeur et hauteur exterieures, en
+# pixels physiques) pour essayer une fenetre etroite. SWP_NOMOVE, SWP_NOZORDER
+# et SWP_NOACTIVATE, sans SWP_SHOWWINDOW : la fenetre reste cachee et ne
+# prend pas le premier plan. L'echelle des coordonnees est recalculee.
+function Resize($w, $h) {
+    [W.HL3]::SetWindowPos($script:Hwnd, [IntPtr]::Zero, 0, 0, $w, $h, 0x16) | Out-Null
+    Start-Sleep -Milliseconds 800
+    Update-Scale
 }
 
 # Touche avec Ctrl enfonce (Ctrl+Fin : 0x23, Ctrl+Origine : 0x24).

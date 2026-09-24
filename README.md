@@ -250,10 +250,17 @@ l'accueil (ouvrir, copier le chemin, ouvrir le dossier, retirer de la liste). Ch
 la commande de la palette et affiche son raccourci ; flèches, `Entrée`, `Échap` et l'initiale d'un
 élément s'y emploient comme dans un menu de Windows.
 
-Barre d'outils : panneau latéral (vignettes et signets), ouvrir, page précédente / suivante,
-numéro de page (cliquer pour saisir), zoom −/+, ajuster à la largeur, disposition des pages,
-pivoter, enregistrer, imprimer, recherche, thème. Chaque bouton affiche au survol son nom et son
-raccourci. Quand le document déclare des **étiquettes de page** (`/PageLabels`), c'est
+Barre d'outils : accueil, panneau latéral (vignettes et signets), ouvrir, page précédente /
+suivante, numéro de page (champ encadré : cliquer pour saisir), zoom −/+, ajuster à la largeur,
+disposition des pages, **annuler, rétablir** (grisés quand il n'y a rien à défaire ou à refaire),
+pivoter, enregistrer, imprimer, recherche, tous les outils, paramètres, thème (la lune en thème
+clair, le soleil en thème sombre : le bouton montre où l'on va). Les bascules du panneau et des
+outils s'allument quand ce qu'elles montrent est affiché. Chaque bouton affiche au survol ce qu'il
+fera et son raccourci ; un bouton grisé n'a pas d'info-bulle. Dans une fenêtre étroite, les boutons
+secondaires (disposition, ajustement, imprimer, pivoter, accueil, puis zoom et pages) s'effacent
+pour que le groupe de droite reste visible. Survoler un **onglet** montre le chemin complet du
+document et s'il reste des modifications à enregistrer ; le **clic du milieu** le ferme (en
+proposant d'abord d'enregistrer). Quand le document déclare des **étiquettes de page** (`/PageLabels`), c'est
 l'étiquette qui s'affiche et qui se tape : une préface numérotée i, ii, iii donne « iii / 240 »
 dans la barre d'outils et « page iii (3 / 240) » dans la barre d'état, et saisir « iv » ou
 « Annexe-A » mène à la bonne page.
@@ -262,11 +269,11 @@ dans la barre d'outils et « page iii (3 / 240) » dans la barre d'état, et sai
 | --- | --- |
 | `Ctrl+PgDn` / `Ctrl+PgUp` | page suivante / précédente |
 | `Origine` / `Fin` | première / dernière page |
-| molette, bouton du milieu, glisser hors du texte | défiler, déplacer (la molette fait défiler ce qui est sous le pointeur — panneau, colonne d'outils —, et jamais le document sous une palette, une invite ou un sélecteur ouverts) |
+| molette, bouton du milieu sur la page, glisser hors du texte | défiler, déplacer (la molette fait défiler ce qui est sous le pointeur — panneau, colonne d'outils —, et jamais le document sous une palette, une invite ou un sélecteur ouverts) |
 | clic sur un lien | destination interne, ou adresse dans le navigateur |
 | `F4` | panneau latéral : pages (glisser pour réordonner), signets, notes, calques, fichiers joints |
 | `Ctrl+G` | aller à une page par son numéro **ou son étiquette** (« iv », « Annexe-A ») |
-| `Ctrl+Tab`, `Ctrl+W` | onglet suivant, fermer l'onglet |
+| `Ctrl+Tab`, `Ctrl+W`, clic du milieu | onglet suivant, fermer l'onglet |
 
 | Voir | |
 | --- | --- |
@@ -310,7 +317,7 @@ une page par feuille, et `Ctrl+S` demande où ranger le document obtenu.
 | `M`, `Maj+M` | biffure : marquer (réversible), puis appliquer définitivement |
 | onglet « Fichiers » du panneau | pièces jointes : clic pour enregistrer, bouton pour en joindre une |
 | clic sur un champ de formulaire | le remplir ; `Tab` / `Entrée` : champ suivant et activation |
-| `Ctrl+Z` / `Ctrl+Y` (ou `Ctrl+Maj+Z`) | annuler, rétablir |
+| `Ctrl+Z` / `Ctrl+Y` (ou `Ctrl+Maj+Z`), ou les flèches de la barre d'outils | annuler, rétablir (dans un bloc en cours de saisie, étape par étape d'abord) |
 
 | Enregistrer | |
 | --- | --- |
