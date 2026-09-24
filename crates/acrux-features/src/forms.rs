@@ -19,7 +19,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
-use acrux_core::{Error, Matrix, Rect, Result};
+use acrux_core::{Error, Matrix, Point, Rect, Result};
 use acrux_document::text::decode_text_string;
 use acrux_document::{collect_pages, writer, Dict, Document, Name, Object, ObjectRef, Parser};
 
@@ -41,7 +41,9 @@ const FF_MULTI_SELECT: i64 = 1 << 21;
 const FF_COMB: i64 = 1 << 24;
 const FF_RADIOS_IN_UNISON: i64 = 1 << 25;
 
-/// Drapeaux d'annotation (§12.5.3) : masquée / non affichée.
+/// Drapeaux d'annotation (§12.5.3) : masquée / non affichée. Le drapeau
+/// « invisible » (bit 1) ne vaut que pour les types d'annotation inconnus :
+/// un widget qui le porte reste affiché, comme le fait le moteur de rendu.
 const ANNOT_HIDDEN: i64 = 1 << 1;
 const ANNOT_NOVIEW: i64 = 1 << 5;
 
@@ -191,6 +193,15 @@ pub struct Widget {
     pub states: Vec<String>,
     /// État « coché » du widget (premier état différent de `Off`).
     pub on_state: Option<String>,
+    /// Le widget porte une apparence normale (`/AP /N`). Sans elle, il ne
+    /// se dessine pas : c'est ce que [`prepare_display`] vient combler.
+    pub has_appearance: bool,
+    /// Le widget n'est pas montré à l'écran (`/F` : invisible, masqué ou
+    /// non affiché) : ni dessiné, ni atteint par la tabulation.
+    pub hidden: bool,
+    /// Rang du widget dans le tableau `/Annots` de sa page ; `usize::MAX`
+    /// s'il n'y figure pas. C'est l'ordre de tabulation par défaut.
+    pub annot_index: usize,
 }
 
 /// Valeur d'un champ, ou valeur à écrire.
@@ -352,20 +363,23 @@ fn write_acroform(doc: &Document, form: Dict, reference: Option<ObjectRef>) -> R
     Ok(())
 }
 
-/// Numéro d'objet de chaque widget → index de page, d'après `/Annots`.
-fn widget_pages(doc: &Document) -> Result<HashMap<u32, usize>> {
+/// Numéro d'objet de chaque widget → index de page et rang dans `/Annots`.
+///
+/// Les pages elles-mêmes y figurent aussi, avec le rang `usize::MAX` : c'est
+/// ce qui retrouve la page d'un widget absent de `/Annots` par son `/P`.
+fn widget_pages(doc: &Document) -> Result<HashMap<u32, (usize, usize)>> {
     let mut map = HashMap::new();
     for page in collect_pages(doc)? {
         if let Some(r) = page.reference {
-            map.insert(r.number, page.index);
+            map.insert(r.number, (page.index, usize::MAX));
         }
         let Some(annots) = page.dict.get(&Name::new("Annots")) else {
             continue;
         };
         if let Some(list) = doc.resolve(annots)?.as_array() {
-            for a in list {
+            for (rank, a) in list.iter().enumerate() {
                 if let Object::Reference(r) = a {
-                    map.insert(r.number, page.index);
+                    map.insert(r.number, (page.index, rank));
                 }
             }
         }
@@ -413,7 +427,7 @@ fn walk_field(
     node: &Object,
     prefix: &str,
     inherited: &Dict,
-    page_of: &HashMap<u32, usize>,
+    page_of: &HashMap<u32, (usize, usize)>,
     out: &mut Vec<Field>,
     visited: &mut HashSet<u32>,
     depth: usize,
@@ -517,30 +531,40 @@ fn widget_info(
     doc: &Document,
     d: &Dict,
     reference: Option<ObjectRef>,
-    page_of: &HashMap<u32, usize>,
+    page_of: &HashMap<u32, (usize, usize)>,
 ) -> Widget {
     let mut states = Vec::new();
+    let mut has_appearance = false;
     if let Some(ap) = dict_of(doc, d, "AP") {
         if let Some(n) = doc.dict_get(&ap, "N").ok().flatten() {
-            if let Object::Dict(map) = &*n {
-                states = map.keys().map(Name::as_str).collect();
+            match &*n {
+                Object::Dict(map) => {
+                    states = map.keys().map(Name::as_str).collect();
+                    has_appearance = !map.is_empty();
+                }
+                Object::Stream { .. } => has_appearance = true,
+                _ => {}
             }
         }
     }
     let on_state = states.iter().find(|s| *s != "Off").cloned();
-    let page = reference
+    let placed = reference
         .and_then(|r| page_of.get(&r.number).copied())
         .or_else(|| match d.get(&Name::new("P")) {
             Some(Object::Reference(p)) => page_of.get(&p.number).copied(),
             _ => None,
         });
+    let flags = int_of(doc, d, "F").unwrap_or(0);
     Widget {
-        page,
+        page: placed.map(|(page, _)| page),
         rect: rect_of(doc, d),
         reference,
         state: name_of(doc, d, "AS"),
         states,
         on_state,
+        has_appearance,
+        hidden: flags & (ANNOT_HIDDEN | ANNOT_NOVIEW) != 0,
+        annot_index: placed.map_or(usize::MAX, |(_, rank)| rank),
     }
 }
 
@@ -673,9 +697,12 @@ pub fn set_field_value(doc: &Document, name: &str, value: FieldValue) -> Result<
                     )))
                 }
             };
+            // `/MaxLen` borne toute valeur, peigne compris : un peigne n'a
+            // que `MaxLen` cases, et ce qui les dépasserait serait enregistré
+            // sans jamais se voir.
             let text = match field.max_len {
-                Some(n) if !field.flags.comb => text.chars().take(n).collect(),
-                _ => text,
+                Some(n) => text.chars().take(n).collect(),
+                None => text,
             };
             field_dict.insert(Name::new("V"), Object::String(encode_text(&text)));
             field_dict.remove(&Name::new("RV"));
@@ -765,17 +792,24 @@ pub fn set_field_value(doc: &Document, name: &str, value: FieldValue) -> Result<
                     }
                 }
             }
-            let v_obj = if values.len() == 1 {
-                Object::String(encode_text(&values[0]))
+            if values.is_empty() {
+                // Aucun choix : la valeur s'efface, comme quand Acrobat
+                // réinitialise une liste. Un `/V []` n'aurait pas de sens
+                // pour une liste déroulante, qui attend une chaîne.
+                field_dict.remove(&Name::new("V"));
+            } else if values.len() == 1 {
+                field_dict.insert(Name::new("V"), Object::String(encode_text(&values[0])));
             } else {
-                Object::Array(
-                    values
-                        .iter()
-                        .map(|s| Object::String(encode_text(s)))
-                        .collect(),
-                )
-            };
-            field_dict.insert(Name::new("V"), v_obj);
+                field_dict.insert(
+                    Name::new("V"),
+                    Object::Array(
+                        values
+                            .iter()
+                            .map(|s| Object::String(encode_text(s)))
+                            .collect(),
+                    ),
+                );
+            }
             if field.kind == FieldType::ListBox && !indices.is_empty() {
                 indices.sort_unstable();
                 field_dict.insert(
@@ -1235,6 +1269,7 @@ const TIMES_WIDTHS: [u16; 95] = [
 ];
 
 /// Métriques d'une police d'apparence (largeurs pour 1000 unités).
+#[derive(Debug, Clone)]
 enum Metrics {
     Table(&'static [u16; 95]),
     Fixed(f64),
@@ -1584,9 +1619,53 @@ fn wrap_lines(text: &str, metrics: &Metrics, size: f64, avail: f64) -> Vec<Strin
     lines
 }
 
-/// Hauteur d'ascendante et de descendante (Helvetica : 718 / 207).
-const ASCENT: f64 = 0.718;
-const DESCENT: f64 = 0.207;
+/// Hauteur d'ascendante et de descendante (Helvetica : 718 / 207), en em.
+/// Publiques pour que la saisie en place pose sa ligne de base là où
+/// l'apparence écrite la posera.
+pub const TEXT_ASCENT: f64 = 0.718;
+/// Descendante, en em (voir [`TEXT_ASCENT`]).
+pub const TEXT_DESCENT: f64 = 0.207;
+const ASCENT: f64 = TEXT_ASCENT;
+const DESCENT: f64 = TEXT_DESCENT;
+
+/// Interligne d'un champ multiligne ou d'une liste, relatif au corps.
+pub const LINE_SPACING: f64 = 1.15;
+
+/// Corps d'un texte selon la règle de la taille automatique (`/DA` à 0) :
+/// une ligne remplit la hauteur et se réduit pour tenir en largeur, un
+/// multiligne prend 12 points, un peigne remplit sa case. `natural` est la
+/// largeur du texte à un point (en em), `(w, h)` la boîte, `pad` la marge.
+///
+/// C'est **la** règle : l'apparence écrite et l'aperçu de la saisie en place
+/// l'appliquent tous deux, pour que le texte ne saute pas à la validation.
+fn auto_text_size(
+    size: f64,
+    comb_cells: Option<usize>,
+    multiline: bool,
+    (w, h): (f64, f64),
+    pad: f64,
+    natural: f64,
+) -> f64 {
+    if size > 0.0 {
+        return size;
+    }
+    let (inner_w, inner_h) = ((w - 2.0 * pad).max(1.0), (h - 2.0 * pad).max(1.0));
+    if let Some(cells) = comb_cells {
+        #[allow(clippy::cast_precision_loss)] // quelques dizaines de cases
+        let cell = w / cells as f64;
+        return (inner_h / 1.35).min(cell / 0.7).max(4.0);
+    }
+    if multiline {
+        return 12.0;
+    }
+    let by_height = inner_h / 1.35;
+    let by_width = if natural > 0.0 {
+        inner_w / natural
+    } else {
+        by_height
+    };
+    by_height.min(by_width).max(4.0)
+}
 
 /// Contenu d'un champ de texte ou d'une liste déroulante.
 #[allow(
@@ -1603,7 +1682,7 @@ fn text_content(
 ) -> String {
     let (w, h) = (style.width, style.height);
     let pad = style.padding();
-    let (inner_w, inner_h) = ((w - 2.0 * pad).max(1.0), (h - 2.0 * pad).max(1.0));
+    let inner_w = (w - 2.0 * pad).max(1.0);
     let mut s = style.frame(false);
     let comb_cells = if field.flags.comb {
         field.max_len.filter(|n| *n > 0)
@@ -1641,11 +1720,7 @@ fn text_content(
     if let Some(cells) = comb_cells {
         // Peigne : une case par caractère, centré (§12.7.5.3).
         let cell = w / cells as f64;
-        let size = if da.size > 0.0 {
-            da.size
-        } else {
-            (inner_h / 1.35).min(cell / 0.7).max(4.0)
-        };
+        let size = auto_text_size(da.size, Some(cells), false, (w, h), pad, 0.0);
         let y = (h - size * (ASCENT + DESCENT)) / 2.0 + size * DESCENT;
         let _ = write!(s, "{} Tf ", fmt(size));
         let mut prev_x = 0.0;
@@ -1666,8 +1741,8 @@ fn text_content(
         return s;
     }
     if field.flags.multiline {
-        let size = if da.size > 0.0 { da.size } else { 12.0 };
-        let leading = size * 1.15;
+        let size = auto_text_size(da.size, None, true, (w, h), pad, 0.0);
+        let leading = size * LINE_SPACING;
         let lines = wrap_lines(&display, &font.metrics, size, inner_w);
         let _ = write!(s, "{} Tf {} TL ", fmt(size), fmt(leading));
         let mut y = h - pad - size * ASCENT;
@@ -1694,17 +1769,7 @@ fn text_content(
     }
     // Une ligne : taille automatique = hauteur, réduite pour tenir en largeur.
     let natural = font.text_width(&display);
-    let size = if da.size > 0.0 {
-        da.size
-    } else {
-        let by_height = inner_h / 1.35;
-        let by_width = if natural > 0.0 {
-            inner_w / natural
-        } else {
-            by_height
-        };
-        by_height.min(by_width).max(4.0)
-    };
+    let size = auto_text_size(da.size, None, false, (w, h), pad, natural);
     let tw = natural * size;
     let x = aligned_x(field.quadding, tw, pad, inner_w);
     let y = (h - size * (ASCENT + DESCENT)) / 2.0 + size * DESCENT;
@@ -1731,8 +1796,8 @@ fn list_content(
 ) -> String {
     let (w, h) = (style.width, style.height);
     let pad = style.padding();
-    let size = if da.size > 0.0 { da.size } else { 12.0 };
-    let leading = size * 1.15;
+    let size = list_text_size(da.size);
+    let leading = size * LINE_SPACING;
     let mut s = style.frame(false);
     let _ = writeln!(
         s,
@@ -1997,7 +2062,12 @@ pub fn regenerate_appearances(doc: &Document, field: &Field) -> Result<()> {
                 states.insert(Name::new(&on_name), Object::Reference(on));
                 states.insert(Name::new("Off"), Object::Reference(off));
                 ap.insert(Name::new("N"), Object::Dict(states));
-                let current = widget.state.clone().unwrap_or_else(|| "Off".into());
+                // Un widget sans `/AS` — sans apparence, le plus souvent —
+                // prend l'état que dit la valeur du champ.
+                let current = widget.state.clone().unwrap_or_else(|| match &field.value {
+                    Some(FieldValue::State(s)) => s.clone(),
+                    _ => "Off".into(),
+                });
                 let as_name = if current == on_name {
                     on_name
                 } else {
@@ -2038,6 +2108,446 @@ pub fn regenerate_all(doc: &Document) -> Result<usize> {
         set_need_appearances(doc, false)?;
     }
     Ok(n)
+}
+
+// ---------------------------------------------------------------------------
+// Saisie en place : ce que l'interface doit savoir d'un widget.
+// ---------------------------------------------------------------------------
+
+/// Famille de la police d'un champ. L'aperçu de la saisie en place prend
+/// une police de même dessin et de mêmes largeurs que l'apparence écrite
+/// (Arial pour Helvetica, par exemple) : ce qu'on tape ne change pas de
+/// largeur à la validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontFamily {
+    /// Linéale (Helvetica, Arial) : de loin le cas le plus courant.
+    Sans,
+    /// À empattements (Times).
+    Serif,
+    /// À chasse fixe (Courier).
+    Mono,
+}
+
+impl FontFamily {
+    /// Famille d'après le nom d'une police (`/BaseFont`).
+    fn of(base: &str) -> Self {
+        let base = base.to_ascii_lowercase();
+        if base.contains("courier") || base.contains("mono") {
+            FontFamily::Mono
+        } else if base.contains("times") || base.contains("serif") || base.contains("georgia") {
+            FontFamily::Serif
+        } else {
+            FontFamily::Sans
+        }
+    }
+}
+
+/// Aspect d'un widget de texte ou de liste : de quoi dessiner la saisie en
+/// place par-dessus la page **comme l'apparence la dessinera** — même corps,
+/// même couleur, même fond, mêmes marges, même règle de taille automatique.
+#[derive(Debug, Clone)]
+pub struct FieldLook {
+    /// Corps de `/DA`, en points ; 0 pour la taille automatique.
+    pub size: f64,
+    /// Couleur du texte (RVB, 0 à 1).
+    pub color: [f64; 3],
+    /// Fond `/MK /BG`, s'il y en a un.
+    pub background: Option<[f64; 3]>,
+    /// Couleur de la bordure `/MK /BC`, s'il y en a une.
+    pub border: Option<[f64; 3]>,
+    /// Épaisseur de la bordure, en points (0 sans bordure).
+    pub border_width: f64,
+    /// Marge intérieure du texte, en points (bordure + 2, comme Acrobat).
+    pub padding: f64,
+    /// Nombre de cases d'un peigne (`Comb` avec `/MaxLen`).
+    pub comb_cells: Option<usize>,
+    /// Plusieurs lignes.
+    pub multiline: bool,
+    /// Mot de passe : le texte ne se montre pas.
+    pub password: bool,
+    /// Alignement `/Q` : 0 gauche, 1 centré, 2 droite.
+    pub quadding: i64,
+    /// Largeur de la boîte, en points, dans le sens du texte (`/MK /R`
+    /// compris).
+    pub width: f64,
+    /// Hauteur de la boîte, en points, dans le sens du texte.
+    pub height: f64,
+    /// Famille de la police.
+    pub family: FontFamily,
+    /// Largeurs de la police de l'apparence.
+    metrics: Metrics,
+}
+
+impl FieldLook {
+    /// Largeur d'un texte à un point, en em, avec les largeurs de la police
+    /// de l'apparence.
+    #[must_use]
+    pub fn text_width(&self, text: &str) -> f64 {
+        self.metrics.text_width(text)
+    }
+
+    /// Corps auquel l'apparence écrira `text`, en points : celui de `/DA`,
+    /// ou la taille automatique (voir [`auto_text_size`]). Un mot de passe
+    /// se mesure en astérisques, comme il s'écrit.
+    #[must_use]
+    pub fn text_size(&self, text: &str) -> f64 {
+        let natural = if self.password {
+            #[allow(clippy::cast_precision_loss)] // longueur d'une saisie
+            let n = text.chars().count() as f64;
+            self.metrics.width('*') * n
+        } else {
+            self.metrics.text_width(text)
+        };
+        auto_text_size(
+            self.size,
+            self.comb_cells,
+            self.multiline,
+            (self.width, self.height),
+            self.padding,
+            natural,
+        )
+    }
+
+    /// Corps des lignes d'une liste : celui de `/DA`, 12 points s'il est
+    /// automatique.
+    #[must_use]
+    pub fn list_size(&self) -> f64 {
+        list_text_size(self.size)
+    }
+
+    /// Hauteur de la ligne de base d'un texte sur une ligne (ou d'un peigne)
+    /// au-dessus du bas de la boîte, en points, pour un corps `size`.
+    #[must_use]
+    pub fn baseline(&self, size: f64) -> f64 {
+        (self.height - size * (ASCENT + DESCENT)) / 2.0 + size * DESCENT
+    }
+}
+
+/// Corps des lignes d'une liste de choix.
+fn list_text_size(size: f64) -> f64 {
+    if size > 0.0 {
+        size
+    } else {
+        12.0
+    }
+}
+
+/// Couleur RVB (0 à 1) d'un tableau de composantes `/MK` : gris, RVB ou
+/// CMJN. `None` pour un tableau vide (transparent) ou mal formé.
+fn rgb_of_components(c: &[f64]) -> Option<[f64; 3]> {
+    let clamp = |v: f64| v.clamp(0.0, 1.0);
+    match c {
+        [g] => Some([clamp(*g); 3]),
+        [r, g, b] => Some([clamp(*r), clamp(*g), clamp(*b)]),
+        [c, m, y, k] => {
+            let k = clamp(*k);
+            Some([
+                (1.0 - clamp(*c)) * (1.0 - k),
+                (1.0 - clamp(*m)) * (1.0 - k),
+                (1.0 - clamp(*y)) * (1.0 - k),
+            ])
+        }
+        _ => None,
+    }
+}
+
+/// Couleur RVB d'un opérateur de couleur de `/DA` (`0 g`, `r g b rg`,
+/// `c m y k k`) ; noir s'il est illisible.
+fn rgb_of_operator(op: &str) -> [f64; 3] {
+    let numbers: Vec<f64> = op
+        .split_whitespace()
+        .filter_map(|t| t.parse::<f64>().ok())
+        .collect();
+    rgb_of_components(&numbers).unwrap_or([0.0; 3])
+}
+
+/// Largeurs de la police `da_font` de `/AcroForm /DR`, **sans rien écrire**
+/// (à la différence d'[`appearance_font`], qui ajoute Helvetica au besoin) :
+/// Helvetica si elle est absente ou composite.
+fn read_metrics(doc: &Document, da_font: &str) -> (Metrics, FontFamily) {
+    let helvetica = (Metrics::Table(&HELVETICA_WIDTHS), FontFamily::Sans);
+    let Ok(Some((form, _))) = acroform(doc) else {
+        return helvetica;
+    };
+    let Some(font) = dict_of(doc, &form, "DR")
+        .and_then(|dr| dict_of(doc, &dr, "Font"))
+        .and_then(|fonts| dict_of(doc, &fonts, da_font))
+    else {
+        return helvetica;
+    };
+    if name_of(doc, &font, "Subtype").as_deref() == Some("Type0") {
+        return helvetica;
+    }
+    let family = FontFamily::of(&name_of(doc, &font, "BaseFont").unwrap_or_default());
+    (Metrics::for_font(doc, &font), family)
+}
+
+/// Aspect du widget `widget` d'un champ, lu dans `/DA`, `/MK`, `/BS` et les
+/// drapeaux, sans rien écrire dans le document.
+#[must_use]
+pub fn field_look(doc: &Document, field: &Field, widget: usize) -> FieldLook {
+    let da = parse_da(
+        field
+            .default_appearance
+            .as_deref()
+            .unwrap_or("/Helv 0 Tf 0 g"),
+    );
+    let w = field.widgets.get(widget);
+    let rect = w.map(|w| w.rect).unwrap_or_default();
+    let wd = w
+        .and_then(|w| w.reference)
+        .and_then(|r| doc.get(r).ok())
+        .and_then(|o| o.as_dict().cloned())
+        .unwrap_or_default();
+    let style = box_style(doc, &wd, rect);
+    let mk = dict_of(doc, &wd, "MK").unwrap_or_default();
+    let (metrics, family) = read_metrics(doc, &da.font);
+    FieldLook {
+        size: da.size,
+        color: rgb_of_operator(&da.color),
+        background: numbers_of(doc, &mk, "BG").and_then(|c| rgb_of_components(&c)),
+        border: numbers_of(doc, &mk, "BC").and_then(|c| rgb_of_components(&c)),
+        border_width: style.border_width,
+        padding: style.padding(),
+        comb_cells: if field.flags.comb {
+            field.max_len.filter(|n| *n > 0)
+        } else {
+            None
+        },
+        multiline: field.flags.multiline,
+        password: field.flags.password,
+        quadding: field.quadding,
+        width: style.width,
+        height: style.height,
+        family,
+        metrics,
+    }
+}
+
+/// Option d'une liste de choix sous un point de la page : même géométrie que
+/// l'apparence (marge, interligne, première option visible `/TI`). `None`
+/// hors du widget ou sous la dernière option.
+#[must_use]
+pub fn list_row_at(doc: &Document, field: &Field, widget: usize, point: Point) -> Option<usize> {
+    let w = field.widgets.get(widget)?;
+    if !w.rect.contains(point) {
+        return None;
+    }
+    let look = field_look(doc, field, widget);
+    let top_index = w
+        .reference
+        .and_then(|r| doc.get(r).ok())
+        .and_then(|o| o.as_dict().and_then(|d| int_of(doc, d, "TI")))
+        .and_then(|i| usize::try_from(i).ok())
+        .unwrap_or(0);
+    let leading = look.list_size() * LINE_SPACING;
+    let below_top = (w.rect.y1 - point.y - look.padding).max(0.0);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    // positif, borné par la boîte
+    let row = (below_top / leading).floor() as usize;
+    let index = top_index + row;
+    (index < field.options.len()).then_some(index)
+}
+
+/// Vrai pour les types de champ qu'on remplit (ni bouton poussoir, ni
+/// signature, ni type inconnu).
+fn fillable(kind: FieldType) -> bool {
+    matches!(
+        kind,
+        FieldType::Text
+            | FieldType::CheckBox
+            | FieldType::Radio
+            | FieldType::ComboBox
+            | FieldType::ListBox
+    )
+}
+
+/// Valeur « vide » d'un champ : ce que donne la réinitialisation quand il
+/// n'a pas de valeur par défaut.
+fn empty_value(kind: FieldType) -> FieldValue {
+    match kind {
+        FieldType::CheckBox => FieldValue::Bool(false),
+        FieldType::Radio => FieldValue::State("Off".into()),
+        FieldType::ComboBox | FieldType::ListBox => FieldValue::Choice(Vec::new()),
+        _ => FieldValue::Text(String::new()),
+    }
+}
+
+/// Vrai si deux valeurs reviennent au même pour l'utilisateur : une valeur
+/// absente vaut une valeur vide, une case à `Off` vaut une case décochée.
+fn same_value(current: Option<&FieldValue>, target: &FieldValue) -> bool {
+    let blank = |v: Option<&FieldValue>| match v {
+        None => true,
+        Some(FieldValue::Text(s)) => s.is_empty(),
+        Some(FieldValue::State(s)) => s == "Off",
+        Some(FieldValue::Bool(b)) => !b,
+        Some(FieldValue::Choice(c)) => c.is_empty(),
+    };
+    if blank(Some(target)) {
+        return blank(current);
+    }
+    current == Some(target)
+}
+
+/// Réinitialise le formulaire, comme le bouton « Effacer le formulaire »
+/// d'Acrobat : chaque champ remplissable qui n'est pas en lecture seule
+/// reprend sa valeur par défaut (`/DV`), ou redevient vide. Rend le nombre
+/// de champs changés ; ceux qui avaient déjà cette valeur ne sont pas
+/// réécrits.
+///
+/// Chaque champ passe par [`set_field_value`], qui relit l'inventaire :
+/// c'est quadratique, et sans importance pour les formulaires de quelques
+/// centaines de champs qu'on rencontre.
+///
+/// # Errors
+/// Formulaire illisible.
+pub fn reset_fields(doc: &Document) -> Result<usize> {
+    let fields = list_fields(doc)?;
+    let mut changed = 0;
+    for f in &fields {
+        if !fillable(f.kind) || f.flags.read_only {
+            continue;
+        }
+        let target = f
+            .default_value
+            .clone()
+            .unwrap_or_else(|| empty_value(f.kind));
+        if same_value(f.value.as_ref(), &target) {
+            continue;
+        }
+        // Une valeur par défaut qui ne vaut rien (hors des options, état
+        // inconnu) ne doit pas bloquer la remise à zéro des autres champs :
+        // le champ redevient vide.
+        if set_field_value(doc, &f.name, target).is_err() {
+            set_field_value(doc, &f.name, empty_value(f.kind))?;
+        }
+        changed += 1;
+    }
+    Ok(changed)
+}
+
+/// Prépare l'affichage d'un formulaire : si `/NeedAppearances` est vrai,
+/// toutes les apparences sont régénérées (et le drapeau repasse à faux) ;
+/// sinon seuls les champs dont un widget **n'a pas d'apparence** en
+/// reçoivent une. Rend le nombre de champs traités — zéro, sans rien
+/// toucher, pour un formulaire déjà complet, le cas courant.
+///
+/// C'est ce que fait Acrobat à l'ouverture : un champ sans `/AP` resterait
+/// sinon invisible, et un formulaire marqué `/NeedAppearances` montrerait
+/// des valeurs périmées. Les apparences ne sont écrites qu'en mémoire ; un
+/// enregistrement ultérieur les inscrit dans le fichier, avec
+/// `/NeedAppearances false`, comme le fait Acrobat.
+///
+/// # Errors
+/// Formulaire illisible.
+pub fn prepare_display(doc: &Document) -> Result<usize> {
+    let Some((form, _)) = acroform(doc)? else {
+        return Ok(0);
+    };
+    let need = matches!(
+        doc.dict_get(&form, "NeedAppearances")?.as_deref(),
+        Some(Object::Bool(true))
+    );
+    if need {
+        return regenerate_all(doc);
+    }
+    let mut n = 0;
+    for f in list_fields(doc)? {
+        if fillable(f.kind)
+            && f.widgets
+                .iter()
+                .any(|w| w.reference.is_some() && !w.has_appearance)
+        {
+            regenerate_appearances(doc, &f)?;
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
+/// Clé de tri d'une coordonnée, au dixième de point : deux champs posés « à
+/// la même hauteur » à un cheveu près restent sur la même rangée.
+fn tenth(v: f64) -> i64 {
+    #[allow(clippy::cast_possible_truncation)] // coordonnées de page
+    let t = (v * 10.0).round() as i64;
+    t
+}
+
+/// Ordre de tabulation des champs : couples (champ, widget) dans l'ordre où
+/// Tab les parcourt.
+///
+/// Les pages se suivent ; dans une page, `/Tabs` décide (§12.5.1) : `/R`
+/// par rangées (de haut en bas, puis de gauche à droite), `/C` par colonnes
+/// (de gauche à droite, puis de haut en bas), `/S` ou rien : l'ordre du
+/// tableau `/Annots`, comme Acrobat, PDFium et les navigateurs. (L'ordre de
+/// la structure balisée n'est pas lu ; celui de `/Annots` en est la
+/// meilleure approximation, les outils de balisage l'y recopiant.)
+///
+/// Sont exclus les champs en lecture seule, les boutons poussoirs, les
+/// signatures, les types inconnus et les widgets masqués ; un groupe radio
+/// ne fait qu'un arrêt, sur son bouton coché ou, à défaut, le premier.
+///
+/// # Errors
+/// Pages illisibles.
+pub fn tab_order(doc: &Document, fields: &[Field]) -> Result<Vec<(usize, usize)>> {
+    /// Clé de tri (page, deux coordonnées, rang du champ) et arrêt.
+    type Stop = ((usize, i64, i64, usize), (usize, usize));
+    #[derive(Clone, Copy)]
+    enum Tabs {
+        Rows,
+        Columns,
+        Annots,
+    }
+    let pages = collect_pages(doc)?;
+    let tabs: Vec<Tabs> = pages
+        .iter()
+        .map(|p| match name_of(doc, &p.dict, "Tabs").as_deref() {
+            Some("R") => Tabs::Rows,
+            Some("C") => Tabs::Columns,
+            _ => Tabs::Annots,
+        })
+        .collect();
+    let mut stops: Vec<Stop> = Vec::new();
+    for (fi, f) in fields.iter().enumerate() {
+        if f.flags.read_only || !fillable(f.kind) {
+            continue;
+        }
+        let visible: Vec<usize> = f
+            .widgets
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| !w.hidden && w.page.is_some())
+            .map(|(wi, _)| wi)
+            .collect();
+        let chosen: Vec<usize> = if f.kind == FieldType::Radio {
+            let on = visible.iter().copied().find(|&wi| {
+                let w = &f.widgets[wi];
+                w.state.is_some() && w.state != Some("Off".into()) && w.state == w.on_state
+            });
+            on.or_else(|| visible.first().copied())
+                .into_iter()
+                .collect()
+        } else {
+            visible
+        };
+        for wi in chosen {
+            let w = &f.widgets[wi];
+            let Some(page) = w.page else { continue };
+            let (a, b) = match tabs.get(page).copied().unwrap_or(Tabs::Annots) {
+                Tabs::Rows => (-tenth(w.rect.y1), tenth(w.rect.x0)),
+                Tabs::Columns => (tenth(w.rect.x0), -tenth(w.rect.y1)),
+                // Un widget absent de `/Annots` passe après les autres, dans
+                // l'ordre des rangées.
+                Tabs::Annots => (
+                    i64::try_from(w.annot_index).unwrap_or(i64::MAX),
+                    -tenth(w.rect.y1),
+                ),
+            };
+            stops.push(((page, a, b, fi), (fi, wi)));
+        }
+    }
+    stops.sort_by_key(|(key, _)| *key);
+    Ok(stops.into_iter().map(|(_, stop)| stop).collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -2400,7 +2910,13 @@ fn collect_fdf_fields(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic, clippy::too_many_lines)]
+// Les couleurs lues sont comparées telles qu'écrites dans le document.
+#[allow(
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::too_many_lines,
+    clippy::float_cmp
+)]
 mod tests {
     use super::*;
     use acrux_render::{render_page, RenderOptions};
@@ -2936,6 +3452,285 @@ mod tests {
         assert_eq!(mk_color(&[], false), None);
     }
 
+    /// Formulaire d'une page pour l'ordre de tabulation : trois champs de
+    /// texte posés en L (A en haut à gauche, B en haut à droite, C en bas à
+    /// gauche), listés dans `/Annots` dans l'ordre C, B, A ; puis un groupe
+    /// radio de deux boutons, un champ en lecture seule, un bouton poussoir
+    /// et un champ masqué, qui ne doivent pas tous compter.
+    fn l_shaped_form(tabs: &str) -> Vec<u8> {
+        let text = |t: &str, rect: &str, extra: &str| {
+            format!("<< /Type /Annot /Subtype /Widget /P 3 0 R /FT /Tx /T ({t}) /Rect [{rect}] {extra} >>")
+        };
+        let objects: Vec<(u32, String)> = vec![
+            (1, "<< /Type /Catalog /Pages 2 0 R /AcroForm 10 0 R >>".into()),
+            (2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into()),
+            (
+                3,
+                format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] {tabs} /Annots [13 0 R 12 0 R 11 0 R 15 0 R 16 0 R 17 0 R 18 0 R 19 0 R] >>"),
+            ),
+            (
+                10,
+                "<< /Fields [11 0 R 12 0 R 13 0 R 14 0 R 17 0 R 18 0 R 19 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+            ),
+            (11, text("A", "50 300 150 320", "")),
+            (12, text("B", "200 300 300 320", "")),
+            (13, text("C", "50 200 150 220", "")),
+            (14, "<< /FT /Btn /Ff 32768 /T (G) /Kids [15 0 R 16 0 R] >>".into()),
+            (
+                15,
+                "<< /Type /Annot /Subtype /Widget /P 3 0 R /Parent 14 0 R /Rect [50 90 66 106] /AS /Off /AP << /N << /Un 20 0 R /Off 20 0 R >> >> >>".into(),
+            ),
+            (
+                16,
+                "<< /Type /Annot /Subtype /Widget /P 3 0 R /Parent 14 0 R /Rect [100 90 116 106] /AS /Off /AP << /N << /Deux 20 0 R /Off 20 0 R >> >> >>".into(),
+            ),
+            (17, text("fige", "50 50 150 70", "/Ff 1")),
+            (18, "<< /Type /Annot /Subtype /Widget /P 3 0 R /FT /Btn /Ff 65536 /T (bouton) /Rect [200 50 300 70] >>".into()),
+            (19, text("masque", "200 200 300 220", "/F 2")),
+            (20, stream("/Type /XObject /Subtype /Form /BBox [0 0 16 16]", "")),
+        ];
+        build_pdf(&objects)
+    }
+
+    /// Noms des arrêts de tabulation, dans l'ordre.
+    fn tab_names(doc: &Document) -> Vec<String> {
+        let fields = list_fields(doc).unwrap();
+        tab_order(doc, &fields)
+            .unwrap()
+            .into_iter()
+            .map(|(fi, wi)| format!("{}#{wi}", fields[fi].name))
+            .collect()
+    }
+
+    #[test]
+    fn widget_expose_apparence_cache_et_rang() {
+        let doc = Document::from_bytes(sample_pdf()).unwrap();
+        let fields = list_fields(&doc).unwrap();
+        let nom = &field(&fields, "nom").widgets[0];
+        assert!(!nom.has_appearance, "« nom » n'a pas de /AP");
+        assert!(!nom.hidden);
+        assert_eq!(nom.annot_index, 0);
+        let abonne = &field(&fields, "abonne").widgets[0];
+        assert!(abonne.has_appearance);
+        assert_eq!(abonne.annot_index, 1);
+        let taille = field(&fields, "taille");
+        let ranks: Vec<usize> = taille.widgets.iter().map(|w| w.annot_index).collect();
+        assert_eq!(ranks, [2, 3, 4], "ordre de /Annots, pas celui des /Kids");
+
+        let doc = Document::from_bytes(l_shaped_form("")).unwrap();
+        let fields = list_fields(&doc).unwrap();
+        assert!(field(&fields, "masque").widgets[0].hidden, "/F 2");
+        assert!(!field(&fields, "A").widgets[0].hidden);
+        assert_eq!(field(&fields, "C").widgets[0].annot_index, 0);
+    }
+
+    #[test]
+    fn ordre_de_tabulation_selon_tabs() {
+        let rows = Document::from_bytes(l_shaped_form("/Tabs /R")).unwrap();
+        assert_eq!(tab_names(&rows), ["A#0", "B#0", "C#0", "G#0"]);
+        let columns = Document::from_bytes(l_shaped_form("/Tabs /C")).unwrap();
+        assert_eq!(tab_names(&columns), ["A#0", "C#0", "G#0", "B#0"]);
+        // Sans /Tabs, ou /S : l'ordre de /Annots (C, B, A, puis le groupe).
+        for tabs in ["", "/Tabs /S"] {
+            let doc = Document::from_bytes(l_shaped_form(tabs)).unwrap();
+            assert_eq!(tab_names(&doc), ["C#0", "B#0", "A#0", "G#0"], "{tabs}");
+        }
+        // Un groupe radio coché s'atteint par son bouton coché.
+        let doc = Document::from_bytes(l_shaped_form("/Tabs /R")).unwrap();
+        set_field_value(&doc, "G", FieldValue::State("Deux".into())).unwrap();
+        assert_eq!(tab_names(&doc), ["A#0", "B#0", "C#0", "G#1"]);
+    }
+
+    #[test]
+    fn field_look_lit_da_et_mk() {
+        let doc = Document::from_bytes(sample_pdf()).unwrap();
+        let fields = list_fields(&doc).unwrap();
+        let nom = field_look(&doc, field(&fields, "nom"), 0);
+        assert!(nom.size.abs() < 1e-9, "taille automatique");
+        assert_eq!(nom.color, [0.0, 0.0, 0.5]);
+        assert_eq!(nom.background, Some([0.9, 0.92, 1.0]));
+        assert_eq!(nom.border, Some([0.0, 0.0, 0.5]));
+        assert!((nom.border_width - 1.0).abs() < 1e-9);
+        assert!((nom.padding - 3.0).abs() < 1e-9);
+        assert!((nom.width - 240.0).abs() < 1e-9 && (nom.height - 22.0).abs() < 1e-9);
+        assert_eq!(nom.family, FontFamily::Sans);
+        assert_eq!(nom.comb_cells, None);
+        let code = field_look(&doc, field(&fields, "code"), 0);
+        assert_eq!(code.comb_cells, Some(5));
+        assert_eq!(code.quadding, 1);
+        let langues = field_look(&doc, field(&fields, "langues"), 0);
+        assert!((langues.size - 9.0).abs() < 1e-9);
+        assert_eq!(langues.color, [0.0; 3]);
+        assert!((langues.list_size() - 9.0).abs() < 1e-9);
+        let pays = field_look(&doc, field(&fields, "pays"), 0);
+        let bg = pays.background.unwrap();
+        assert!(
+            bg.iter().all(|c| (c - 0.85).abs() < 1e-9),
+            "gris de /MK /BG : {bg:?}"
+        );
+        assert!(field_look(&doc, field(&fields, "secret"), 0).password);
+        assert!(field_look(&doc, field(&fields, "adresse.rue"), 0).multiline);
+        // Les autres opérateurs de couleur de /DA.
+        assert_eq!(rgb_of_operator("0.5 g"), [0.5; 3]);
+        assert_eq!(rgb_of_operator("1 0 0 0 k"), [0.0, 1.0, 1.0]);
+        assert_eq!(rgb_of_operator("n'importe quoi"), [0.0; 3]);
+    }
+
+    /// Le corps que l'aperçu calcule est celui que l'apparence écrit.
+    #[test]
+    fn taille_auto_partagee() {
+        let doc = Document::from_bytes(sample_pdf()).unwrap();
+        // Moins de 40 caractères (le /MaxLen du champ), mais trop large pour
+        // la hauteur : c'est la largeur qui décide.
+        let text = "Élodie MMMMMMMMMMMMMMMMMMMMMMMM";
+        set_field_value(&doc, "nom", FieldValue::Text(text.into())).unwrap();
+        let fields = list_fields(&doc).unwrap();
+        let nom = field(&fields, "nom");
+        let ap = appearance_text(&doc, &nom.widgets[0]);
+        let written: f64 = ap
+            .split(" Tf")
+            .next()
+            .and_then(|head| head.split_whitespace().last())
+            .and_then(|n| n.parse().ok())
+            .unwrap();
+        let look = field_look(&doc, nom, 0);
+        assert!(
+            (look.text_size(text) - written).abs() < 1e-3,
+            "aperçu {} contre apparence {written}",
+            look.text_size(text)
+        );
+        // Un texte court remplit la hauteur : 16 / 1,35.
+        assert!((look.text_size("a") - 16.0 / 1.35).abs() < 1e-9);
+        // Multiligne : 12 points ; ici /DA impose 9.
+        let rue = field_look(&doc, field(&fields, "adresse.rue"), 0);
+        assert!((rue.text_size("x") - 9.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ligne_de_liste_sous_le_point() {
+        let doc = Document::from_bytes(sample_pdf()).unwrap();
+        let fields = list_fields(&doc).unwrap();
+        let langues = field(&fields, "langues");
+        // Corps 9, interligne 10,35, marge 3 : la première option occupe
+        // 123 → 112,65.
+        let at = |x: f64, y: f64| list_row_at(&doc, langues, 0, Point::new(x, y));
+        assert_eq!(at(350.0, 122.0), Some(0));
+        assert_eq!(at(350.0, 125.5), Some(0), "dans la marge du haut");
+        assert_eq!(at(350.0, 111.0), Some(1));
+        assert_eq!(at(350.0, 90.0), Some(3));
+        assert_eq!(at(350.0, 80.0), None, "sous la dernière option");
+        assert_eq!(at(10.0, 122.0), None, "hors du widget");
+        // /TI : la liste commence à la deuxième option.
+        let r = langues.widgets[0].reference.unwrap();
+        let mut d = doc.get(r).unwrap().as_dict().cloned().unwrap();
+        d.insert(Name::new("TI"), Object::Integer(1));
+        doc.set(r, Object::Dict(d));
+        assert_eq!(at(350.0, 122.0), Some(1));
+        assert_eq!(at(350.0, 90.0), None);
+    }
+
+    #[test]
+    fn reinitialiser_revient_a_dv_ou_vide() {
+        let doc = Document::from_bytes(sample_pdf()).unwrap();
+        fill_sample(&doc);
+        // Une valeur par défaut pour « nom ».
+        let fields = list_fields(&doc).unwrap();
+        let r = field(&fields, "nom").reference.unwrap();
+        let mut d = doc.get(r).unwrap().as_dict().cloned().unwrap();
+        d.insert(Name::new("DV"), Object::String(encode_text("Défaut")));
+        doc.set(r, Object::Dict(d));
+
+        assert_eq!(reset_fields(&doc).unwrap(), 9, "tous sauf le champ figé");
+        let fields = list_fields(&doc).unwrap();
+        assert_eq!(
+            field(&fields, "nom").value,
+            Some(FieldValue::Text("Défaut".into()))
+        );
+        assert_eq!(
+            field(&fields, "code").value,
+            Some(FieldValue::Text(String::new()))
+        );
+        assert_eq!(
+            field(&fields, "abonne").value,
+            Some(FieldValue::State("Off".into()))
+        );
+        assert_eq!(
+            field(&fields, "abonne").widgets[0].state.as_deref(),
+            Some("Off")
+        );
+        let states: Vec<Option<&str>> = field(&fields, "taille")
+            .widgets
+            .iter()
+            .map(|w| w.state.as_deref())
+            .collect();
+        assert_eq!(states, [Some("Off"); 3]);
+        assert_eq!(field(&fields, "pays").value, None, "/V retiré");
+        assert_eq!(field(&fields, "langues").value, None);
+        assert_eq!(
+            field(&fields, "systeme.fige").value,
+            Some(FieldValue::Text("non modifiable".into())),
+            "le champ figé ne bouge pas"
+        );
+        // Les apparences suivent.
+        let ap = appearance_text(&doc, &field(&fields, "nom").widgets[0]);
+        assert!(ap.contains("(D\\351faut) Tj"), "{ap}");
+        let ap = appearance_text(&doc, &field(&fields, "langues").widgets[0]);
+        assert!(
+            !ap.contains("0.6 0.757 0.854 rg"),
+            "plus rien de surligné : {ap}"
+        );
+        // Une seconde fois : rien à changer.
+        assert_eq!(reset_fields(&doc).unwrap(), 0);
+    }
+
+    #[test]
+    fn preparer_affichage() {
+        // /NeedAppearances true : tout est régénéré, le drapeau retombe.
+        let doc = Document::from_bytes(sample_pdf()).unwrap();
+        assert_eq!(prepare_display(&doc).unwrap(), 10);
+        let (form, _) = acroform(&doc).unwrap().unwrap();
+        assert_eq!(
+            form.get(&Name::new("NeedAppearances")),
+            Some(&Object::Bool(false))
+        );
+        let fields = list_fields(&doc).unwrap();
+        assert!(fields
+            .iter()
+            .flat_map(|f| &f.widgets)
+            .all(|w| w.has_appearance));
+        // La case cochée par sa valeur a pris l'état qui va avec.
+        let taille = field(&fields, "taille");
+        assert_eq!(taille.widgets[1].state.as_deref(), Some("M"));
+        let ap = appearance_text(&doc, &field(&fields, "nom").widgets[0]);
+        assert!(ap.contains("(Dupont) Tj"), "{ap}");
+
+        // Document complet : rien à faire, rien d'écrit.
+        let complete = Document::from_bytes(doc.save_full().unwrap()).unwrap();
+        assert_eq!(prepare_display(&complete).unwrap(), 0);
+        assert!(!complete.is_modified(), "aucun objet touché");
+
+        // Sans /NeedAppearances, seul le widget sans apparence en reçoit une.
+        let doc = Document::from_bytes(l_shaped_form("")).unwrap();
+        assert_eq!(prepare_display(&doc).unwrap(), 5, "A, B, C, figé, masqué");
+        let fields = list_fields(&doc).unwrap();
+        assert!(field(&fields, "A").widgets[0].has_appearance);
+        assert!(
+            !field(&fields, "bouton").widgets[0].has_appearance,
+            "un bouton poussoir garde ce qu'il a"
+        );
+    }
+
+    #[test]
+    fn un_peigne_ne_garde_que_ses_cases() {
+        let doc = Document::from_bytes(sample_pdf()).unwrap();
+        set_field_value(&doc, "code", FieldValue::Text("7500123".into())).unwrap();
+        let fields = list_fields(&doc).unwrap();
+        assert_eq!(
+            field(&fields, "code").value,
+            Some(FieldValue::Text("75001".into()))
+        );
+    }
+
     /// Génère le fichier de corpus `tests/corpus/synthese/formulaire-acroform-champs.pdf`
     /// (apparences produites par ce module). Lancer avec
     /// `cargo test -p acrux-features -- --ignored generate_forms_corpus`.
@@ -2948,6 +3743,119 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/corpus/synthese/formulaire-acroform-champs.pdf");
         std::fs::write(&path, saved).unwrap();
+        println!("écrit : {}", path.display());
+    }
+
+    /// Formulaire tel qu'en produisent bien des générateurs : des valeurs
+    /// dans `/V`, mais pas d'apparence (`/NeedAppearances true` demande au
+    /// lecteur de les dessiner), une apparence périmée, deux champs
+    /// obligatoires et l'ordre de tabulation par colonnes (`/Tabs /C`).
+    fn required_noap_pdf() -> Vec<u8> {
+        let labels = [
+            (30.0, 262.0, "Pr\\351nom * :"),
+            (30.0, 222.0, "Nom * :"),
+            (30.0, 182.0, "N\\351 le :"),
+            (215.0, 262.0, "Courriel :"),
+            (215.0, 222.0, "Abonn\\351 :"),
+            (215.0, 182.0, "Pays :"),
+            (30.0, 120.0, "* champ obligatoire"),
+        ];
+        let mut content = String::from("BT /F1 10 Tf 0 g\n");
+        let mut prev = (0.0, 0.0);
+        for (x, y, text) in labels {
+            let _ = writeln!(content, "{} {} Td ({text}) Tj", x - prev.0, y - prev.1);
+            prev = (x, y);
+        }
+        content.push_str("ET\n0.5 G 0.5 w 20 100 m 400 100 l S");
+        let text = |t: &str, rect: &str, extra: &str| -> String {
+            format!("<< /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /FT /Tx /T ({t}) /Rect [{rect}] /MK << /BC [0.4] /BG [1] >> {extra} >>")
+        };
+        let objects: Vec<(u32, String)> = vec![
+            (1, "<< /Type /Catalog /Pages 2 0 R /AcroForm 10 0 R >>".into()),
+            (2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into()),
+            (
+                3,
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 300] /Tabs /C /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [14 0 R 11 0 R 13 0 R 12 0 R 15 0 R 16 0 R] >>".into(),
+            ),
+            (4, stream("", &content)),
+            (5, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into()),
+            (
+                10,
+                "<< /Fields [11 0 R 12 0 R 13 0 R 14 0 R 15 0 R 16 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> /NeedAppearances true >>".into(),
+            ),
+            (11, text("prenom", "95 256 200 276", "/Ff 2 /TU (Pr\\351nom)")),
+            (12, text("nom", "95 216 200 236", "/Ff 2 /V (Curie)")),
+            (13, text("naissance", "95 176 200 196", "/V (07/11/1867) /Q 1")),
+            // Apparence périmée : elle montre l'ancienne adresse, /V la nouvelle.
+            (
+                14,
+                text(
+                    "courriel",
+                    "270 256 400 276",
+                    "/V (nouvelle@exemple.fr) /AP << /N 20 0 R >>",
+                ),
+            ),
+            (
+                15,
+                "<< /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /FT /Btn /T (abonne) /V /Yes /Rect [270 216 286 232] /MK << /CA (4) /BC [0] /BG [1] >> >>".into(),
+            ),
+            (
+                16,
+                "<< /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /FT /Ch /Ff 131072 /T (pays) /Opt [(France) (Belgique) (Suisse)] /V (Belgique) /Rect [270 176 400 196] /MK << /BC [0.4] /BG [1] >> >>".into(),
+            ),
+            (
+                20,
+                stream(
+                    "/Type /XObject /Subtype /Form /BBox [0 0 130 20] /Resources << /Font << /Helv 5 0 R >> >>",
+                    "0.4 G 1 w 0.5 0.5 129 19 re S BT /Helv 11 Tf 0 g 3 6 Td (ancienne@exemple.fr) Tj ET",
+                ),
+            ),
+        ];
+        build_pdf(&objects)
+    }
+
+    /// Le formulaire sans apparences : l'ouverture les dessine toutes (la
+    /// périmée comprise), la case prend l'état de sa valeur, et Tab suit les
+    /// colonnes.
+    #[test]
+    fn formulaire_sans_apparence() {
+        let doc = Document::from_bytes(required_noap_pdf()).unwrap();
+        let fields = list_fields(&doc).unwrap();
+        assert!(field(&fields, "prenom").flags.required);
+        assert!(!field(&fields, "prenom").widgets[0].has_appearance);
+        assert_eq!(prepare_display(&doc).unwrap(), 6);
+        let fields = list_fields(&doc).unwrap();
+        let ap = appearance_text(&doc, &field(&fields, "courriel").widgets[0]);
+        assert!(ap.contains("(nouvelle@exemple.fr) Tj"), "{ap}");
+        assert_eq!(
+            field(&fields, "abonne").widgets[0].state.as_deref(),
+            Some("Yes"),
+            "cochée d'après /V"
+        );
+        let ap = appearance_text(&doc, &field(&fields, "pays").widgets[0]);
+        assert!(ap.contains("(Belgique) Tj"), "{ap}");
+        assert_eq!(
+            tab_names(&doc),
+            [
+                "prenom#0",
+                "nom#0",
+                "naissance#0",
+                "courriel#0",
+                "abonne#0",
+                "pays#0"
+            ]
+        );
+    }
+
+    /// Génère `tests/corpus/synthese/formulaire-obligatoire-sans-apparence.pdf`.
+    /// Lancer avec `cargo test -p acrux-features --lib -- --ignored
+    /// generate_required_noap_corpus`.
+    #[test]
+    #[ignore = "génère le fichier de corpus"]
+    fn generate_required_noap_corpus() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/corpus/synthese/formulaire-obligatoire-sans-apparence.pdf");
+        std::fs::write(&path, required_noap_pdf()).unwrap();
         println!("écrit : {}", path.display());
     }
 }

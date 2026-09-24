@@ -5,6 +5,25 @@ Fonctionnalités métier : édition, pages, annotations, formulaires, biffure, e
 Voir `ARCHITECTURE.md` à la racine pour la place de ce crate dans l'ensemble,
 et `src/lib.rs` pour la liste des modules et de ceux qui restent à écrire.
 
+## Remplir un formulaire sur place (`forms`)
+
+L'inventaire, le remplissage, l'aplatissement et le FDF sont là depuis
+longtemps ; ce que l'application demande en plus pour qu'on remplisse **dans
+la page**, comme dans Acrobat :
+
+| Fonction | Ce qu'elle rend |
+| --- | --- |
+| `field_look` | l'aspect d'un widget (corps, couleur, fond, bordure, marges, cases d'un peigne, famille de la police) : la saisie se dessine comme l'apparence se dessinera |
+| `FieldLook::text_size` | le corps d'un texte selon la règle de la taille automatique, **la même** que celle qui écrit l'apparence : rien ne saute à la validation |
+| `tab_order` | l'ordre de Tab : `/Tabs /R` (rangées), `/C` (colonnes), sinon l'ordre de `/Annots` ; un arrêt par groupe radio |
+| `list_row_at` | l'option d'une liste sous un point, avec la géométrie de l'apparence (`/TI` compris) |
+| `reset_fields` | « Effacer le formulaire » : `/DV`, sinon une valeur vide |
+| `prepare_display` | les apparences qui manquent (`/NeedAppearances`, widget sans `/AP`), à l'ouverture ; rien n'est touché dans un formulaire complet |
+
+Le corpus `synthese/formulaire-obligatoire-sans-apparence.pdf` réunit ce que
+`prepare_display` répare : des valeurs sans apparence, une apparence
+périmée, deux champs obligatoires et un ordre de tabulation par colonnes.
+
 ## Les modèles 3D (`three_d`)
 
 Un PDF peut porter un objet en trois dimensions : une annotation `/3D` réserve

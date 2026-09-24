@@ -1,0 +1,49 @@
+%PDF-1.7
+%‚„œ”1 0 obj
+<< /Type /Catalog /Pages 2 0 R /AcroForm 10 0 R >>
+endobj2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 300] /Tabs /C /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [14 0 R 11 0 R 13 0 R 12 0 R 15 0 R 16 0 R] >>
+endobj4 0 obj
+<<  /Length 238 >>
+stream
+BT /F1 10 Tf 0 g
+30 262 Td (Pr\351nom * :) Tj
+0 -40 Td (Nom * :) Tj
+0 -40 Td (N\351 le :) Tj
+185 80 Td (Courriel :) Tj
+0 -40 Td (Abonn\351 :) Tj
+0 -40 Td (Pays :) Tj
+-185 -62 Td (* champ obligatoire) Tj
+ET
+0.5 G 0.5 w 20 100 m 400 100 l S
+endstream
+endobj5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj10 0 obj
+<< /Fields [11 0 R 12 0 R 13 0 R 14 0 R 15 0 R 16 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> /NeedAppearances true >>
+endobj11 0 obj
+<< /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /FT /Tx /T (prenom) /Rect [95 256 200 276] /MK << /BC [0.4] /BG [1] >> /Ff 2 /TU (Pr\351nom) >>
+endobj12 0 obj
+<< /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /FT /Tx /T (nom) /Rect [95 216 200 236] /MK << /BC [0.4] /BG [1] >> /Ff 2 /V (Curie) >>
+endobj13 0 obj
+<< /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /FT /Tx /T (naissance) /Rect [95 176 200 196] /MK << /BC [0.4] /BG [1] >> /V (07/11/1867) /Q 1 >>
+endobj14 0 obj
+<< /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /FT /Tx /T (courriel) /Rect [270 256 400 276] /MK << /BC [0.4] /BG [1] >> /V (nouvelle@exemple.fr) /AP << /N 20 0 R >> >>
+endobj15 0 obj
+<< /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /FT /Btn /T (abonne) /V /Yes /Rect [270 216 286 232] /MK << /CA (4) /BC [0] /BG [1] >> >>
+endobj16 0 obj
+<< /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /FT /Ch /Ff 131072 /T (pays) /Opt [(France) (Belgique) (Suisse)] /V (Belgique) /Rect [270 176 400 196] /MK << /BC [0.4] /BG [1] >> >>
+endobj20 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 130 20] /Resources << /Font << /Helv 5 0 R >> >> /Length 83 >>
+stream
+0.4 G 1 w 0.5 0.5 129 19 re S BT /Helv 11 Tf 0 g 3 6 Td (ancienne@exemple.fr) Tj ET
+endstream
+endobjxref
+0 21
+0000000000 65535 f 0000000014 00000 n 0000000079 00000 n 0000000135 00000 n 0000000321 00000 n 0000000610 00000 n 0000000000 65535 f 0000000000 65535 f 0000000000 65535 f 0000000000 65535 f 0000000706 00000 n 0000000856 00000 n 0000001014 00000 n 0000001164 00000 n 0000001324 00000 n 0000001508 00000 n 0000001660 00000 n 0000000000 65535 f 0000000000 65535 f 0000000000 65535 f 0000001856 00000 n trailer
+<< /Size 21 /Root 1 0 R >>
+startxref
+2079
+%%EOF

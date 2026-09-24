@@ -15,7 +15,7 @@
 //! | `fillsign` | remplir et signer : signature tracée, tapée ou importée, texte et marques, aplatissement | §9 |
 //! | `edit_objects` | édition des objets : inventaire, déplacer, redimensionner, pivoter, recadrer, réordonner, aligner, remplacer une image | §3 |
 //! | `edit_text` | édition de texte in place : réécriture chirurgicale du flux, remplacement, recomposition de paragraphe, sous-ensembles de polices | §3 |
-//! | `forms`  | formulaires AcroForm : inventaire, remplissage avec apparences, aplatissement, FDF | §9 |
+//! | `forms`  | formulaires AcroForm : inventaire, remplissage avec apparences, aplatissement, FDF, réinitialisation, ordre de tabulation, aspect d'un champ pour la saisie en place | §9 |
 //! | `linkedit` | écriture des liens : pose, retrait, détection automatique des adresses | §1 |
 //! | `media`  | multimédia : vidéos et sons du document, extraction du fichier incorporé | §13 |
 //! | `navigation` | destinations, liens, actions, signets                   | §1            |

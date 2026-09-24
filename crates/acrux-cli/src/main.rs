@@ -226,7 +226,7 @@ fn usage() {
     eprintln!("                                  interligne et alignement d'origine) ; --shrink : réduit la taille pour tenir");
     eprintln!();
     eprintln!("  fields  <fichier>                               liste les champs de formulaire (AcroForm)");
-    eprintln!("  fill    <fichier> <nom>=<valeur>... [--flatten] -o <sortie>");
+    eprintln!("  fill    <fichier> [<nom>=<valeur>...] [--reset] [--flatten] -o <sortie>");
     eprintln!("                                  remplit des champs (case : oui/non ; liste : a|b) ; --flatten : aplatit ensuite");
     eprintln!(
         "  fdf-export <fichier> -o <sortie.fdf>            exporte les valeurs des champs en FDF"
@@ -2521,10 +2521,20 @@ fn cmd_fields(path: &str) -> acrux_core::Result<()> {
         return Ok(());
     }
     for f in &fields {
-        let value = f
-            .value
-            .as_ref()
-            .map_or_else(|| "-".to_string(), |v| format!("« {} »", v.to_display()));
+        // Un saut de ligne (champ multiligne) s'écrit « \n » : une valeur
+        // tient sur la ligne de son champ, et la sortie reste lisible par un
+        // script.
+        let value = f.value.as_ref().map_or_else(
+            || "-".to_string(),
+            |v| {
+                let shown = v
+                    .to_display()
+                    .replace('\\', "\\\\")
+                    .replace("\r\n", "\\n")
+                    .replace(['\r', '\n'], "\\n");
+                format!("« {shown} »")
+            },
+        );
         let mut extra: Vec<String> = f.flags.labels().iter().map(ToString::to_string).collect();
         if let Some(n) = f.max_len {
             extra.push(format!("max {n}"));
@@ -2577,12 +2587,19 @@ fn cmd_fields(path: &str) -> acrux_core::Result<()> {
 fn cmd_fill(path: &str, rest: &[String]) -> acrux_core::Result<()> {
     let out = output_arg(rest)?;
     let assignments = positional(rest);
-    if assignments.is_empty() {
+    let reset_first = rest.iter().any(|a| a == "--reset");
+    if assignments.is_empty() && !reset_first {
         return Err(acrux_core::Error::Corrupt(
-            "usage : fill <fichier> <nom>=<valeur>... [--flatten] -o <sortie>".into(),
+            "usage : fill <fichier> [<nom>=<valeur>...] [--reset] [--flatten] -o <sortie>".into(),
         ));
     }
     let (doc, _) = open(path)?;
+    if reset_first {
+        // Le formulaire repart de ses valeurs par défaut avant les
+        // affectations : « effacer le formulaire » de l'application.
+        let n = acrux_features::forms::reset_fields(&doc)?;
+        println!("{n} champ(s) remis à leur valeur par défaut");
+    }
     let fields = acrux_features::forms::list_fields(&doc)?;
     for a in assignments {
         let Some((name, value)) = a.split_once('=') else {
