@@ -211,6 +211,10 @@ pub struct Prefs {
     pub sign_weight: u8,
     /// Couleur d'encre choisie, indice dans la palette de l'outil.
     pub sign_color: u8,
+    /// Réglages des outils de dessin (couleurs, épaisseur, opacité, police
+    /// et corps des zones de texte), sous la forme texte que lit
+    /// `viewer::draw::DrawStyle::decode` ; vide : ceux par défaut.
+    pub draw_style: String,
     /// Documents ouverts récemment, du plus récent au plus ancien.
     pub recent: Vec<PathBuf>,
     /// Commandes lancées depuis la palette, de la plus récente à la plus
@@ -241,6 +245,7 @@ impl Default for Prefs {
             sign_nib: 0,
             sign_weight: 1,
             sign_color: 0,
+            draw_style: String::new(),
             recent: Vec::new(),
             recent_commands: Vec::new(),
         }
@@ -344,6 +349,7 @@ impl Prefs {
                 "encre-pointe" => p.sign_nib = value.parse().unwrap_or(0).min(2),
                 "encre-epaisseur" => p.sign_weight = value.parse().unwrap_or(1).min(2),
                 "encre-couleur" => p.sign_color = value.parse().unwrap_or(0),
+                "dessin" => p.draw_style = value.to_string(),
                 "signature" if !value.is_empty() && p.signatures.len() < MAX_SIGNATURES => {
                     p.signatures.push(value.to_string());
                 }
@@ -390,6 +396,9 @@ impl Prefs {
         let _ = writeln!(out, "encre-pointe={}", self.sign_nib);
         let _ = writeln!(out, "encre-epaisseur={}", self.sign_weight);
         let _ = writeln!(out, "encre-couleur={}", self.sign_color);
+        if !self.draw_style.is_empty() {
+            let _ = writeln!(out, "dessin={}", self.draw_style);
+        }
         if let Some(value) = &self.initials {
             let _ = writeln!(out, "initials={value}");
         }
@@ -455,6 +464,7 @@ mod tests {
             sign_nib: 2,
             sign_weight: 0,
             sign_color: 3,
+            draw_style: "stroke=1F4E99;width=4".into(),
             recent: vec![PathBuf::from(r"C:\docs\a.pdf"), PathBuf::from(r"C:\b.pdf")],
             recent_commands: vec!["toggle-theme".into(), "print".into()],
         };

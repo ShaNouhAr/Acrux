@@ -11,7 +11,7 @@
 //! | `editpdf` | mode « Modifier le PDF » : saisie et barre du mode    |
 //! | `fieldedit` | saisie dans un champ posé sur la page : curseur, sélection, lignes, annulation |
 //! | `formbar` | barre d'un document à remplir : surligner les champs, effacer, aplatir |
-//! | `modebar` | barre fine d'un outil en cours (nom, consigne, sortie) et barre des commentaires (un bouton par outil de relecture) |
+//! | `modebar` | barre fine d'un outil en cours (nom, consigne, sortie) et barre des commentaires (un bouton par outil de relecture ou de dessin, les réglages de l'outil en cours) |
 //! | `text`    | rendu de texte d'interface avec une police système    |
 //! | `theme`   | couleurs et dimensions                                |
 //! | `lang`    | langue de l'interface : français ou anglais           |
@@ -27,7 +27,7 @@
 //! | `tabs`    | barre d'onglets (un par document ouvert)              |
 //! | `paint`   | coins arrondis, ombres douces, aplats translucides    |
 //! | `palette` | palette de commandes filtrable (Ctrl+Maj+P)           |
-//! | `pickers` | liste des polices du système et nuancier              |
+//! | `pickers` | liste des polices du système et nuancier (avec, au besoin, « aucune couleur ») |
 //! | `signpanel` | panneau « remplir et signer » : signatures, encre  |
 //! | `sign`    | outil « remplir et signer » : barre et capture        |
 //! | `objects` | outil « modifier » : boîte de sélection et poignées   |

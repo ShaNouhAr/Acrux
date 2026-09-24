@@ -807,6 +807,8 @@ impl Viewer {
     pub(super) fn flush_typing(&mut self) {
         self.close_active();
         self.commit_field();
+        // La forme, le dessin ou la zone de texte en cours aussi.
+        self.commit_draft();
     }
 
     /// Vrai quand un champ reçoit la frappe : aucune carte, palette ou

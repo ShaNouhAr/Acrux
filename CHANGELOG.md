@@ -9,6 +9,44 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 
 ## 0.23.0 — non publiée
 
+- **Dessiner sur la page : rectangle, ellipse, ligne, flèche, crayon.** La
+  barre des commentaires a un second groupe d'outils, après un filet. On
+  glisse, la forme suit le pointeur telle qu'elle sera posée, et se pose au
+  relâchement ; un simple clic pose un carré ou un cercle lisible. **Maj**
+  contraint le geste, comme partout : un carré, un cercle, une ligne à 0°,
+  45° ou 90°, et se lit en plein geste. Le **crayon** fait plusieurs traits
+  en un seul dessin, lissé ; `Ctrl+Z` retire le dernier trait, `Échap` ou
+  `Entrée` pose le dessin.
+- **Zones de texte et légendes, tapées sur place.** Un clic ouvre une zone
+  (un glisser en fixe la largeur) : on tape dedans, `Entrée` passe à la
+  ligne, la zone s'allonge avec le texte, la coupure des lignes est celle
+  qui sera écrite. `Ctrl+Z` défait la frappe, jamais l'annotation d'avant ;
+  `Ctrl+C`, `Ctrl+X`, `Ctrl+V` et `Ctrl+A` agissent sur le texte, et taper
+  « s » écrit un s au lieu d'ouvrir « remplir et signer ». `Échap`, un clic
+  ailleurs ou un autre outil posent la zone. La **légende** désigne un point
+  de la page par une ligne coudée et une flèche, jusqu'à sa zone de texte.
+- **Les réglages de l'outil sont dans la barre** : couleur du trait (le
+  nuancier de « Modifier le PDF », avec les couleurs récentes), remplissage
+  (ou aucun), épaisseur de 0,5 à 12 pt, opacité ; pour le texte, couleur,
+  corps, police (Helvetica, Times, Courier, en gras ou non), cadre et fond.
+  Changer un réglage pendant la frappe d'une zone s'y voit aussitôt, et les
+  réglages sont retenus d'une séance à l'autre. Colonne d'outils : « Dessiner »
+  et « Zone de texte » ; palette : les sept outils.
+- Rien de dessiné ne se perd : enregistrer, imprimer, annuler, changer
+  d'outil, d'onglet ou de mode posent d'abord la forme, le dessin ou la zone
+  en cours.
+- Une forme posée ne fait plus passer la page au blanc le temps de son
+  rendu : l'image d'avant reste, la forme dessinée par-dessus.
+- Le panneau des commentaires nomme rectangles, ellipses, lignes, flèches,
+  zones de texte et légendes.
+- `acr annotate` dessine et écrit : `circle`, `line`, `arrow` (`--head`,
+  `--tail` : flèche ouverte ou fermée, rond, carré, butée), `polygon`,
+  `polyline`, `ink --points "x,y x,y;x,y …"`, `text` (zone de texte :
+  `--font`, `--size`, `--align`, `--border`, « \n » passe à la ligne) et
+  `callout` (légende fléchée vers un point) ; options communes `--color`,
+  `--fill`, `--width`, `--opacity`. Un caractère que la police standard ne
+  peut pas écrire est signalé au lieu de devenir « ? » en silence.
+
 - **Barre des commentaires, comme la barre « Commenter » d'Acrobat.**
   « Outils de commentaire » (colonne de droite, palette) ouvre sous la barre
   d'outils une rangée de boutons : surligner, souligner, barrer, souligner

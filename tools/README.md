@@ -58,6 +58,18 @@ Click 1117 865                                # Appliquer
 Click 700 1000                                # poser la signature sur la page
 ```
 
+Deux options servent aux outils de dessin : `-Shift` tient Maj enfoncée pendant tout le geste
+(Maj simulée pour la fenêtre invisible et `MK_SHIFT` dans les mouvements, comme la vraie
+souris) ; `-Hold` ne relâche pas le bouton, pour capturer l'aperçu du geste en cours, que
+`Release x y` termine.
+
+```powershell
+Drag -Shift @(@(500,300), @(560,330), @(600,350))   # une ellipse devient un cercle
+Drag -Hold @(@(300,300), @(360,340), @(420,380))    # le geste reste en l'air…
+Shot "apercu"                                      # …on voit l'aperçu…
+Release 420 380                                    # …puis la forme est posée
+```
+
 Les coordonnées se donnent **comme on les lit sur la capture** : le harnais calcule l'échelle
 entre le tampon dessiné et les coordonnées des messages de souris (la fenêtre n'étant jamais
 montrée, les deux diffèrent quand l'écran n'est pas à 100 %).

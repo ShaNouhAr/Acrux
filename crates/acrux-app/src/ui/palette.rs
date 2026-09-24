@@ -172,6 +172,21 @@ pub enum Command {
     NoteTool,
     /// Outil « biffer » : on glisse sur le texte, il est marqué.
     RedactTool,
+    /// Outil « rectangle » : on glisse sur la page, un rectangle s'y pose.
+    RectangleTool,
+    /// Outil « ellipse ».
+    EllipseTool,
+    /// Outil « ligne ».
+    LineTool,
+    /// Outil « flèche ».
+    ArrowTool,
+    /// Outil « crayon » : dessin à main levée.
+    PencilTool,
+    /// Outil « zone de texte » : un commentaire écrit sur la page.
+    TextBoxTool,
+    /// Outil « légende » : une zone de texte reliée à un point par une
+    /// flèche.
+    CalloutTool,
     /// Poser une note.
     Note,
     /// Chercher une version plus récente.
@@ -283,6 +298,13 @@ impl Command {
             Command::CommentBar => "comment-bar",
             Command::NoteTool => "note-tool",
             Command::RedactTool => "redact-tool",
+            Command::RectangleTool => "rectangle-tool",
+            Command::EllipseTool => "ellipse-tool",
+            Command::LineTool => "line-tool",
+            Command::ArrowTool => "arrow-tool",
+            Command::PencilTool => "pencil-tool",
+            Command::TextBoxTool => "text-box-tool",
+            Command::CalloutTool => "callout-tool",
             Command::Note => "note",
             Command::CheckUpdates => "check-updates",
             Command::EditObjects => "edit-objects",
@@ -639,6 +661,55 @@ const ENTRIES: &[Entry] = &[
         shortcut: "",
         keywords: "remplacer remplacement correction outil relecture",
         command: Command::ReplaceTextTool,
+        needs_document: true,
+    },
+    Entry {
+        label: "Outil rectangle",
+        shortcut: "",
+        keywords: "rectangle carre cadre forme dessiner encadrer",
+        command: Command::RectangleTool,
+        needs_document: true,
+    },
+    Entry {
+        label: "Outil ellipse",
+        shortcut: "",
+        keywords: "ellipse cercle rond ovale forme dessiner entourer",
+        command: Command::EllipseTool,
+        needs_document: true,
+    },
+    Entry {
+        label: "Outil ligne",
+        shortcut: "",
+        keywords: "ligne trait droite tracer dessiner",
+        command: Command::LineTool,
+        needs_document: true,
+    },
+    Entry {
+        label: "Outil flèche",
+        shortcut: "",
+        keywords: "fleche pointe indiquer montrer tracer dessiner",
+        command: Command::ArrowTool,
+        needs_document: true,
+    },
+    Entry {
+        label: "Outil crayon",
+        shortcut: "",
+        keywords: "crayon dessin main levee encre griffonner dessiner stylo",
+        command: Command::PencilTool,
+        needs_document: true,
+    },
+    Entry {
+        label: "Outil zone de texte",
+        shortcut: "",
+        keywords: "zone texte commentaire machine a ecrire ecrire taper encadre",
+        command: Command::TextBoxTool,
+        needs_document: true,
+    },
+    Entry {
+        label: "Outil légende",
+        shortcut: "",
+        keywords: "legende bulle callout fleche annoter pointer",
+        command: Command::CalloutTool,
         needs_document: true,
     },
     Entry {

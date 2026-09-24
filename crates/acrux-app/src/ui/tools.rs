@@ -84,6 +84,10 @@ const ROWS: &[Row] = &[
     Row::Heading("Commenter"),
     Row::Tool("Surligner", Icon::Highlight, Command::HighlightTool, true),
     Row::Tool("Poser une note", Icon::Note, Command::NoteTool, true),
+    // Les formes et le crayon se choisissent dans la barre des commentaires,
+    // qui s'ouvre avec le rectangle : une seule ligne ici.
+    Row::Tool("Dessiner", Icon::Rectangle, Command::RectangleTool, true),
+    Row::Tool("Zone de texte", Icon::TextBox, Command::TextBoxTool, true),
     // Souligner, barrer, insérer, remplacer… : la barre des commentaires
     // les tient tous ensemble, au-dessus de la page.
     Row::Tool(

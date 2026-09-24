@@ -77,6 +77,7 @@ use acrux_features::fillsign::ink::{InkPoint, Nib, Pen, Stroke, Weight};
 
 mod context;
 mod dialogs;
+mod draw;
 mod editmode;
 mod formfill;
 mod history;
@@ -90,6 +91,7 @@ use crate::ui::formbar::FormBar;
 use crate::ui::modebar::ModeBar;
 use context::{ContextMenu, Target};
 use dialogs::{Asking, Then};
+use draw::{Draft, DrawPopup, DrawStyle};
 use editmode::EditMode;
 use history::{NavHistory, Spot};
 use protect::OwnerThen;
@@ -223,10 +225,14 @@ fn collect_comments(doc: &Document, pages: &[Page]) -> Vec<CommentRow> {
                 "Squiggly" => "Soulignement ondulé",
                 "Caret" if a.reference.is_some_and(|r| primaries.contains(&r)) => "Remplacement",
                 "Caret" => "Insertion",
-                "Square" | "Circle" => "Forme",
-                "Line" | "Polygon" | "PolyLine" => "Trait",
+                "Square" => "Rectangle",
+                "Circle" => "Ellipse",
+                "Line" if a.intent.as_deref() == Some("LineArrow") => "Flèche",
+                "Line" => "Ligne",
+                "Polygon" | "PolyLine" => "Trait",
                 "Ink" => "Dessin",
-                "FreeText" => "Texte libre",
+                "FreeText" if a.intent.as_deref() == Some("FreeTextCallout") => "Légende",
+                "FreeText" => "Zone de texte",
                 "Stamp" => "Tampon",
                 "FileAttachment" => "Pièce jointe",
                 "Redact" => "Biffure",
@@ -403,6 +409,20 @@ enum AnnotTool {
     Note,
     /// Glisser sur du texte le marque pour biffure.
     Redact,
+    /// Glisser sur la page trace un rectangle.
+    Rectangle,
+    /// Glisser trace une ellipse.
+    Ellipse,
+    /// Glisser trace une ligne.
+    Line,
+    /// Glisser trace une flèche, de l'origine vers la pointe.
+    Arrow,
+    /// Dessin à main levée : plusieurs traits, une annotation.
+    Pencil,
+    /// Un clic ou un glisser ouvre une zone de texte, qu'on tape en place.
+    TextBox,
+    /// Un clic désigne un point, un glisser place la zone de texte reliée.
+    Callout,
 }
 
 /// Les outils de la barre des commentaires, dans l'ordre de ses boutons.
@@ -419,6 +439,13 @@ const COMMENT_TOOLS: &[AnnotTool] = &[
     AnnotTool::Insert,
     AnnotTool::Replace,
     AnnotTool::Note,
+    AnnotTool::Rectangle,
+    AnnotTool::Ellipse,
+    AnnotTool::Line,
+    AnnotTool::Arrow,
+    AnnotTool::Pencil,
+    AnnotTool::TextBox,
+    AnnotTool::Callout,
 ];
 
 impl AnnotTool {
@@ -448,6 +475,34 @@ impl AnnotTool {
                 "Biffer",
                 "Faites glisser sur le texte à biffer, puis « Appliquer les biffures ».",
             ),
+            AnnotTool::Rectangle => (
+                "Rectangle",
+                "Faites glisser sur la page ; Maj pour un carré.",
+            ),
+            AnnotTool::Ellipse => (
+                "Ellipse",
+                "Faites glisser sur la page ; Maj pour un cercle.",
+            ),
+            AnnotTool::Line => (
+                "Ligne",
+                "Faites glisser sur la page ; Maj pour un angle de 45°.",
+            ),
+            AnnotTool::Arrow => (
+                "Flèche",
+                "Faites glisser de l'origine vers la pointe ; Maj pour un angle de 45°.",
+            ),
+            AnnotTool::Pencil => (
+                "Crayon",
+                "Dessinez à main levée ; Échap ou Entrée termine le dessin.",
+            ),
+            AnnotTool::TextBox => (
+                "Zone de texte (commentaire)",
+                "Cliquez ou tracez une zone, puis tapez ; Échap termine.",
+            ),
+            AnnotTool::Callout => (
+                "Légende",
+                "Cliquez le point à désigner, glissez jusqu'à la zone, puis tapez.",
+            ),
         }
     }
 
@@ -462,6 +517,13 @@ impl AnnotTool {
             AnnotTool::Replace => Command::ReplaceTextTool,
             AnnotTool::Note => Command::NoteTool,
             AnnotTool::Redact => Command::RedactTool,
+            AnnotTool::Rectangle => Command::RectangleTool,
+            AnnotTool::Ellipse => Command::EllipseTool,
+            AnnotTool::Line => Command::LineTool,
+            AnnotTool::Arrow => Command::ArrowTool,
+            AnnotTool::Pencil => Command::PencilTool,
+            AnnotTool::TextBox => Command::TextBoxTool,
+            AnnotTool::Callout => Command::CalloutTool,
         }
     }
 
@@ -478,6 +540,8 @@ impl AnnotTool {
             AnnotTool::Replace => Command::ReplaceText,
             AnnotTool::Note => Command::Note,
             AnnotTool::Redact => Command::MarkRedaction,
+            // Dessiner n'a pas d'autre geste que l'outil lui-même.
+            tool => tool.command(),
         }
     }
 
@@ -488,7 +552,7 @@ impl AnnotTool {
             AnnotTool::Underline => Some(MarkupKind::Underline),
             AnnotTool::StrikeOut => Some(MarkupKind::StrikeOut),
             AnnotTool::Squiggly => Some(MarkupKind::Squiggly),
-            AnnotTool::Insert | AnnotTool::Replace | AnnotTool::Note | AnnotTool::Redact => None,
+            _ => None,
         }
     }
 
@@ -503,12 +567,39 @@ impl AnnotTool {
             AnnotTool::Replace => Icon::Replace,
             AnnotTool::Note => Icon::Note,
             AnnotTool::Redact => Icon::Redact,
+            AnnotTool::Rectangle => Icon::Rectangle,
+            AnnotTool::Ellipse => Icon::Ellipse,
+            AnnotTool::Line => Icon::Line,
+            AnnotTool::Arrow => Icon::Arrow,
+            AnnotTool::Pencil => Icon::Pencil,
+            AnnotTool::TextBox => Icon::TextBox,
+            AnnotTool::Callout => Icon::Callout,
         }
     }
 
     /// Vrai pour les outils de la barre des commentaires.
     fn in_comment_bar(self) -> bool {
         COMMENT_TOOLS.contains(&self)
+    }
+
+    /// Vrai pour les outils qui dessinent ou écrivent sur la page (voir
+    /// `viewer/draw.rs`), plutôt que de baliser du texte.
+    fn draws(self) -> bool {
+        matches!(
+            self,
+            AnnotTool::Rectangle
+                | AnnotTool::Ellipse
+                | AnnotTool::Line
+                | AnnotTool::Arrow
+                | AnnotTool::Pencil
+                | AnnotTool::TextBox
+                | AnnotTool::Callout
+        )
+    }
+
+    /// Vrai pour les formes fermées, les seules qu'on remplit.
+    fn fills(self) -> bool {
+        matches!(self, AnnotTool::Rectangle | AnnotTool::Ellipse)
     }
 }
 
@@ -1060,6 +1151,18 @@ pub struct Viewer {
     comment_bar: bool,
     /// Barre de l'outil d'annotation.
     mode_bar: ModeBar,
+    /// Forme, dessin ou zone de texte en cours, pas encore écrit dans le
+    /// document (voir `viewer/draw.rs`).
+    draft: Option<Draft>,
+    /// Dernière forme posée, dessinée le temps que sa page revienne du fil
+    /// de rendu, et l'échelle de l'image qu'elle attend.
+    draft_ghost: Option<(Draft, u32)>,
+    /// Réglages des outils de dessin.
+    draw_style: DrawStyle,
+    /// Nuancier ou liste d'un réglage de dessin, déroulé.
+    draw_popup: Option<DrawPopup>,
+    /// Police d'écran des zones de texte en cours de frappe.
+    draw_text_font: Option<(acrux_features::stamp::StandardFont, TextRenderer)>,
     /// Barre des outils, à droite, affichée.
     tools_open: bool,
     /// Barre des outils.
@@ -1114,6 +1217,7 @@ impl Viewer {
             .filter_map(|s| Saved::decode(s))
             .collect();
         let initials = prefs.initials.as_deref().and_then(Saved::decode);
+        let draw_style = DrawStyle::decode(&prefs.draw_style);
         Self {
             loaded: None,
             error: None,
@@ -1138,6 +1242,11 @@ impl Viewer {
             annot_tool: None,
             comment_bar: false,
             mode_bar: ModeBar::default(),
+            draft: None,
+            draft_ghost: None,
+            draw_style,
+            draw_popup: None,
+            draw_text_font: None,
             tools_open: prefs.tools_open,
             tools: ToolsPanel::new(),
             panel_open: prefs.panel_open,
@@ -2990,7 +3099,14 @@ impl Viewer {
         if !self.comment_bar || self.mode_bar_height() == 0 {
             return None;
         }
-        let (index, rect) = self.mode_bar.hover_tip()?;
+        let (hovered, rect) = self.mode_bar.hovered()?;
+        let index = match hovered {
+            crate::ui::modebar::Hovered::Tool(index) => index,
+            crate::ui::modebar::Hovered::Setting(index) => {
+                let setting = draw::settings_for(self.annot_tool?).get(index)?;
+                return Some((lang::tr(setting.label()).to_string(), rect));
+            }
+        };
         let tool = *COMMENT_TOOLS.get(index)?;
         let label = lang::tr(tool.describe().0);
         let keys = crate::ui::palette::describe(tool.action()).map_or("", |(_, k)| k);
@@ -3130,6 +3246,11 @@ impl Viewer {
     /// Colle le presse-papiers dans le champ de saisie qui a la main, s'il y
     /// en a un. Rend vrai si le collage le concernait.
     fn paste_into_field(&mut self, window: &mut dyn WindowHandle) -> bool {
+        // Une zone de texte qu'on tape colle chez elle (`draft_char`), même
+        // la carte de recherche ouverte.
+        if self.draft_typing() {
+            return false;
+        }
         let has_field = self.palette.is_some()
             || self.edit_menu_open()
             || (self.search.is_some() && !self.editing_text());
@@ -3471,6 +3592,9 @@ impl Viewer {
             return;
         }
         self.commit_field();
+        // Changer d'outil termine le dessin ou la zone en cours.
+        self.commit_draft();
+        self.draw_popup = None;
         if self.annot_tool == Some(tool) {
             self.annot_tool = None;
             log_line(&format!("outil : {tool:?} éteint"));
@@ -3529,6 +3653,9 @@ impl Viewer {
     /// toute sortie des outils passe par ici, sans quoi la barre resterait
     /// sous celle d'un autre mode.
     fn close_annot_tools(&mut self) {
+        // Ce qui est dessiné ou tapé est posé avant qu'on quitte l'outil.
+        self.commit_draft();
+        self.draw_popup = None;
         self.annot_tool = None;
         self.comment_bar = false;
     }
@@ -3793,6 +3920,14 @@ impl Viewer {
                 )
             }) {
                 Some(tool.command())
+            } else if let Some(tool) = self.annot_tool.filter(|t| t.draws()) {
+                // Les formes et le crayon s'allument sous « Dessiner », la
+                // zone de texte et la légende sous « Zone de texte ».
+                Some(if matches!(tool, AnnotTool::TextBox | AnnotTool::Callout) {
+                    Command::TextBoxTool
+                } else {
+                    Command::RectangleTool
+                })
             } else if self.comment_bar {
                 Some(Command::CommentBar)
             } else if let Some(tool) = self.edit_tool() {
@@ -4263,6 +4398,13 @@ impl Viewer {
             Command::ReplaceTextTool => self.toggle_annot_tool(AnnotTool::Replace, window),
             Command::NoteTool => self.toggle_annot_tool(AnnotTool::Note, window),
             Command::RedactTool => self.toggle_annot_tool(AnnotTool::Redact, window),
+            Command::RectangleTool => self.toggle_annot_tool(AnnotTool::Rectangle, window),
+            Command::EllipseTool => self.toggle_annot_tool(AnnotTool::Ellipse, window),
+            Command::LineTool => self.toggle_annot_tool(AnnotTool::Line, window),
+            Command::ArrowTool => self.toggle_annot_tool(AnnotTool::Arrow, window),
+            Command::PencilTool => self.toggle_annot_tool(AnnotTool::Pencil, window),
+            Command::TextBoxTool => self.toggle_annot_tool(AnnotTool::TextBox, window),
+            Command::CalloutTool => self.toggle_annot_tool(AnnotTool::Callout, window),
             Command::CommentBar => self.toggle_comment_bar(window),
             Command::AddTextBox => {
                 self.close_annot_tools();
@@ -4305,8 +4447,10 @@ impl Viewer {
     /// comme fait ce qui ne l'est pas.
     fn apply_edit(&mut self, op: EditOp) -> bool {
         // Ce qui est tapé dans un champ passe d'abord : l'historique garde
-        // l'ordre des gestes.
+        // l'ordre des gestes. Un dessin en cours aussi (il ne repasse pas
+        // ici : `commit_draft` vide le brouillon avant d'appeler).
         self.commit_field();
+        self.commit_draft();
         // Un document protégé ne se modifie que dans la limite de ses
         // permissions (le propriétaire les a toutes).
         if self.loaded.is_some() && !self.require_right(op.required_right()) {
@@ -4392,6 +4536,8 @@ impl Viewer {
         }
         self.field_edit = None;
         self.field_menu = None;
+        self.draft = None;
+        self.draft_ghost = None;
         let Some(l) = &self.loaded else { return };
         let (path, password) = (l.path.clone(), l.password.clone());
         // Le champ qui a le focus, par son nom : les rangs de l'inventaire
@@ -5318,6 +5464,10 @@ impl Viewer {
         self.field_edit = None;
         self.field_menu = None;
         self.list_anchor = None;
+        // Un brouillon désigne une page de l'ancien document.
+        self.draft = None;
+        self.draft_ghost = None;
+        self.draw_popup = None;
         self.panel = Panel::new();
         self.title_dirty = true;
     }
@@ -7273,6 +7423,7 @@ impl Viewer {
             || self.protect_event(&event, window)
             || self.modal_event(&event, window)
             || self.zoom_menu_event(&event, window)
+            || self.draw_popup_event(&event, window)
             || self.context_menu_event(&event, window)
             || self.field_menu_event(&event, window)
         {
@@ -7441,6 +7592,26 @@ impl Viewer {
                     && self.palette.is_none()
                     && !m.ctrl
                     && self.edit_popup_char(c, window) => {}
+            // Une zone de texte qu'on tape, un dessin au crayon : le clavier
+            // va d'abord à eux. Taper « s » écrit un s, il n'ouvre pas
+            // « remplir et signer » ; Ctrl+Z défait la frappe ou le dernier
+            // trait, pas l'annotation d'avant.
+            Event::Key(key, m)
+                if self.draft.is_some()
+                    && self.prompt.is_none()
+                    && self.palette.is_none()
+                    && self.draft_key(key, m) =>
+            {
+                window.request_redraw();
+            }
+            Event::Char(c, m)
+                if self.draft.is_some()
+                    && self.prompt.is_none()
+                    && self.palette.is_none()
+                    && self.draft_char(c, m, window) =>
+            {
+                window.request_redraw();
+            }
             Event::Key(Key::Escape, _)
                 if self.prompt.is_none() && self.palette.is_none() && self.close_3d() =>
             {
@@ -7732,6 +7903,10 @@ impl Viewer {
                             .and_then(|i| COMMENT_TOOLS.get(i))
                         {
                             self.toggle_annot_tool(tool, window);
+                        } else if let Some(index) = self.mode_bar.setting_at(x, y) {
+                            if let Some(anchor) = self.mode_bar.setting_rect(index) {
+                                self.open_draw_setting(index, anchor);
+                            }
                         }
                     }
                 } else if y < top && self.edit_on() && !self.edit_overlay() {
@@ -7806,6 +7981,9 @@ impl Viewer {
                             self.start_note();
                         } else if self.annot_tool == Some(AnnotTool::Insert) {
                             self.start_insert(x, y);
+                        } else if self.draw_mouse_down(x, y, modifiers.shift, clicks) {
+                            // Un outil de dessin a pris le clic : sur un
+                            // lien ou un champ aussi, on dessine.
                         } else if self.three_d_mouse_down(x, y, clicks, modifiers.shift, window) {
                             // Un modèle 3D a pris le clic.
                         } else if self.media_mouse_down(x, y, window) {
@@ -7858,7 +8036,7 @@ impl Viewer {
             // La palette recouvre tout : ni l'outil en cours, ni le modèle 3D,
             // ni les objets de la page ne voient passer le pointeur — sans
             // quoi tenir l'ascenseur de la palette ferait tourner le modèle.
-            Event::MouseMove { x, y, dragging } if self.palette.is_some() => {
+            Event::MouseMove { x, y, dragging, .. } if self.palette.is_some() => {
                 if self
                     .palette
                     .as_mut()
@@ -7877,11 +8055,11 @@ impl Viewer {
                 self.edit_popup_up();
                 window.request_redraw();
             }
-            Event::MouseMove { x, y, dragging } if self.edit_popup_move(x, y, dragging, window) => {
-            }
+            Event::MouseMove { x, y, dragging, .. }
+                if self.edit_popup_move(x, y, dragging, window) => {}
             // Le survol de la carte de recherche ; un bouton enfoncé suit le
             // pointeur même bouton tenu, pour remonter quand on glisse dehors.
-            Event::MouseMove { x, y, dragging }
+            Event::MouseMove { x, y, dragging, .. }
                 if self.palette.is_none()
                     && (!dragging || self.search_pressed())
                     && self.search_hover(x, y, window) => {}
@@ -7889,7 +8067,7 @@ impl Viewer {
                 self.objects_mouse_up();
                 window.request_redraw();
             }
-            Event::MouseMove { x, y, dragging } if self.objects.is_some() => {
+            Event::MouseMove { x, y, dragging, .. } if self.objects.is_some() => {
                 let (vx, vy) = (x - self.view_left() as i32, y - self.view_top() as i32);
                 if self.objects_mouse_move(vx, vy, dragging) {
                     window.request_redraw();
@@ -7907,7 +8085,7 @@ impl Viewer {
                     .map_or(sign::Action::None, Capture::mouse_up);
                 self.sign_action(action, window);
             }
-            Event::MouseMove { x, y, dragging } if self.capture.is_some() => {
+            Event::MouseMove { x, y, dragging, .. } if self.capture.is_some() => {
                 let action = self
                     .capture
                     .as_mut()
@@ -7930,6 +8108,20 @@ impl Viewer {
                 self.ink_finish();
                 window.request_redraw();
             }
+            Event::MouseUp { .. } if self.draft.as_ref().is_some_and(Draft::gesture) => {
+                self.draw_mouse_up();
+                window.request_redraw();
+            }
+            Event::MouseMove {
+                x,
+                y,
+                dragging: true,
+                shift,
+            } if self.draft.as_ref().is_some_and(Draft::gesture) => {
+                let (vx, vy) = (x - self.view_left() as i32, y - self.view_top() as i32);
+                self.draw_mouse_move(vx, vy, shift);
+                window.request_redraw();
+            }
             Event::MouseUp { .. } => {
                 self.three_d_mouse_up();
                 self.edit_mouse_up();
@@ -7950,7 +8142,7 @@ impl Viewer {
                     self.apply_annot_tool();
                 }
             }
-            Event::MouseMove { x, y, dragging } if self.three_d_mouse_move(x, y, window) => {
+            Event::MouseMove { x, y, dragging, .. } if self.three_d_mouse_move(x, y, window) => {
                 let _ = dragging;
             }
             // Un glisser commencé dans le champ en saisie y sélectionne.
@@ -7958,11 +8150,12 @@ impl Viewer {
                 x,
                 y,
                 dragging: true,
+                ..
             } if self.field_selecting() => {
                 let (vx, vy) = (x - self.view_left() as i32, y - self.view_top() as i32);
                 self.field_drag(vx, vy);
             }
-            Event::MouseMove { x, y, dragging } => {
+            Event::MouseMove { x, y, dragging, .. } => {
                 let bar = Toolbar::height(&self.theme, self.dpi_scale as f32);
                 let mut hover_changed = self.toolbar.mouse_move(x, y);
                 if let Some(mode) = &mut self.edit {
@@ -8082,6 +8275,10 @@ impl Viewer {
                         Cursor::AddText
                     } else if in_view && sign_item.is_some() {
                         Cursor::Place
+                    } else if let Some(cursor) = in_view.then(|| self.draw_cursor(x, y)).flatten() {
+                        // Une croix pour tracer, le stylo pour le crayon, la
+                        // barre de texte au-dessus d'une zone qu'on tape.
+                        cursor
                     } else if in_view && self.annot_tool.is_some() {
                         // Souligner, barrer, remplacer, insérer : on vise du
                         // texte, la barre de texte le dit.
@@ -8145,11 +8342,20 @@ impl Viewer {
             + self.tabs_height() as i32
             + self.edit_bar_height() as i32;
         let (theme, dpi) = (self.theme, self.dpi_scale as f32);
+        // Les réglages de l'outil se lisent avant d'emprunter la police.
+        let settings = self.draw_settings();
+        let open = self.open_setting();
         let Some(text) = self.text.as_mut() else {
             return;
         };
         if self.comment_bar {
             let icons: Vec<Icon> = COMMENT_TOOLS.iter().map(|t| t.icon()).collect();
+            // Le dessin après le balisage du texte, un filet entre les deux.
+            let groups: Vec<usize> = COMMENT_TOOLS
+                .iter()
+                .position(|t| t.draws())
+                .into_iter()
+                .collect();
             let active = self
                 .annot_tool
                 .and_then(|t| COMMENT_TOOLS.iter().position(|c| *c == t));
@@ -8166,7 +8372,10 @@ impl Viewer {
                 dpi,
                 y,
                 &icons,
+                &groups,
                 active,
+                &settings,
+                open,
                 hint,
             );
         } else if let Some(tool) = self.annot_tool {
@@ -8219,6 +8428,7 @@ impl Viewer {
             self.paint_edit(&mut view);
             self.paint_objects(&mut view);
             self.paint_inking(&mut view);
+            self.paint_draft(&mut view);
             self.paint_sign_ghost(&mut view);
             if self.sign_panel.is_some() {
                 self.paint_placed(&mut view);
@@ -8263,6 +8473,7 @@ impl Viewer {
         // cartes qui s'ouvrent par-dessus, avec lui.
         self.paint_tip(frame);
         self.paint_zoom_menu(frame);
+        self.paint_draw_popup(frame);
         self.paint_field_menu(frame);
         self.paint_capture(frame);
         self.paint_protect(frame);

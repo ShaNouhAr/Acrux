@@ -882,6 +882,19 @@ pub fn fill_path(
     matrix: &Matrix,
     color: (u8, u8, u8),
 ) {
+    fill_path_alpha(frame, raster, path, matrix, color, 255);
+}
+
+/// Remplit un tracé avec une opacité (255 : opaque) : l'aperçu d'une forme
+/// à demi transparente se montre comme elle sera posée.
+pub fn fill_path_alpha(
+    frame: &mut Frame<'_>,
+    raster: &mut Rasterizer,
+    path: &Path,
+    matrix: &Matrix,
+    color: (u8, u8, u8),
+    alpha: u8,
+) {
     let (w, h) = (frame.width, frame.height);
     let mask = raster.path_coverage(path, matrix, FillRule::NonZero, w, h);
     let data = mask.data();
@@ -890,7 +903,7 @@ pub fn fill_path(
     let (x1, y1) = (bounds.2.min(w), bounds.3.min(h));
     for row in y0..y1 {
         for col in x0..x1 {
-            let a = u32::from(data[(row * w + col) as usize]);
+            let a = u32::from(data[(row * w + col) as usize]) * u32::from(alpha) / 255;
             if a == 0 {
                 continue;
             }

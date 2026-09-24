@@ -2224,6 +2224,8 @@ impl Viewer {
     /// grisés pendant qu'on y tape.
     pub(super) fn block_history(&self) -> (bool, bool) {
         let (field_undo, field_redo) = self.field_history();
+        let (draft_undo, draft_redo) = self.draft_history();
+        let (field_undo, field_redo) = (field_undo || draft_undo, field_redo || draft_redo);
         let (undo, redo) = self
             .edit
             .as_ref()
@@ -2237,8 +2239,9 @@ impl Viewer {
     /// Rend faux quand il n'y a plus rien à défaire ici : c'est alors à
     /// l'annulation du document de jouer.
     pub(super) fn undo_step(&mut self, window: &mut dyn WindowHandle) -> bool {
-        // La saisie d'un champ de formulaire a ses propres étapes.
-        if self.field_undo_step() {
+        // La saisie d'un champ de formulaire a ses propres étapes, comme la
+        // zone de texte ou le dessin au crayon en cours.
+        if self.field_undo_step() || self.draft_undo_step() {
             window.request_redraw();
             return true;
         }
@@ -2264,7 +2267,7 @@ impl Viewer {
 
     /// Refait l'étape défaite.
     pub(super) fn redo_step(&mut self, window: &mut dyn WindowHandle) -> bool {
-        if self.field_redo_step() {
+        if self.field_redo_step() || self.draft_redo_step() {
             window.request_redraw();
             return true;
         }

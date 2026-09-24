@@ -122,11 +122,13 @@ pub enum Cursor {
     ResizeNWSE,
     /// Redimensionner en diagonale « ↗ » (coins haut-droit, bas-gauche).
     ResizeNESW,
+    /// Croix fine : tracer une forme, là où tombe exactement le coin.
+    Cross,
 }
 
 impl Cursor {
     /// Nombre de pointeurs.
-    pub const COUNT: usize = 14;
+    pub const COUNT: usize = 15;
 }
 
 /// Modificateurs enfoncés.
@@ -195,6 +197,10 @@ pub enum Event {
         y: i32,
         /// Bouton gauche enfoncé pendant le déplacement.
         dragging: bool,
+        /// Maj enfoncée : un geste de dessin se contraint (carré, cercle,
+        /// angle multiple de 45°). Elle se lit à chaque mouvement, parce
+        /// qu'on l'enfonce ou la relâche en plein geste.
+        shift: bool,
     },
     /// Fichier déposé sur la fenêtre.
     FileDropped(PathBuf),

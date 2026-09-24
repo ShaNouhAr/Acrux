@@ -240,6 +240,7 @@ const IDC_SIZENWSE: usize = 32642;
 const IDC_SIZENESW: usize = 32643;
 const IDC_SIZEWE: usize = 32644;
 const IDC_SIZENS: usize = 32645;
+const IDC_CROSS: usize = 32515;
 const CS_DBLCLKS: UINT = 0x0008;
 const WM_SETCURSOR: UINT = 0x0020;
 const WM_LBUTTONDBLCLK: UINT = 0x0203;
@@ -298,6 +299,7 @@ const KEY_ALT_DOWN: LPARAM = 1 << 29;
 /// `MapVirtualKeyW` : le caractère qu'écrit une touche, sans modificateur.
 const MAPVK_VK_TO_CHAR: UINT = 2;
 const MK_LBUTTON: WPARAM = 0x0001;
+const MK_SHIFT: WPARAM = 0x0004;
 
 #[repr(C)]
 struct ICONINFO {
@@ -1887,12 +1889,16 @@ fn handle_message(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRES
         }
         WM_MOUSEMOVE => {
             let dragging = wparam & MK_LBUTTON != 0 && state.dragging;
+            // Maj d'après le message lui-même (MK_SHIFT), ou d'après le
+            // clavier simulé du mode invisible.
+            let shift = wparam & MK_SHIFT != 0 || modifiers().shift;
             deliver(
                 state,
                 Event::MouseMove {
                     x: low_i16(lparam),
                     y: high_i16(lparam),
                     dragging,
+                    shift,
                 },
             );
             0
@@ -2066,7 +2072,7 @@ pub fn run(
     // SAFETY : null = module courant.
     let instance = unsafe { GetModuleHandleW(null()) };
     // SAFETY : IDC_* sont des ressources système prédéfinies.
-    let (arrow, beam, pointer, size_we, size_ns, size_nwse, size_nesw) = unsafe {
+    let (arrow, beam, pointer, size_we, size_ns, size_nwse, size_nesw, cross) = unsafe {
         (
             LoadCursorW(null_mut(), IDC_ARROW as *const u16),
             LoadCursorW(null_mut(), IDC_IBEAM as *const u16),
@@ -2075,6 +2081,7 @@ pub fn run(
             LoadCursorW(null_mut(), IDC_SIZENS as *const u16),
             LoadCursorW(null_mut(), IDC_SIZENWSE as *const u16),
             LoadCursorW(null_mut(), IDC_SIZENESW as *const u16),
+            LoadCursorW(null_mut(), IDC_CROSS as *const u16),
         )
     };
     let drawn = |shape| drawn_cursor(shape).unwrap_or(arrow);
@@ -2093,6 +2100,7 @@ pub fn run(
         size_ns,
         size_nwse,
         size_nesw,
+        cross,
     ];
     let cursor = cursors[0];
     let icon = program_icon(instance, SM_CXICON, SM_CYICON);

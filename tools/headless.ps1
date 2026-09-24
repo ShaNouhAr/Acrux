@@ -170,16 +170,38 @@ function Hover($x, $y) {
 
 # Trace un geste continu : bouton enfonce, une suite de points, puis relache.
 # Les points sont donnes en coordonnees client : @(@(x,y), @(x,y), ...).
-function Drag($points) {
+# -Shift tient Maj enfoncee tout le geste : Maj simulee pour la fenetre
+# invisible, et MK_SHIFT (4) dans wParam des mouvements, comme la vraie souris
+# (un carre, un cercle, une ligne a 45 degres). -Hold ne relache pas le bouton :
+# on capture l'apercu du geste, puis Release le termine.
+function Drag($points, [switch]$Shift, [switch]$Hold) {
     $first = $points[0]
-    [W.HL]::PostMessage($script:Hwnd, 0x0201, [IntPtr]1, (LParam $first[0] $first[1])) | Out-Null
+    $buttons = 1
+    if ($Shift) {
+        [W.HL]::PostMessage($script:Hwnd, 0x0100, [IntPtr]0x10, [IntPtr]1) | Out-Null
+        Start-Sleep -Milliseconds 60
+        $buttons = 5
+    }
+    [W.HL]::PostMessage($script:Hwnd, 0x0201, [IntPtr]$buttons, (LParam $first[0] $first[1])) | Out-Null
     Start-Sleep -Milliseconds 60
     foreach ($p in $points) {
-        [W.HL]::PostMessage($script:Hwnd, 0x0200, [IntPtr]1, (LParam $p[0] $p[1])) | Out-Null
+        [W.HL]::PostMessage($script:Hwnd, 0x0200, [IntPtr]$buttons, (LParam $p[0] $p[1])) | Out-Null
         Start-Sleep -Milliseconds 12
     }
     $last = $points[$points.Length - 1]
-    [W.HL]::PostMessage($script:Hwnd, 0x0202, [IntPtr]0, (LParam $last[0] $last[1])) | Out-Null
+    if (-not $Hold) {
+        [W.HL]::PostMessage($script:Hwnd, 0x0202, [IntPtr]0, (LParam $last[0] $last[1])) | Out-Null
+    }
+    if ($Shift) {
+        Start-Sleep -Milliseconds 60
+        [W.HL]::PostMessage($script:Hwnd, 0x0101, [IntPtr]0x10, $script:KeyUp) | Out-Null
+    }
+    Start-Sleep -Milliseconds 300
+}
+
+# Relache le bouton gauche en (x, y) : la fin d'un Drag -Hold.
+function Release($x, $y) {
+    [W.HL]::PostMessage($script:Hwnd, 0x0202, [IntPtr]0, (LParam $x $y)) | Out-Null
     Start-Sleep -Milliseconds 300
 }
 

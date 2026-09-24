@@ -700,6 +700,33 @@ fn from_hsv(hue: f32, sat: f32, val: f32) -> [u8; 3] {
     [byte(r), byte(g), byte(b)]
 }
 
+/// Pastille « aucune couleur » : un carré clair cerné, barré d'un trait
+/// rouge en diagonale — la convention des logiciels de dessin.
+pub fn no_color_chip(frame: &mut Frame<'_>, x: i32, y: i32, side: i32, dpi: f32, theme: &Theme) {
+    round_rect(frame, x, y, side, side, 3.0 * dpi, (255, 255, 255));
+    round_rect_outline(
+        frame,
+        x,
+        y,
+        side,
+        side,
+        3.0 * dpi,
+        dpi.max(1.0),
+        theme.separator,
+    );
+    // La diagonale, du coin bas-gauche au coin haut-droit, pixel par pixel
+    // sur une épaisseur de deux : pas besoin du rasteriseur pour un trait.
+    let t = (1.5 * dpi).round().max(1.0) as i32;
+    for i in 1..side - 1 {
+        for d in 0..t {
+            let (px, py) = (x + i, y + side - 1 - i + d - t / 2);
+            if py > y && py < y + side - 1 {
+                frame.fill_rect(px, py, 1, 1, 220, 40, 40);
+            }
+        }
+    }
+}
+
 /// Lit « #1F4E99 », « 1f4e99 » ou « #abc ».
 fn parse_hex(text: &str) -> Option<[u8; 3]> {
     let hex = text.trim().trim_start_matches('#');
@@ -746,6 +773,14 @@ pub struct ColorPicker {
     strip: Rect,
     field: Rect,
     ok: Rect,
+    /// Libellé du choix « aucune couleur », s'il est offert.
+    none: Option<&'static str>,
+    /// « Aucune couleur » est le choix en cours.
+    none_selected: bool,
+    /// Zone de « aucune couleur », remplie au dessin.
+    none_rect: Rect,
+    /// Le pointeur est sur « aucune couleur ».
+    hover_none: bool,
 }
 
 impl ColorPicker {
@@ -771,7 +806,29 @@ impl ColorPicker {
             strip: (0, 0, 0, 0),
             field: (0, 0, 0, 0),
             ok: (0, 0, 0, 0),
+            none: None,
+            none_selected: false,
+            none_rect: (0, 0, 0, 0),
+            hover_none: false,
         }
+    }
+
+    /// Offre en tête du nuancier le choix « aucune couleur », sous ce
+    /// libellé : un fond transparent, une zone de texte sans cadre.
+    /// `selected` dit s'il est le choix en cours.
+    #[must_use]
+    pub fn with_none(mut self, label: &'static str, selected: bool) -> Self {
+        self.none = Some(label);
+        self.none_selected = selected;
+        self
+    }
+
+    /// Vrai si le point tombe sur « aucune couleur ». L'appelant le
+    /// demande avant [`ColorPicker::mouse_down`] : ce choix n'est pas une
+    /// couleur, il ne tient pas dans un [`Outcome`].
+    #[must_use]
+    pub fn none_at(&self, x: i32, y: i32) -> bool {
+        self.none.is_some() && inside(self.none_rect, x, y)
     }
 
     fn rgb(&self) -> [u8; 3] {
@@ -841,6 +898,7 @@ impl ColorPicker {
         }
         self.hover = self.cells.iter().position(|(r, _)| inside(*r, x, y));
         self.hover_ok = inside(self.ok, x, y);
+        self.hover_none = self.none_at(x, y);
         Outcome::Stay
     }
 
@@ -916,7 +974,13 @@ impl ColorPicker {
         } else {
             heading + cell + s(8.0)
         };
+        let none_h = if self.none.is_some() {
+            s(30.0) + s(10.0)
+        } else {
+            0
+        };
         let height = pad
+            + none_h
             + heading
             + cell * 6
             + gap * 5
@@ -967,6 +1031,39 @@ impl ColorPicker {
             );
         };
 
+        // « Aucune couleur », en tête quand il est offert : une pastille
+        // barrée et son libellé.
+        if let Some(label) = self.none {
+            let row = s(30.0);
+            self.none_rect = (gx, cy, grid_w, row);
+            if self.none_selected || self.hover_none {
+                round_rect(
+                    frame,
+                    gx,
+                    cy,
+                    grid_w,
+                    row,
+                    6.0 * dpi,
+                    if self.none_selected {
+                        theme.separator
+                    } else {
+                        theme.hover
+                    },
+                );
+            }
+            let chip = s(18.0);
+            let (cx, cyy) = (gx + s(6.0), cy + (row - chip) / 2);
+            no_color_chip(frame, cx, cyy, chip, dpi, theme);
+            text.draw(
+                frame,
+                (cx + chip + s(10.0)) as f32,
+                (cy + row / 2) as f32 + text.ascent(size) / 2.0,
+                size,
+                crate::ui::lang::tr(label),
+                theme.text,
+            );
+            cy += row + s(10.0);
+        }
         // Les couleurs du thème, et leurs teintes.
         title(frame, text, "Couleurs du thème", cy);
         cy += heading;
@@ -1003,7 +1100,8 @@ impl ColorPicker {
         for (index, (rect, color)) in self.cells.iter().enumerate() {
             let (rx, ry, rw, rh) = *rect;
             let ring = s(2.0);
-            if *color == chosen {
+            // « Aucune couleur » en cours : aucune pastille n'est la bonne.
+            if *color == chosen && !self.none_selected {
                 round_rect(
                     frame,
                     rx - ring,

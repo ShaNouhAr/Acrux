@@ -127,8 +127,10 @@ page, ligne, contexte ; `--case` respecte la casse, `--word` ne prend que le mot
 tableaux, en-têtes et pieds de page ; `--markdown` et `--html` conservent titres, gras, italique,
 listes et tableaux, `--layout` garde le texte positionné comme sur la page) ; `annots` et `annotate` listent et
 ajoutent des annotations (carré, surlignage, `underline`, `strikeout`, `squiggly`, signe d'insertion
-`caret`, remplacement `replace` groupé, note, lien ; `annots -v` montre l'identifiant `/NM` de
-chacune et le barré qui suit un remplacement) ; `protect` chiffre en AES-256 avec une clé tirée d'un générateur
+`caret`, remplacement `replace` groupé, note, lien ; formes `circle`, `line`, `arrow`, `polygon`,
+`polyline` et dessin `ink --points` avec `--color`, `--fill`, `--width`, `--opacity` ; zone de texte
+`text` et légende `callout` avec `--font`, `--size`, `--align`, `--border` ; `annots -v` montre
+l'identifiant `/NM` de chacune et le barré qui suit un remplacement) ; `protect` chiffre en AES-256 avec une clé tirée d'un générateur
 cryptographique (mot de passe d'ouverture `--user`, mot de passe des permissions `--owner`,
 permissions `--print none|low|high`, `--no-modify`, `--no-copy`, `--no-annotate`, `--no-fill`,
 `--no-accessibility`, `--no-assemble` ; force des mots de passe affichée) et `unprotect` retire le
@@ -343,6 +345,7 @@ une page par feuille, et `Ctrl+S` demande où ranger le document obtenu.
 | `U`, `Maj+U` | souligner la sélection, la souligner en y joignant un commentaire |
 | `N` | poser une note à la position de la souris |
 | « Outils de commentaire » (colonne de droite, palette) | **barre des commentaires** : surligner, souligner, barrer, souligner d'un trait ondulé, **insérer du texte** (signe « ^ » là où l'on clique), **remplacer le texte** (passage barré et texte proposé, un seul commentaire), poser une note ; `Échap` éteint l'outil, puis ferme la barre. Un passage de plusieurs lignes fait une seule annotation par page, et se défait d'un seul `Ctrl+Z` |
+| « Dessiner », « Zone de texte » (colonne de droite, palette, barre des commentaires) | **rectangle, ellipse, ligne, flèche, crayon** : on glisse, l'aperçu suit, `Maj` donne un carré, un cercle, un angle de 45° ; le crayon fait plusieurs traits en un dessin (`Ctrl+Z` retire le dernier, `Échap` le pose). **Zone de texte** et **légende** : un clic, et l'on tape sur place (`Entrée` passe à la ligne, `Ctrl+Z` défait la frappe, `Échap` ou un clic ailleurs la pose). Couleur, remplissage, épaisseur, opacité, corps, police, cadre et fond se règlent dans la barre |
 | clic sur une vidéo ou un son | lecture ; re-clic pour mettre en pause, clic sur la ligne de temps pour se déplacer |
 | `Maj+F4` | barre des outils, à droite (modifier, commenter, signer, pages, biffer) |
 | `Ctrl+Maj+E` | **modifier le PDF** : on clique dans un texte et on tape ; ailleurs, on pose une zone |

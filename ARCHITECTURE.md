@@ -358,6 +358,13 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   vient d'être écrit**, la page est rendue tout de suite sur ce fil (attendre le fil de rendu
   montrerait une page blanche entre deux lettres), et l'historique garde une seule opération par
   bloc, mise à jour à chaque frappe.
+- `viewer/draw` : **dessiner et écrire sur la page** (rectangle, ellipse, ligne, flèche, crayon,
+  zone de texte, légende). Tant qu'on trace, rien n'est écrit : le geste est un **brouillon**
+  (`Draft`) dessiné par-dessus la page avec la géométrie du moteur (`annotations::shapes`,
+  `annotations::freetext`), puis posé par la même `EditOp::Annotate` que les autres annotations —
+  l'annulation, le fil de rendu et l'enregistrement n'ont rien de nouveau à apprendre. Un
+  brouillon ne se perd jamais : `flush_typing`, `apply_edit` et la sortie des outils le posent
+  d'abord. La zone de texte reprend la saisie des champs (`ui/fieldedit`), avec son annulation.
 - `ui/dialog` et `viewer/dialogs` : **les questions d'Acrux**, dessinées dans la fenêtre. Une
   question ne bloque rien : elle est posée, et l'action attend la réponse (`Then`). Les boutons
   nomment ce qu'ils font (« Enregistrer », « Ne pas enregistrer »), ce qu'un « Oui / Non » du

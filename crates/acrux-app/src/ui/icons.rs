@@ -118,6 +118,22 @@ pub enum Icon {
     /// Bulle ronde à trois points (commenter) : la famille des outils de
     /// relecture, distincte de la note posée sur la page.
     Comment,
+    /// Rectangle au trait (dessiner un rectangle).
+    Rectangle,
+    /// Ellipse au trait (dessiner une ellipse).
+    Ellipse,
+    /// Trait en diagonale (tracer une ligne).
+    Line,
+    /// Trait en diagonale et sa pointe (tracer une flèche).
+    Arrow,
+    /// Gribouillis et petit crayon (dessiner à main levée) : distinct du
+    /// grand crayon de « modifier le texte ».
+    Pencil,
+    /// Un T dans un cadre plein (zone de texte, un commentaire) : le cadre
+    /// en pointillé reste à « ajouter du texte » dans le contenu.
+    TextBox,
+    /// Cadre à deux lignes et son trait d'ancrage fléché (légende).
+    Callout,
 }
 
 /// Contour d'une page, motif commun à beaucoup d'icônes.
@@ -573,6 +589,43 @@ pub fn geometry(icon: Icon) -> (Path, Path) {
                 circle(&mut fills, x, 10.5, 1.3);
             }
         }
+        Icon::Rectangle => page(&mut lines, 3.5, 6.0, 17.0, 12.0),
+        Icon::Ellipse => polyline(&mut lines, &arc(12.0, 12.0, 8.5, 6.5, 0.0, 360.0)),
+        Icon::Line => polyline(&mut lines, &[(4.5, 19.5), (19.5, 4.5)]),
+        Icon::Arrow => {
+            polyline(&mut lines, &[(4.5, 19.5), (19.0, 5.0)]);
+            polyline(&mut lines, &[(11.5, 4.5), (19.5, 4.5), (19.5, 12.5)]);
+        }
+        Icon::Pencil => {
+            // Le trait laissé, qui finit sous la pointe du crayon.
+            polyline(
+                &mut lines,
+                &[(3.5, 20.0), (5.5, 15.5), (8.0, 19.0), (11.0, 13.0)],
+            );
+            polyline(
+                &mut lines,
+                &[
+                    (11.0, 13.0),
+                    (11.0, 10.5),
+                    (17.5, 4.0),
+                    (20.0, 6.5),
+                    (13.5, 13.0),
+                    (11.0, 13.0),
+                ],
+            );
+        }
+        Icon::TextBox => {
+            page(&mut lines, 3.5, 4.5, 17.0, 15.0);
+            polyline(&mut lines, &[(8.0, 8.5), (16.0, 8.5)]);
+            polyline(&mut lines, &[(12.0, 8.5), (12.0, 15.5)]);
+        }
+        Icon::Callout => {
+            page(&mut lines, 9.0, 3.5, 11.5, 9.5);
+            polyline(&mut lines, &[(12.0, 7.0), (17.5, 7.0)]);
+            polyline(&mut lines, &[(12.0, 10.0), (15.5, 10.0)]);
+            polyline(&mut lines, &[(9.0, 13.0), (4.0, 19.5)]);
+            polyline(&mut lines, &[(4.0, 15.0), (4.0, 19.5), (8.5, 19.5)]);
+        }
         Icon::Redact => {
             page(&mut lines, 5.0, 3.5, 14.0, 17.0);
             bar(&mut fills, 7.5, 9.5, 9.0, 5.0);
@@ -788,6 +841,13 @@ mod tests {
             Icon::Insert,
             Icon::Replace,
             Icon::Comment,
+            Icon::Rectangle,
+            Icon::Ellipse,
+            Icon::Line,
+            Icon::Arrow,
+            Icon::Pencil,
+            Icon::TextBox,
+            Icon::Callout,
         ];
         let mut raster = Rasterizer::new();
         for icon in icons {
