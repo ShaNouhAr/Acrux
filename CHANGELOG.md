@@ -7,7 +7,7 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
-## 0.23.0 — non publiée
+## 0.24.0 — 25 septembre 2026
 
 - **Combiner des fichiers dans l'application.** « Combiner des fichiers… »
   (accueil, palette, colonne d'outils) ouvre une liste : « Ajouter des
@@ -170,6 +170,8 @@ c'est la section correspondante de ce fichier qui devient la page de version.
   annot-remove` retire une annotation et son fil, `acr reply` y répond.
   `acr annots` montre sous chaque commentaire sa date, son statut, sa case et
   ses réponses (`↳`).
+
+## 0.23.0 — 24 septembre 2026
 
 - **Dessiner sur la page : rectangle, ellipse, ligne, flèche, crayon.** La
   barre des commentaires a un second groupe d'outils, après un filet. On
