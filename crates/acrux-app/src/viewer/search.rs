@@ -92,9 +92,11 @@ pub(super) enum SearchButton {
 pub(super) struct SearchHit {
     /// Page.
     pub(super) page: usize,
-    /// Morceaux ; le premier sert au défilement. Un seul : l'occurrence tient
-    /// sur une ligne, on peut la remplacer.
+    /// Morceaux, un par ligne ; le premier sert au défilement.
     pub(super) pieces: Vec<MatchPiece>,
+    /// « Remplacer » peut la réécrire : elle tient sur une ligne et ne coupe
+    /// aucune ligature (`TextMatch::editable`).
+    pub(super) editable: bool,
 }
 
 /// État de la recherche dans le document.
@@ -415,6 +417,7 @@ impl Viewer {
                         .into_iter()
                         .map(|m| SearchHit {
                             page,
+                            editable: m.editable().is_some(),
                             pieces: m.pieces,
                         })
                         .collect();
@@ -800,22 +803,29 @@ impl Viewer {
 
     /// Remplace l'occurrence courante, puis passe à la suivante.
     pub(super) fn replace_current(&mut self) {
-        let Some((with, page, piece, spans)) = self.search.as_ref().and_then(|s| {
+        let Some((with, page, piece, editable, spans)) = self.search.as_ref().and_then(|s| {
             let with = s.replace.as_ref()?.value.clone();
             let hit = s.hits.get(s.current)?;
-            Some((with, hit.page, *hit.pieces.first()?, hit.pieces.len() > 1))
+            Some((
+                with,
+                hit.page,
+                *hit.pieces.first()?,
+                hit.editable,
+                hit.pieces.len() > 1,
+            ))
         }) else {
             return;
         };
-        if spans {
-            // Une édition réécrit une ligne à la fois : l'occurrence coupée
-            // par une fin de ligne reste, et l'on passe à la suivante.
-            self.set_notice(
-                lang::tr(
-                    "Cette occurrence est à cheval sur deux lignes : modifiez-la dans l'éditeur de texte.",
-                )
-                .into(),
-            );
+        if !editable {
+            // Une édition réécrit une ligne à la fois, et des glyphes
+            // entiers : l'occurrence coupée par une fin de ligne, ou qui
+            // coupe une ligature, reste, et l'on passe à la suivante.
+            let why = if spans {
+                "Cette occurrence est à cheval sur deux lignes : modifiez-la dans l'éditeur de texte."
+            } else {
+                "Cette occurrence coupe une ligature : cherchez le mot entier pour la remplacer."
+            };
+            self.set_notice(lang::tr(why).into());
             self.go_to_hit(true);
             return;
         }
@@ -861,14 +871,14 @@ impl Viewer {
     }
 
     /// Remplace toutes les occurrences du document, d'un seul geste
-    /// annulable. Celles qui sont à cheval sur deux lignes restent, et la
-    /// notice le dit.
+    /// annulable. Celles qui sont à cheval sur deux lignes, ou qui coupent
+    /// une ligature, restent, et la notice le dit.
     pub(super) fn replace_all(&mut self) {
         // Le compte doit être complet avant d'annoncer quoi que ce soit.
         while self.step_search() {}
         let Some((find, with, options, total, spanning)) = self.search.as_ref().and_then(|s| {
             let with = s.replace.as_ref()?.value.clone();
-            let spanning = s.hits.iter().filter(|h| h.pieces.len() > 1).count();
+            let spanning = s.hits.iter().filter(|h| !h.editable).count();
             Some((
                 s.input.value.clone(),
                 with,
@@ -898,7 +908,7 @@ impl Viewer {
         }
         if spanning > 0 {
             self.set_notice(lang::trf(
-                "{} occurrence(s) remplacée(s), {} ignorée(s) (à cheval sur deux lignes)",
+                "{} occurrence(s) remplacée(s), {} ignorée(s) (à cheval sur deux lignes ou coupant une ligature)",
                 &[
                     &(if replaced { editable } else { 0 }).to_string(),
                     &spanning.to_string(),
@@ -1061,12 +1071,10 @@ fn paint_card(
     let mut right = x + card_w - pad;
     if search.replace.is_some() {
         // Dans l'ordre de Windows : l'action principale d'abord. Une
-        // occurrence à cheval sur deux lignes ne se remplace pas seule.
+        // occurrence à cheval sur deux lignes, ou dans une ligature, ne se
+        // remplace pas seule.
         let usable = !search.hits.is_empty();
-        let one = search
-            .hits
-            .get(search.current)
-            .is_some_and(|h| h.pieces.len() == 1);
+        let one = search.hits.get(search.current).is_some_and(|h| h.editable);
         search.row.buttons = vec![
             RowButton {
                 label: lang::tr("Remplacer").into(),

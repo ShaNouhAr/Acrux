@@ -36,8 +36,10 @@ struct LineSpan {
     start: usize,
     end: usize,
     bbox: Rect,
-    /// Largeur de la colonne qui porte la ligne (`x0`, `x1`) : celle de son
-    /// bloc, ou la sienne propre hors d'un bloc et dans un tableau.
+    /// Bande horizontale (`x0`, `x1`) où un clic revient à cette ligne
+    /// plutôt qu'à une voisine d'à côté : elle ne s'arrête qu'à mi-chemin
+    /// d'une colonne, d'un encadré ou d'une cellule posés à la même hauteur,
+    /// et s'étend sans limite quand rien n'est à côté.
     column: (f64, f64),
 }
 
@@ -52,28 +54,69 @@ fn axis_distance(v: f64, lo: f64, hi: f64) -> f64 {
     }
 }
 
-/// Largeur de colonne de chaque ligne : le bloc (colonne, encadré) qui la
-/// contient, s'il la contient vraiment — un paragraphe qui continue d'une
-/// colonne à l'autre garde ses lignes de droite dans le bloc de gauche. Un
-/// tableau ne compte pas : ses cellules sont côte à côte, chacune sa colonne.
-fn line_columns(text: &PageText) -> Vec<Option<(f64, f64)>> {
-    let mut out = vec![None; text.lines.len()];
+/// Bande de chaque ligne (voir `LineSpan::column`).
+///
+/// Chaque ligne a d'abord sa **base** : la largeur du bloc (colonne,
+/// encadré) qui la contient, s'il la contient vraiment — un paragraphe qui
+/// continue d'une colonne à l'autre garde ses lignes de droite dans le bloc
+/// de gauche —, ou sa propre largeur hors d'un bloc et dans un tableau, dont
+/// les cellules sont côte à côte. La bande part de la base et s'étend de
+/// chaque côté jusqu'à mi-chemin de la première zone voisine qui occupe la
+/// même hauteur ; sans voisine, jusqu'au bout.
+///
+/// Borner la bande à la largeur du bloc ne suffisait pas : un titre, une
+/// ligne de liste ou une rangée de tableau, plus étroits que le corps de la
+/// page, perdaient le clic posé à leur droite au profit de la ligne du corps
+/// la plus proche, au-dessus ou en dessous.
+fn line_columns(text: &PageText) -> Vec<(f64, f64)> {
+    // Base de chaque ligne, et zones de la page : un bloc de texte entier
+    // (toute sa hauteur : une colonne voisine borne toutes les lignes d'à
+    // côté, même décalées d'une demi-ligne), ou une ligne hors de tout bloc.
+    let mut base: Vec<Option<(f64, f64)>> = vec![None; text.lines.len()];
+    let mut zones: Vec<Rect> = Vec::new();
     for block in &text.blocks {
         if matches!(block.kind, BlockKind::Table(_)) {
             continue;
         }
         let (x0, x1) = (block.bbox.x0, block.bbox.x1);
+        let mut zone = block.bbox;
         for &li in block.paragraphs.iter().flat_map(|p| p.lines.iter()) {
             let Some(line) = text.lines.get(li) else {
                 continue;
             };
             let mid = f64::midpoint(line.bbox.x0, line.bbox.x1);
             if (x0..=x1).contains(&mid) {
-                out[li] = Some((x0.min(line.bbox.x0), x1.max(line.bbox.x1)));
+                base[li] = Some((x0.min(line.bbox.x0), x1.max(line.bbox.x1)));
+                zone = zone.union(&line.bbox);
             }
         }
+        zones.push(zone);
     }
-    out
+    for (li, line) in text.lines.iter().enumerate() {
+        if base[li].is_none() {
+            zones.push(line.bbox);
+        }
+    }
+    text.lines
+        .iter()
+        .zip(&base)
+        .map(|(line, base)| {
+            let (b0, b1) = base.unwrap_or((line.bbox.x0, line.bbox.x1));
+            let (mut lo, mut hi) = (f64::NEG_INFINITY, f64::INFINITY);
+            for z in &zones {
+                let beside = z.y0.max(line.bbox.y0) < z.y1.min(line.bbox.y1);
+                if !beside {
+                    continue;
+                }
+                if z.x1 <= b0 {
+                    lo = lo.max(f64::midpoint(z.x1, b0));
+                } else if z.x0 >= b1 {
+                    hi = hi.min(f64::midpoint(b1, z.x0));
+                }
+            }
+            (lo, hi)
+        })
+        .collect()
 }
 
 /// Texte d'une page prêt pour la sélection.
@@ -151,7 +194,7 @@ impl SelectableText {
                     start,
                     end: glyphs.len(),
                     bbox: line.bbox,
-                    column: columns[li].unwrap_or((line.bbox.x0, line.bbox.x1)),
+                    column: columns[li],
                 });
             }
         }
@@ -540,6 +583,48 @@ mod tests {
         // Dans la gouttière, la colonne la plus proche.
         assert_eq!(t.hit(Point::new(190.0, 105.0)).unwrap().caret, 6);
         assert_eq!(t.hit(Point::new(110.0, 105.0)).unwrap().caret, 4);
+    }
+
+    /// Un titre court, dans son propre bloc, au-dessus d'un corps plus
+    /// large : le clic posé à droite du titre, à sa hauteur, va au bout du
+    /// titre, pas à la ligne du corps la plus proche.
+    #[test]
+    fn a_droite_d_un_titre_etroit() {
+        use acrux_features::text::{Block, Paragraph};
+        let bb = |ws: &[Word]| ws.iter().fold(ws[0].bbox, |r, w| r.union(&w.bbox));
+        let rows = [
+            vec![word(0.0, 120.0, "ti")],
+            vec![word(0.0, 100.0, "abcdefghij"), word(110.0, 100.0, "klmnop")],
+            vec![word(0.0, 88.0, "qrstuvwxyz"), word(110.0, 88.0, "abcdef")],
+        ];
+        let lines: Vec<Line> = rows
+            .into_iter()
+            .map(|ws| Line {
+                bbox: bb(&ws),
+                words: ws,
+            })
+            .collect();
+        let block = |bbox: Rect, lines: Vec<usize>| Block {
+            bbox,
+            paragraphs: vec![Paragraph {
+                lines,
+                ..Paragraph::default()
+            }],
+            ..Block::default()
+        };
+        let t = SelectableText::from_page_text(&PageText {
+            blocks: vec![
+                block(lines[0].bbox, vec![0]),
+                block(lines[1].bbox.union(&lines[2].bbox), vec![1, 2]),
+            ],
+            lines,
+            ..PageText::default()
+        });
+        let title = t.hit(Point::new(80.0, 125.0)).unwrap();
+        assert_eq!(title.caret, 2, "le bout du titre");
+        assert!(!title.on_text);
+        // Dans le corps, rien ne change.
+        assert_eq!(t.hit(Point::new(80.0, 105.0)).unwrap().caret, 10);
     }
 
     #[test]

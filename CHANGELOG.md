@@ -42,7 +42,10 @@ c'est la section correspondante de ce fichier qui devient la page de version.
   et « Tout remplacer » sortent du même moteur, avec la casse et le mot entier.
   Une occurrence à cheval sur deux lignes, qu'une édition ne sait pas réécrire,
   grise « Remplacer » ; « Tout remplacer » la laisse et le dit (« 5
-  occurrence(s) remplacée(s), 1 ignorée(s) »). Les occurrences ne se
+  occurrence(s) remplacée(s), 1 ignorée(s) »). Il en va de même d'une
+  occurrence qui coupe une ligature (« in » dans « ﬁn », « icher » dans
+  « aﬃcher ») : on la trouve et on la surligne, mais réécrire ce glyphe
+  emporterait les lettres voisines (« aICHER »). Les occurrences ne se
   chevauchent plus (« aa » se trouve deux fois dans « aaaa », pas trois).
 - **La fenêtre se repeint pendant une longue recherche.** Le parcours par
   tranches se relançait depuis la boucle d'événements à chaque réveil : la file
@@ -57,7 +60,10 @@ c'est la section correspondante de ce fichier qui devient la page de version.
   faisait glisser la page — et un double-clic y choisissait un mot de la
   colonne de gauche. Le pointeur vise maintenant la colonne sous lui, puis la
   ligne ; la fin d'une ligne courte se clique toujours à sa droite, et les
-  cellules d'un tableau restent chacune la sienne.
+  cellules d'un tableau restent chacune la sienne. Une colonne ne s'arrête
+  qu'à mi-chemin de sa voisine posée à la même hauteur : un titre, une ligne
+  de liste ou une rangée de tableau plus étroits que le corps de la page
+  gardent le clic posé à leur droite.
 - `acr find <fichier> <texte>` cherche avec le moteur de l'application : une
   ligne par occurrence (page, ligne, contexte, « sur deux lignes »), puis le
   total ; `--case`, `--word`, `--page N`. `acr edit-text` accepte aussi `--case`

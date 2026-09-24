@@ -67,6 +67,12 @@ pub struct MatchPiece {
 pub struct TextMatch {
     /// Les morceaux ; jamais vide.
     pub pieces: Vec<MatchPiece>,
+    /// L'occurrence commence au début d'un glyphe et finit à la fin d'un
+    /// glyphe. Faux quand elle coupe un glyphe qui porte plusieurs lettres
+    /// — « in » dans une ligature « ﬁn », « icher » dans « aﬃcher » : la
+    /// surligner est juste, mais réécrire ses glyphes emporterait les
+    /// lettres voisines (« aICHER »).
+    pub whole_glyphs: bool,
 }
 
 impl TextMatch {
@@ -79,6 +85,14 @@ impl TextMatch {
             [piece] => Some(piece),
             _ => None,
         }
+    }
+
+    /// Le morceau que l'édition de texte peut réécrire tel quel : une
+    /// occurrence sur une seule ligne, qui ne coupe aucun glyphe. C'est
+    /// l'occurrence que « Remplacer » accepte.
+    #[must_use]
+    pub fn editable(&self) -> Option<&MatchPiece> {
+        self.single_line().filter(|_| self.whole_glyphs)
     }
 
     /// Boîte englobant tous les morceaux.
@@ -237,7 +251,14 @@ fn find_in(units: &[Unit], pattern: &[char], whole_word: bool, out: &mut Vec<Tex
         let bounded = (!check_start || i == 0 || !units[i - 1].orig.is_alphanumeric())
             && (!check_end || i + m == units.len() || !units[i + m].orig.is_alphanumeric());
         if same && bounded {
-            if let Some(found) = to_match(&units[i..i + m]) {
+            // Le glyphe d'avant et celui d'après doivent être d'autres
+            // glyphes que ceux du bord de l'occurrence : sinon elle en coupe
+            // un en deux.
+            let same_glyph =
+                |a: &Unit, b: &Unit| a.glyph.is_some() && (a.line, a.glyph) == (b.line, b.glyph);
+            let whole = (i == 0 || !same_glyph(&units[i - 1], &units[i]))
+                && (i + m == units.len() || !same_glyph(&units[i + m - 1], &units[i + m]));
+            if let Some(found) = to_match(&units[i..i + m], whole) {
                 out.push(found);
             }
             i += m;
@@ -248,7 +269,7 @@ fn find_in(units: &[Unit], pattern: &[char], whole_word: bool, out: &mut Vec<Tex
 }
 
 /// Morceaux d'une occurrence : ses glyphes regroupés ligne par ligne.
-fn to_match(units: &[Unit]) -> Option<TextMatch> {
+fn to_match(units: &[Unit], whole_glyphs: bool) -> Option<TextMatch> {
     let mut pieces: Vec<MatchPiece> = Vec::new();
     for u in units {
         let Some(g) = u.glyph else { continue };
@@ -266,7 +287,10 @@ fn to_match(units: &[Unit]) -> Option<TextMatch> {
             }),
         }
     }
-    (!pieces.is_empty()).then_some(TextMatch { pieces })
+    (!pieces.is_empty()).then_some(TextMatch {
+        pieces,
+        whole_glyphs,
+    })
 }
 
 /// La requête repliée : blancs réduits à une espace, ceux du bout ôtés.
@@ -481,6 +505,17 @@ mod tests {
         assert_eq!(found[0].pieces[0].end - found[0].pieces[0].start, 2);
         assert_eq!(count(&p, "fleuve", SearchOptions::default()), 1);
         assert_eq!(count(&p, "in", WORD), 0);
+        assert!(found[0].editable().is_some(), "la ligature entière");
+        // « in » coupe la ligature : on le trouve, on ne le réécrit pas —
+        // remplacer ses glyphes emporterait le « f ».
+        let cut = find_matches(&p, "in", SearchOptions::default());
+        assert_eq!(cut.len(), 1);
+        assert!(!cut[0].whole_glyphs);
+        assert!(cut[0].single_line().is_some());
+        assert!(cut[0].editable().is_none());
+        let cut = find_matches(&p, "f", SearchOptions::default());
+        assert_eq!(cut.len(), 2);
+        assert!(cut.iter().all(|m| !m.whole_glyphs));
     }
 
     #[test]

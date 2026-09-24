@@ -82,7 +82,7 @@ fn sample_words(text: &PageText) -> Vec<String> {
 fn single_ranges(matches: &[TextMatch]) -> Vec<TextRange> {
     matches
         .iter()
-        .filter_map(TextMatch::single_line)
+        .filter_map(TextMatch::editable)
         .map(|p| TextRange {
             line: p.line,
             start: p.start,

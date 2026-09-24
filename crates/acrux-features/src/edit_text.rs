@@ -377,12 +377,14 @@ pub fn find_ranges(text: &PageText, needle: &str) -> Vec<TextRange> {
 /// l'occurrence que la carte de recherche surligne est celle que l'on
 /// remplace. Une occurrence à cheval sur deux lignes (une césure, une fin de
 /// ligne au milieu d'une expression) n'est pas une plage éditable — une
-/// édition réécrit une ligne à la fois — et elle est omise.
+/// édition réécrit une ligne à la fois — et elle est omise ; de même celle
+/// qui coupe une ligature, dont la réécriture emporterait les lettres
+/// voisines (voir [`TextMatch::editable`]).
 #[must_use]
 pub fn find_ranges_with(text: &PageText, needle: &str, options: SearchOptions) -> Vec<TextRange> {
     find_matches(text, needle, options)
         .iter()
-        .filter_map(TextMatch::single_line)
+        .filter_map(TextMatch::editable)
         .map(|p| TextRange {
             line: p.line,
             start: p.start,
@@ -1407,7 +1409,7 @@ mod tests {
         let ranges = find_ranges(&text, "remplacement");
         let single: Vec<TextRange> = matches
             .iter()
-            .filter_map(TextMatch::single_line)
+            .filter_map(TextMatch::editable)
             .map(|p| TextRange {
                 line: p.line,
                 start: p.start,
