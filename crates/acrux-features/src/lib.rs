@@ -6,7 +6,7 @@
 //! | Module   | Rôle                                                   | Inventaire Acrobat |
 //! |----------|--------------------------------------------------------|--------------------|
 //! | `accessibility` | arbre de structure (§14.7), vérificateur PDF/UA, balisage automatique | §10 |
-//! | `annotations` | inventaire, création (carré, surlignage, note, lien) avec apparences, suppression | §8 |
+//! | `annotations` | inventaire, création avec apparences (carré, surlignage, soulignement, barré, ondulé, insertion, remplacement groupé, note, lien), identifiant `/NM` et date de création, suppression (groupes compris) | §8 |
 //! | `attach` | pièces jointes : arbre `/Names /EmbeddedFiles`, annotations `/FileAttachment`, ajout, extraction, retrait | §11 |
 //! | `docinfo` | propriétés du document : `/Info`, paquet XMP, propriétés d'ouverture, assainissement | §12.2, §14.3 |
 //! | `create` | création de documents : page blanche, images, texte, Markdown, combinaison | §1 |

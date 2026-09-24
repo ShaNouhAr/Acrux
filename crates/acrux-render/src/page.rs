@@ -333,11 +333,47 @@ fn border_width(doc: &Document, annot: &Dict) -> f64 {
         .max(0.0)
 }
 
+/// Trait ondulé d'un soulignement ondulé sans apparence, de `x0` à `x1`, au
+/// bas d'une zone de hauteur `h` : mêmes proportions que celles qu'Acrux
+/// écrit dans ses propres annotations (onde de 5 % de la hauteur, demi-pas
+/// de 12,5 %), et au plus 4000 segments, pour qu'une zone aberrante ne
+/// fabrique pas un chemin géant.
+#[allow(clippy::format_push_string)] // un opérateur de contenu par segment
+fn squiggle(content: &mut String, stroke: &str, x0: f64, x1: f64, bottom: f64, h: f64) {
+    let amplitude = (0.05 * h).max(0.6);
+    let half_period = (0.125 * h).max(1.0);
+    let center = bottom + 0.06 * h;
+    let width = x1 - x0;
+    let steps = (width.abs() / half_period).ceil().clamp(1.0, 4000.0);
+    let step = width / steps;
+    content.push_str(&format!(
+        "{stroke} {} w 1 j {x0} {} m ",
+        (0.05 * h).max(0.4),
+        center - amplitude
+    ));
+    let mut x = x0;
+    let mut up = true;
+    let mut done = 0.0;
+    while done < steps {
+        x += step;
+        let y = if up {
+            center + amplitude
+        } else {
+            center - amplitude
+        };
+        content.push_str(&format!("{x} {y} l "));
+        up = !up;
+        done += 1.0;
+    }
+    content.push_str("S ");
+}
+
 /// Apparence par défaut des annotations sans `/AP` (§12.5.6) : carré,
-/// cercle, ligne, encre, surlignage, soulignement, barré, texte libre,
-/// polygone / polyligne. Le dessin est exprimé en opérateurs de contenu et
-/// rendu dans l'espace de la page, avec l'opacité `/CA` et, pour le
-/// surlignage, le mode de fusion `Multiply` comme Acrobat.
+/// cercle, ligne, encre, surlignage, soulignement, barré, soulignement
+/// ondulé, signe d'insertion, texte libre, polygone / polyligne. Le dessin
+/// est exprimé en opérateurs de contenu et rendu dans l'espace de la page,
+/// avec l'opacité `/CA` et, pour le surlignage, le mode de fusion
+/// `Multiply` comme Acrobat.
 // Le flux de contenu est construit par concaténation d'opérateurs : c'est la
 // forme la plus lisible pour du code qui écrit du PDF.
 #[allow(clippy::too_many_lines, clippy::format_push_string)]
@@ -483,6 +519,10 @@ fn draw_default_appearance(
             for q in boxes.chunks_exact(8) {
                 let (top, bottom) = (q[1].max(q[3]), q[5].min(q[7]));
                 let h = top - bottom;
+                if kind == b"Squiggly" {
+                    squiggle(&mut content, s, q[4], q[6], bottom, h);
+                    continue;
+                }
                 let (lw, y) = match kind {
                     b"StrikeOut" => (h * 0.07, bottom + h * 0.5),
                     _ => (h * 0.07, bottom + h * 0.06),
@@ -494,6 +534,21 @@ fn draw_default_appearance(
                     q[6]
                 ));
             }
+        }
+        b"Caret" => {
+            // Un « ^ » plein qui occupe le rectangle, la pointe en haut et
+            // une encoche à la base (§12.5.6.11) : la forme qu'Acrobat donne
+            // au signe d'insertion, et celle qu'Acrux écrit dans les siens.
+            let Some(f) = annot_numbers(doc, annot, "C").and_then(|c| color_operator(&c, false))
+            else {
+                return;
+            };
+            let mid = f64::midpoint(rect.x0, rect.x1);
+            let notch = rect.y0 + 0.25 * rect.height();
+            content = format!(
+                "{f} {} {} m {mid} {} l {} {} l {mid} {notch} l h f",
+                rect.x0, rect.y0, rect.y1, rect.x1, rect.y0
+            );
         }
         b"FreeText" => {
             // Cadre seul (le texte exige la police de /DA : hors de portée ici).

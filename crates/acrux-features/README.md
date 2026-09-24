@@ -24,6 +24,30 @@ Le corpus `synthese/formulaire-obligatoire-sans-apparence.pdf` réunit ce que
 `prepare_display` répare : des valeurs sans apparence, une apparence
 périmée, deux champs obligatoires et un ordre de tabulation par colonnes.
 
+## Annoter le texte (`annotations`)
+
+Relire un document, c'est souligner, barrer, insérer et remplacer. Ce que
+pose `add_annotation` — avec une apparence écrite, pour que tout lecteur
+l'affiche de la même façon :
+
+| Annotation | Ce qu'elle devient dans le fichier |
+| --- | --- |
+| `Markup` | `/Highlight`, `/Underline`, `/StrikeOut` ou `/Squiggly` : **une** annotation par page, un quadrilatère par ligne (`/QuadPoints`), comme Acrobat ; couleurs par défaut dans `MarkupKind::default_color` |
+| `Caret` | signe d'insertion `/Caret` entre deux caractères, le texte à ajouter dans `/Contents` |
+| `Replace` | le passage barré et un signe d'insertion **groupés** (§12.5.6.2) : le signe porte le texte proposé (`/IT /Replace`), le barré le suit (`/IRT` vers lui, `/RT /Group`, `/IT /StrikeOutTextEdit`) ; `remove_annotation` retire le groupe entier |
+
+Chaque annotation créée porte un identifiant unique `/NM` et sa date de
+création. L'identité (`AnnotMeta`) se tire **avant** l'écriture, par qui décide
+de poser l'annotation, et se transmet telle quelle à `add_annotation_with` :
+l'application applique chaque modification à deux copies du document et la
+rejoue à chaque annulation, et une même modification doit donner partout la
+même annotation. `list_annotations` rend `/NM`, `/IRT`, `/RT` et `/IT` : de quoi
+regrouper un remplacement, et plus tard suivre les réponses.
+
+Le corpus réel `reels/chrome-skia-2pages-texte-tableau-svg.pdf` sert
+d'épreuve (`tests/text_markup_corpus.rs`) : un mot souligné, un autre
+remplacé, relus après enregistrement, et le texte de la page inchangé.
+
 ## Les modèles 3D (`three_d`)
 
 Un PDF peut porter un objet en trois dimensions : une annotation `/3D` réserve

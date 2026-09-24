@@ -113,10 +113,14 @@ fn usage() {
     eprintln!("                                  --word ne prend que le mot entier ; une occurrence peut passer à la");
     eprintln!("                                  ligne dans un paragraphe (« documen- / tation »)");
     eprintln!("  bench   <fichier> [--dpi N]                    mesure ouverture, rendu et extraction de texte");
-    eprintln!("  annots  <fichier> [pages]                       liste les annotations");
+    eprintln!("  annots  <fichier> [pages] [-v]                  liste les annotations ; -v : identifiants (/NM)");
     eprintln!("  links   <fichier> [pages]                       liste les liens et leurs cibles");
     eprintln!("  outline <fichier>                               affiche les signets (arbre)");
-    eprintln!("  annotate <fichier> <page> <square|highlight|note|link> <x0> <y0> <x1> <y1> [texte] -o <sortie>");
+    eprintln!("  annotate <fichier> <page> <square|highlight|underline|strikeout|squiggly|caret|replace|note|link>");
+    eprintln!("          <x0> <y0> <x1> <y1> [texte] -o <sortie>");
+    eprintln!("                                  underline, strikeout, squiggly : balise la zone (texte = commentaire) ;");
+    eprintln!("                                  caret : signe d'insertion en x0, sur la ligne y0..y1 (texte obligatoire) ;");
+    eprintln!("                                  replace : barre la zone et propose le texte, signe au bout (texte obligatoire)");
     eprintln!();
     eprintln!("  attachments <fichier>                           liste les pièces jointes (nom, taille, type, page)");
     eprintln!(
@@ -1989,7 +1993,13 @@ fn cmd_bench(path: &str, rest: &[String]) -> acrux_core::Result<()> {
 fn cmd_annots(path: &str, rest: &[String]) -> acrux_core::Result<()> {
     let (doc, _) = open(path)?;
     let pages = collect_pages(&doc)?;
-    let pos = positional(rest);
+    // `-v` montre en plus l'identifiant de chaque annotation ; la sortie par
+    // défaut ne change pas, des scripts la lisent peut-être.
+    let verbose = rest.iter().any(|a| a == "-v" || a == "--verbose");
+    let pos: Vec<&String> = positional(rest)
+        .into_iter()
+        .filter(|a| a.as_str() != "-v")
+        .collect();
     let indices = match pos.first() {
         Some(spec) => acrux_features::pages::parse_page_spec(spec, pages.len())?,
         None => (0..pages.len()).collect(),
@@ -2000,7 +2010,7 @@ fn cmd_annots(path: &str, rest: &[String]) -> acrux_core::Result<()> {
         for a in &list {
             total += 1;
             println!(
-                "page {:>3}  #{:<3} {:<12} [{:.0} {:.0} {:.0} {:.0}]{}{}{}{}",
+                "page {:>3}  #{:<3} {:<12} [{:.0} {:.0} {:.0} {:.0}]{}{}{}{}{}",
                 i + 1,
                 a.index + 1,
                 a.subtype,
@@ -2019,18 +2029,44 @@ fn cmd_annots(path: &str, rest: &[String]) -> acrux_core::Result<()> {
                     ""
                 } else {
                     "  (sans apparence)"
+                },
+                match &a.name {
+                    Some(nm) if verbose => format!("  [{}]", short_id(nm)),
+                    _ => String::new(),
                 }
             );
+            // Le barré d'un remplacement n'est pas un commentaire à part :
+            // il suit le signe d'insertion qui porte le texte proposé.
+            if a.is_group_member() {
+                let primary = list
+                    .iter()
+                    .find(|p| p.reference.is_some() && p.reference == a.in_reply_to)
+                    .map_or(String::new(), |p| format!(" #{}", p.index + 1));
+                println!("            ↳ groupé avec{primary}");
+            }
         }
     }
     println!("{total} annotation(s)");
     Ok(())
 }
 
+/// Identifiant d'annotation raccourci pour l'affichage. Ceux d'Acrux
+/// (`acrux-…`, une trentaine de caractères) passent en entier : c'est leur
+/// fin qui distingue les membres d'un groupe. Ceux d'autres logiciels
+/// peuvent être bien plus longs, et s'arrêtent à quarante caractères.
+fn short_id(name: &str) -> String {
+    if name.chars().count() <= 40 {
+        return name.to_string();
+    }
+    let head: String = name.chars().take(39).collect();
+    format!("{head}…")
+}
+
 fn cmd_annotate(path: &str, rest: &[String]) -> acrux_core::Result<()> {
+    use acrux_features::annotations::{MarkupKind, NewAnnotation, CARET_COLOR};
     let out = output_arg(rest)?;
     let pos = positional(rest);
-    let usage = "usage : annotate <fichier> <page> <square|highlight|note|link> <x0> <y0> <x1> <y1> [texte] -o <sortie>";
+    let usage = "usage : annotate <fichier> <page> <square|highlight|underline|strikeout|squiggly|caret|replace|note|link> <x0> <y0> <x1> <y1> [texte] -o <sortie>";
     let (Some(page_spec), Some(kind)) = (pos.first(), pos.get(1)) else {
         return Err(acrux_core::Error::Corrupt(usage.into()));
     };
@@ -2041,30 +2077,55 @@ fn cmd_annotate(path: &str, rest: &[String]) -> acrux_core::Result<()> {
     };
     let (x0, y0, x1, y1) = (coord(0)?, coord(1)?, coord(2)?, coord(3)?);
     let text = pos.get(6).map(ToString::to_string);
+    // Insérer ou remplacer sans dire quoi n'a pas de sens.
+    let required = || {
+        text.clone()
+            .filter(|t| !t.trim().is_empty())
+            .ok_or_else(|| {
+                acrux_core::Error::Corrupt(format!("{kind} : texte obligatoire\n{usage}"))
+            })
+    };
     let (doc, _) = open(path)?;
     let all_pages = collect_pages(&doc)?;
     let page_index = acrux_features::pages::parse_page_spec(page_spec, all_pages.len())?[0];
     let zone = acrux_core::Rect::new(x0, y0, x1, y1);
+    let markup = |kind: MarkupKind| NewAnnotation::Markup {
+        kind,
+        quads: vec![zone],
+        color: kind.default_color(),
+        contents: text.clone(),
+    };
     let annot = match kind.as_str() {
-        "square" => acrux_features::annotations::NewAnnotation::Square {
+        "square" => NewAnnotation::Square {
             rect: zone,
             stroke: [1.0, 0.0, 0.0],
             width: 2.0,
             fill: None,
             contents: text.clone(),
         },
-        "highlight" => acrux_features::annotations::NewAnnotation::Highlight {
-            rect: zone,
-            color: [1.0, 1.0, 0.0],
-            contents: text.clone(),
+        "highlight" => markup(MarkupKind::Highlight),
+        "underline" => markup(MarkupKind::Underline),
+        "strikeout" => markup(MarkupKind::StrikeOut),
+        "squiggly" => markup(MarkupKind::Squiggly),
+        "caret" => NewAnnotation::Caret {
+            x: x0,
+            line: zone,
+            contents: required()?,
+            color: CARET_COLOR,
         },
-        "note" => acrux_features::annotations::NewAnnotation::Note {
+        "replace" => NewAnnotation::Replace {
+            quads: vec![zone],
+            text: required()?,
+            strike: MarkupKind::StrikeOut.default_color(),
+            caret: CARET_COLOR,
+        },
+        "note" => NewAnnotation::Note {
             x: x0,
             y: y1,
             contents: text.clone().unwrap_or_default(),
             color: [1.0, 0.8, 0.0],
         },
-        "link" => acrux_features::annotations::NewAnnotation::Link {
+        "link" => NewAnnotation::Link {
             rect: zone,
             uri: text.clone().unwrap_or_default(),
         },
