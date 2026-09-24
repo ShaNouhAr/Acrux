@@ -455,7 +455,9 @@ fn import_pages(importer: &mut Importer<'_>, indices: &[usize]) -> Result<Vec<(O
 
 /// Insère dans `dst`, à la position `at` (0 = avant la première page), les
 /// pages d'index `indices` de `src`. Ressources, annotations et contenus
-/// sont copiés ; les champs de formulaire (`/AcroForm`) ne sont pas fusionnés.
+/// sont copiés, et les calques qu'elles emploient rejoignent ceux de `dst`
+/// ([`merge_layers`]) ; les champs de formulaire (`/AcroForm`) ne sont pas
+/// fusionnés.
 ///
 /// # Errors
 /// Index ou position invalide, objets illisibles.
@@ -469,12 +471,14 @@ pub fn insert_pages_from(
     if at > dst_pages.len() {
         return Err(Error::Corrupt(format!("position {at} hors du document")));
     }
-    let new_pages = import_pages(&mut Importer::new(src, dst), indices)?;
+    let mut importer = Importer::new(src, dst);
+    let new_pages = import_pages(&mut importer, indices)?;
     let mut all = dst_pages;
     let tail = all.split_off(at);
     all.extend(new_pages);
     all.extend(tail);
-    rebuild_tree(dst, &all)
+    rebuild_tree(dst, &all)?;
+    merge_layers(&importer)
 }
 
 /// Nouveau document ne contenant que les pages d'index `indices` de `src`,
@@ -522,12 +526,122 @@ fn copy_layers(importer: &mut Importer<'_>) -> Result<()> {
         return Ok(());
     };
     let copied = importer.import(layers)?;
-    let mut dst_catalog = dst.catalog()?;
-    dst_catalog.insert(Name::new("OCProperties"), copied);
-    let cat_ref = acrux_document::xref::trailer_ref(&dst.trailer(), "Root")
+    set_catalog_entry(dst, "OCProperties", copied)
+}
+
+/// Pose une entrée du catalogue de `doc`.
+fn set_catalog_entry(doc: &Document, key: &str, value: Object) -> Result<()> {
+    let mut catalog = doc.catalog()?;
+    catalog.insert(Name::new(key), value);
+    let cat_ref = acrux_document::xref::trailer_ref(&doc.trailer(), "Root")
         .ok_or_else(|| Error::Corrupt("trailer sans /Root".into()))?;
-    dst.set(cat_ref, Object::Dict(dst_catalog));
+    doc.set(cat_ref, Object::Dict(catalog));
     Ok(())
+}
+
+/// Les références d'un tableau rangé sous `key` dans `dict` (direct ou
+/// indirect) ; vide s'il n'y en a pas.
+fn ref_list(doc: &Document, dict: &Dict, key: &str) -> Vec<Object> {
+    doc.dict_get(dict, key)
+        .ok()
+        .flatten()
+        .and_then(|a| a.as_array().map(<[Object]>::to_vec))
+        .unwrap_or_default()
+}
+
+/// Le dictionnaire rangé sous `key` dans `dict` (direct ou indirect).
+fn sub_dict(doc: &Document, dict: &Dict, key: &str) -> Option<Dict> {
+    doc.dict_get(dict, key)
+        .ok()
+        .flatten()
+        .and_then(|d| d.as_dict().cloned())
+}
+
+/// Vrai si la configuration par défaut `d` part de « tout masqué »
+/// (`/BaseState /OFF`, ISO 32000-2 §8.11.4.3).
+fn base_state_off(doc: &Document, d: &Dict) -> bool {
+    matches!(
+        doc.dict_get(d, "BaseState").ok().flatten().as_deref(),
+        Some(Object::Name(n)) if n.0 == b"OFF"
+    )
+}
+
+/// Rattache aux calques de la destination de `importer` ceux de sa source
+/// que les pages copiées emploient (insertion, remplacement).
+///
+/// Un groupe de contenu optionnel copié sans cela n'appartient à aucune
+/// configuration : les afficheurs le montrent, et un calque masqué par
+/// défaut dans la source — un « Brouillon » — réapparaissait sur la page
+/// insérée ou remplacée. Seuls les groupes que l'importeur a déjà copiés
+/// avec les pages sont rattachés : le panneau des calques ne se remplit pas
+/// de ceux des pages laissées de côté. Un groupe masqué par défaut dans la
+/// source l'est aussi dans la destination, qu'elle parte de « tout
+/// visible » (il entre dans `/OFF`) ou de « tout masqué » (seuls les
+/// visibles entrent dans `/ON`).
+fn merge_layers(importer: &Importer<'_>) -> Result<()> {
+    let (src, dst) = (importer.src, importer.dst);
+    let Some(src_props) = sub_dict(src, &src.catalog()?, "OCProperties") else {
+        return Ok(());
+    };
+    let src_d = sub_dict(src, &src_props, "D").unwrap_or_default();
+    let src_base_off = base_state_off(src, &src_d);
+    let listed =
+        |key: &str, r: ObjectRef| ref_list(src, &src_d, key).contains(&Object::Reference(r));
+    // Les groupes copiés, avec leur état par défaut dans la source.
+    let copied: Vec<(ObjectRef, bool)> = ref_list(src, &src_props, "OCGs")
+        .iter()
+        .filter_map(|o| match o {
+            Object::Reference(r) => importer.map.get(&r.number).map(|&to| {
+                let hidden = if src_base_off {
+                    !listed("ON", *r)
+                } else {
+                    listed("OFF", *r)
+                };
+                (to, hidden)
+            }),
+            _ => None,
+        })
+        .collect();
+    if copied.is_empty() {
+        return Ok(());
+    }
+    let dst_catalog = dst.catalog()?;
+    let existing = sub_dict(dst, &dst_catalog, "OCProperties");
+    let had_layers = existing.is_some();
+    let mut props = existing.unwrap_or_default();
+    let mut d = sub_dict(dst, &props, "D").unwrap_or_default();
+    let dst_base_off = base_state_off(dst, &d);
+    // Sans `/Order`, les afficheurs listent `/OCGs` : on n'en crée un que
+    // pour un document qui n'avait aucun calque.
+    let keep_order = !had_layers || d.contains_key(&Name::new("Order"));
+    let mut ocgs = ref_list(dst, &props, "OCGs");
+    let mut order = ref_list(dst, &d, "Order");
+    let mut on = ref_list(dst, &d, "ON");
+    let mut off = ref_list(dst, &d, "OFF");
+    for (r, hidden) in copied {
+        let group = Object::Reference(r);
+        if ocgs.contains(&group) {
+            continue;
+        }
+        ocgs.push(group.clone());
+        order.push(group.clone());
+        if hidden && !dst_base_off {
+            off.push(group);
+        } else if !hidden && dst_base_off {
+            on.push(group);
+        }
+    }
+    for (key, list) in [("ON", on), ("OFF", off)] {
+        if !list.is_empty() {
+            d.insert(Name::new(key), Object::Array(list));
+        }
+    }
+    if keep_order {
+        d.insert(Name::new("Order"), Object::Array(order));
+    }
+    props.insert(Name::new("OCGs"), Object::Array(ocgs));
+    props.insert(Name::new("D"), Object::Dict(d));
+    set_catalog_entry(dst, "OCProperties", Object::Dict(props))
 }
 
 /// Fusionne plusieurs documents en un nouveau document (toutes leurs pages, dans l'ordre).
@@ -636,7 +750,8 @@ pub fn insert_blank_page(doc: &Document, at: usize, media: Rect, rotate: i32) ->
 /// n'a pas sont posés explicitement, pour que la page ne reprenne pas ceux
 /// de ses ancêtres dans l'arbre. `/StructParents` est retiré : il désignait
 /// un contenu balisé qui n'existe plus (l'arbre de structure devient
-/// incomplet, pas faux).
+/// incomplet, pas faux). Les calques que le nouveau contenu emploie
+/// rejoignent ceux de `dst` ([`merge_layers`]).
 ///
 /// # Errors
 /// Paire hors bornes, deux paires sur la même page cible, objets illisibles.
@@ -711,7 +826,7 @@ pub fn replace_pages(dst: &Document, src: &Document, pairs: &[(usize, usize)]) -
     if direct {
         rebuild_tree(dst, &pages)?;
     }
-    Ok(())
+    merge_layers(&importer)
 }
 
 /// Ordre complet des pages après le déplacement d'un bloc : le glisser de
@@ -1029,6 +1144,74 @@ mod tests {
             popup.as_dict().unwrap().get(&Name::new("Parent")),
             Some(&Object::Reference(b[0]))
         );
+    }
+
+    /// Un calque masqué par défaut dans la source le reste sur la page
+    /// insérée ou remplacée : le groupe copié rejoint les calques de la
+    /// destination, dans `/OFF`. Les groupes des pages laissées de côté
+    /// n'y entrent pas.
+    #[test]
+    fn hidden_layers_stay_hidden_on_inserted_and_replaced_pages() {
+        let src = from_objects(&[
+            "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R 7 0 R] /D << /OFF [6 0 R] >> >> >>"
+                .into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Properties << /V 5 0 R /B 6 0 R >> >> >>"
+                .into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Properties << /A 7 0 R >> >> >>"
+                .into(),
+            "<< /Type /OCG /Name (Visible) >>".into(),
+            "<< /Type /OCG /Name (Brouillon) >>".into(),
+            "<< /Type /OCG /Name (Autre) >>".into(),
+        ]);
+        // Les noms des groupes d'une liste de la configuration.
+        let names = |d: &Document, list: &[Object]| -> Vec<String> {
+            list.iter()
+                .map(|o| {
+                    let g = d.resolve(o).unwrap();
+                    match d.dict_get(g.as_dict().unwrap(), "Name").unwrap().as_deref() {
+                        Some(Object::String(s)) => String::from_utf8_lossy(s).into_owned(),
+                        other => panic!("nom de calque : {other:?}"),
+                    }
+                })
+                .collect()
+        };
+        let layers = |d: &Document| -> (Vec<String>, Vec<String>) {
+            let props = sub_dict(d, &d.catalog().unwrap(), "OCProperties").unwrap();
+            let config = sub_dict(d, &props, "D").unwrap();
+            (
+                names(d, &ref_list(d, &props, "OCGs")),
+                names(d, &ref_list(d, &config, "OFF")),
+            )
+        };
+        let target = pdf_with_pages(2);
+        insert_pages_from(&target, &src, &[0], 1).unwrap();
+        let (all, off) = layers(&roundtrip(&target));
+        assert_eq!(all, ["Visible", "Brouillon"], "pas le calque de la page 2");
+        assert_eq!(off, ["Brouillon"]);
+        // Une destination qui a déjà ses calques, partie de « tout masqué » :
+        // le groupe visible entre dans /ON, le masqué n'y entre pas.
+        let dst = from_objects(&[
+            "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [4 0 R] /D << /BaseState /OFF /ON [4 0 R] /Order [4 0 R] >> >> >>"
+                .into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>".into(),
+            "<< /Type /OCG /Name (Existant) >>".into(),
+        ]);
+        replace_pages(&dst, &src, &[(0, 0)]).unwrap();
+        let d = roundtrip(&dst);
+        let props = sub_dict(&d, &d.catalog().unwrap(), "OCProperties").unwrap();
+        let config = sub_dict(&d, &props, "D").unwrap();
+        assert_eq!(
+            names(&d, &ref_list(&d, &props, "OCGs")),
+            ["Existant", "Visible", "Brouillon"]
+        );
+        assert_eq!(
+            names(&d, &ref_list(&d, &config, "ON")),
+            ["Existant", "Visible"]
+        );
+        assert_eq!(names(&d, &ref_list(&d, &config, "Order")).len(), 3);
+        assert!(ref_list(&d, &config, "OFF").is_empty());
     }
 
     #[test]

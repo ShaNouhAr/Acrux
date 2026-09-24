@@ -7857,14 +7857,21 @@ impl Viewer {
             }
             // Ctrl+A dans le panneau des vignettes — qu'il tienne le clavier
             // ou que le pointeur soit dessus, comme dans Acrobat — sélectionne
-            // toutes les pages, pas tout le texte du document.
+            // toutes les pages, pas tout le texte du document. Le pointeur seul
+            // ne suffit pas quand on tape ailleurs — dans la recherche ou le
+            // champ de page — : pointeur posé sur les vignettes, Ctrl+A dans
+            // la recherche sélectionnait toutes les pages au lieu du mot
+            // cherché.
             Event::Char(c, m)
                 if m.ctrl
                     && !m.shift
                     && matches!(c, 'a' | 'A' | '\u{1}')
                     && self.loaded.is_some()
                     && self.thumbs_shown()
-                    && (self.region == Region::Panel || self.pointer_in_panel) =>
+                    && (self.region == Region::Panel
+                        || (self.pointer_in_panel
+                            && self.search.is_none()
+                            && !self.toolbar.has_focus())) =>
             {
                 self.select_all_pages();
                 window.request_redraw();

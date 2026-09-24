@@ -38,7 +38,9 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 - Une page extraite ne traîne plus les autres : un lien « voir page 40 »
   faisait entrer la page 40 entière, images comprises, dans le fichier
   extrait. Le lien reste, vers la page extraite s'il la vise, sans
-  destination sinon. Les calques masqués restent masqués.
+  destination sinon. Les calques masqués restent masqués, dans le fichier
+  extrait comme sur une page insérée ou remplacée : le « Brouillon » masqué
+  d'un autre fichier réapparaissait sur la page qui en prenait le contenu.
 - Une page dupliquée a **ses propres commentaires** : déplacer une note sur
   la copie la déplaçait aussi sur l'original.
 - Une fenêtre de question à plusieurs réponses s'élargit plutôt que de
