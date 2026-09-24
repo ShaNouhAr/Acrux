@@ -125,6 +125,7 @@ impl Viewer {
             || !self.dialogs.is_empty()
             || self.capture.is_some()
             || self.edit_menu_open()
+            || self.zoom_menu.is_some()
     }
 
     /// Vrai pendant un geste du bouton gauche ou du milieu : un clic droit

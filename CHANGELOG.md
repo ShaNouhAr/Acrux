@@ -9,6 +9,41 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 
 ## 0.23.0 — non publiée
 
+- **Ctrl+molette zoome vers le pointeur**, comme dans Acrobat : ce qui est sous
+  la souris y reste, au pixel près. Avant, seul le centre gardait sa hauteur et
+  la page glissait de côté à chaque cran — viser un coin de tableau le faisait
+  sortir de l'écran. Les boutons −/+, les touches, la palette et la liste
+  gardent, eux, le centre de la vue ; les ajustements aussi, et « Ajuster à la
+  page » montre la page courante en entier. Sur un pavé tactile, les petits
+  crans s'additionnent au lieu d'être perdus.
+- **La case du zoom se déroule.** Le « 125 % » de la barre d'outils, jusque-là
+  inerte, ouvre une liste : 50, 75, 100, 125, 150, 200, 300 et 400 %,
+  l'ajustement automatique, à la largeur, à la page, et un champ où taper
+  n'importe quel niveau (« 137 », « 137,5 % »), validé par Entrée — une saisie
+  illisible s'entoure de rouge. Le niveau en vigueur est coché et la liste
+  s'ouvre dessus ; flèches, Entrée et Échap s'y emploient, et la case
+  s'atteint au clavier (F6 puis les flèches). Palette : « Choisir le niveau de
+  zoom… ». Sans document, la case montre « – % » grisé au lieu d'un trou entre
+  les deux loupes.
+- **La barre d'état se clique.** La page prend le champ de page (comme
+  Ctrl+G), le zoom déroule la même liste au-dessus de lui, la disposition passe
+  à la suivante ; chacun s'éclaire au survol, avec une info-bulle placée
+  au-dessus de la barre au lieu de la couvrir. La durée de rendu « 23 ms »,
+  une mesure de développement, quitte la barre pour le journal.
+- **Zoomer ne fait plus clignoter la page en blanc** : en attendant son rendu
+  à la nouvelle échelle, la page est montrée étirée depuis l'image
+  précédente, puis nette dès que le rendu arrive.
+- **Le zoom ne peut plus épuiser la mémoire.** Une page est rendue d'un bloc :
+  Ctrl+molette montait jusqu'à 1600 %, soit deux gigaoctets pour une page A4
+  sur un écran à 150 %. Le zoom est désormais plafonné pour qu'une page rendue
+  tienne dans 256 Mo (environ 570 % pour de l'A4 sur un écran à 150 %, bien
+  plus pour un petit format), et la barre d'état le dit quand on bute dessus.
+  Le cache des pages rendues est aussi borné en octets, plus seulement en
+  nombre d'images.
+- « Afficher la page entière » s'appelle « Ajuster à la page », à côté
+  d'« Ajuster à la largeur ».
+- Le harnais invisible gagne `Wheel … -Ctrl` (Ctrl+molette), les fractions de
+  cran (`Wheel x y 0.25`) et `ShotNow`, une capture sans attendre les rendus.
 - **Annuler et Rétablir dans la barre d'outils**, en tête du groupe des
   modifications : grisés quand il n'y a rien à défaire ou à refaire, ils
   s'allument dès la première frappe dans « Modifier le PDF ». Comme Ctrl+Z, ils

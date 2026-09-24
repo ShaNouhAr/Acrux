@@ -287,20 +287,55 @@ impl Frame<'_> {
                 }
                 let s = &src_row[(col as usize) * 4..(col as usize) * 4 + 4];
                 let di = self.index(dx as usize, dy as usize);
-                let a = u32::from(s[3]);
-                if a == 255 {
-                    self.pixels[di] = s[2];
-                    self.pixels[di + 1] = s[1];
-                    self.pixels[di + 2] = s[0];
-                    self.pixels[di + 3] = 255;
-                } else if a > 0 {
-                    let inv = 255 - a;
-                    let d = &mut self.pixels[di..di + 4];
-                    d[0] = ((u32::from(s[2]) * 255 + u32::from(d[0]) * inv) / 255) as u8;
-                    d[1] = ((u32::from(s[1]) * 255 + u32::from(d[1]) * inv) / 255) as u8;
-                    d[2] = ((u32::from(s[0]) * 255 + u32::from(d[2]) * inv) / 255) as u8;
-                    d[3] = 255;
-                }
+                compose(&mut self.pixels[di..di + 4], s);
+            }
+        }
+    }
+
+    /// Étire un bitmap RGBA prémultiplié de `src_w` × `src_h` pixels sur le
+    /// rectangle `dest` (x, y, largeur, hauteur), au plus proche voisin,
+    /// composé sur le contenu existant et découpé aux bords.
+    ///
+    /// Seuls les pixels de destination **visibles** sont parcourus : le coût
+    /// suit la taille du tampon, pas celle du rectangle — une page à 1600 %
+    /// fait plus de dix mille pixels de large, et la parcourir en entier
+    /// figerait la peinture. C'est l'aperçu d'une page le temps que son rendu
+    /// à la bonne échelle arrive : il ne dure qu'un instant, le plus proche
+    /// voisin suffit.
+    pub fn blit_rgba_scaled(
+        &mut self,
+        dest: (i32, i32, u32, u32),
+        src_w: u32,
+        src_h: u32,
+        rgba: &[u8],
+    ) {
+        let (x, y, w, h) = dest;
+        let needed = (src_w as usize) * (src_h as usize) * 4;
+        if w == 0 || h == 0 || src_w == 0 || src_h == 0 || rgba.len() < needed {
+            return;
+        }
+        let x0 = x.max(0);
+        let y0 = y.max(0);
+        let x1 = (i64::from(x) + i64::from(w)).min(i64::from(self.width)) as i32;
+        let y1 = (i64::from(y) + i64::from(h)).min(i64::from(self.height)) as i32;
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        // Rang dans la source d'une position dans la destination.
+        let source = |offset: i32, dest: u32, src: u32| -> usize {
+            let at = u64::from(offset.max(0) as u32) * u64::from(src) / u64::from(dest);
+            at.min(u64::from(src - 1)) as usize
+        };
+        // La colonne source de chaque colonne visible, une fois pour toutes.
+        let columns: Vec<usize> = (x0..x1).map(|dx| source(dx - x, w, src_w)).collect();
+        let stride = src_w as usize * 4;
+        for dy in y0..y1 {
+            let sy = source(dy - y, h, src_h);
+            let src_row = &rgba[sy * stride..(sy + 1) * stride];
+            let start = self.index(x0 as usize, dy as usize);
+            let row = &mut self.pixels[start..start + columns.len() * 4];
+            for (d, &sx) in row.chunks_exact_mut(4).zip(&columns) {
+                compose(d, &src_row[sx * 4..sx * 4 + 4]);
             }
         }
     }
@@ -320,6 +355,23 @@ impl Frame<'_> {
                 self.pixels[i + 3] = 255;
             }
         }
+    }
+}
+
+/// Compose un pixel RGBA prémultiplié `s` sur le pixel BGRA `d` du tampon.
+fn compose(d: &mut [u8], s: &[u8]) {
+    let a = u32::from(s[3]);
+    if a == 255 {
+        d[0] = s[2];
+        d[1] = s[1];
+        d[2] = s[0];
+        d[3] = 255;
+    } else if a > 0 {
+        let inv = 255 - a;
+        d[0] = ((u32::from(s[2]) * 255 + u32::from(d[0]) * inv) / 255) as u8;
+        d[1] = ((u32::from(s[1]) * 255 + u32::from(d[1]) * inv) / 255) as u8;
+        d[2] = ((u32::from(s[0]) * 255 + u32::from(d[2]) * inv) / 255) as u8;
+        d[3] = 255;
     }
 }
 
@@ -477,6 +529,48 @@ pub fn run(
     {
         let _ = (title, width, height, maximised, app);
         Err("plateforme non prise en charge pour l'instant (Windows uniquement)".into())
+    }
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::Frame;
+
+    /// Une source 2 × 2 étirée en 4 × 4 depuis (-2, -2) dans un tampon
+    /// 3 × 3 : seul le quart visible est peint, pris dans le pixel source
+    /// du bas à droite, et rien ne déborde.
+    #[test]
+    fn blit_rgba_scaled_clips() {
+        // Source : rouge, vert / bleu, blanc, opaques (RGBA).
+        let src = [
+            255, 0, 0, 255, 0, 255, 0, 255, //
+            0, 0, 255, 255, 255, 255, 255, 255,
+        ];
+        let mut pixels = vec![7_u8; 3 * 3 * 4];
+        let mut frame = Frame::new(3, 3, &mut pixels);
+        frame.blit_rgba_scaled((-2, -2, 4, 4), 2, 2, &src);
+        for y in 0..3 {
+            for x in 0..3 {
+                let i = (y * 3 + x) * 4;
+                let px = &pixels[i..i + 4];
+                if x < 2 && y < 2 {
+                    assert_eq!(px, [255, 255, 255, 255], "({x}, {y}) : blanc");
+                } else {
+                    assert_eq!(px, [7, 7, 7, 7], "({x}, {y}) : intact");
+                }
+            }
+        }
+        // Agrandir sans décalage : chaque pixel source couvre un bloc 2 × 2
+        // (le tampon est en BGRA).
+        let mut pixels = vec![0_u8; 4 * 4 * 4];
+        let mut frame = Frame::new(4, 4, &mut pixels);
+        frame.blit_rgba_scaled((0, 0, 4, 4), 2, 2, &src);
+        // Une source trop courte pour ses dimensions n'est pas lue.
+        frame.blit_rgba_scaled((0, 0, 4, 4), 3, 3, &src);
+        assert_eq!(pixels[0..4], [0, 0, 255, 255], "rouge en haut à gauche");
+        assert_eq!(pixels[(3 * 4 + 3) * 4..], [255, 255, 255, 255], "blanc");
+        let bleu = (3 * 4) * 4;
+        assert_eq!(pixels[bleu..bleu + 4], [255, 0, 0, 255], "bleu");
     }
 }
 

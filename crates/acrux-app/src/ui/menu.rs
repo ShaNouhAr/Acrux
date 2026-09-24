@@ -25,6 +25,12 @@
 //!
 //! Il apparaît d'un coup, sans fondu : un menu qu'on attend, même un dixième
 //! de seconde, paraît lent. Rien à animer, donc rien à réveiller.
+//!
+//! Le même menu sert de **liste déroulante** : ouvert par [`Menu::below`], il
+//! se place sous un bouton (au-dessus s'il manque de place, pour un bouton de
+//! la barre d'état) au lieu du pointeur, et peut réserver en tête une bande
+//! où l'appelant dessine un champ de saisie ([`Menu::header`]) — c'est la
+//! liste du zoom, où l'on choisit un niveau ou l'on tape le sien.
 
 // Coordonnées d'écran entières, mesures de texte fractionnaires, et une
 // géométrie de rectangles (x, y, w, h) lue à plat.
@@ -81,6 +87,12 @@ const MOVE: f32 = 4.0;
 const RADIUS: f32 = 8.0;
 /// Taille du raccourci, relative à celle du libellé.
 const SHORTCUT_SCALE: f32 = 0.92;
+/// Retrait de la bande de tête par rapport aux bords de la carte.
+const HEAD_INSET: f32 = 8.0;
+/// Écart entre la bande de tête et la première ligne.
+const HEAD_GAP: f32 = 4.0;
+/// Écart entre une liste déroulante et le bouton qui l'a ouverte.
+const DROP_GAP: f32 = 4.0;
 
 /// Un élément choisissable.
 struct Item<T> {
@@ -118,6 +130,14 @@ pub struct Menu<T: Copy> {
     dpi: f32,
     /// Abscisse des libellés, relative au bord gauche de la carte.
     label_x: i32,
+    /// Bouton sous lequel s'ouvre une liste déroulante (voir
+    /// [`Menu::below`]) ; `None` pour un menu ouvert au pointeur.
+    below: Option<Rect>,
+    /// Hauteur de la bande réservée en tête, en pixels logiques (0 : pas
+    /// de bande).
+    header: f32,
+    /// La bande de tête, calculée par [`Menu::layout`].
+    head: Rect,
 }
 
 impl<T: Copy> Menu<T> {
@@ -135,6 +155,43 @@ impl<T: Copy> Menu<T> {
             size: 13.0,
             dpi: 1.0,
             label_x: 0,
+            below: None,
+            header: 0.0,
+            head: (x, y, 0, 0),
+        }
+    }
+
+    /// Liste déroulante vide, qui s'ouvrira **sous** le bouton `anchor`,
+    /// calée sur son bord gauche et au moins aussi large que lui ; au-dessus
+    /// s'il n'y a pas la place dessous (un bouton de la barre d'état).
+    #[must_use]
+    pub fn below(anchor: Rect) -> Self {
+        let (x, y, w, h) = anchor;
+        let mut menu = Self::new(x + w / 2, y + h / 2);
+        menu.below = Some(anchor);
+        menu
+    }
+
+    /// Réserve en tête de la carte une bande de `height` pixels logiques,
+    /// que l'appelant remplit lui-même (voir [`Menu::head`]).
+    #[must_use]
+    pub fn header(mut self, height: f32) -> Self {
+        self.header = height.max(0.0);
+        self
+    }
+
+    /// La bande de tête, en coordonnées de la fenêtre (largeur nulle s'il
+    /// n'y en a pas). Valable après [`Menu::layout`].
+    #[must_use]
+    pub fn head(&self) -> Rect {
+        self.head
+    }
+
+    /// Met en avant le premier élément choisissable dont l'action vérifie
+    /// `wanted` : une liste déroulante s'ouvre sur la valeur en cours.
+    pub fn highlight_where(&mut self, wanted: impl Fn(T) -> bool) {
+        if let Some(i) = (0..self.entries.len()).find(|&i| self.pick(i).is_some_and(&wanted)) {
+            self.highlight = Some(i);
         }
     }
 
@@ -226,7 +283,10 @@ impl<T: Copy> Menu<T> {
         } else {
             0
         };
-        let width = (label_x + label_w.ceil() as i32 + shortcuts + s(INSET)).max(s(MIN_WIDTH));
+        let anchor_w = self.below.map_or(0, |b| b.2);
+        let width = (label_x + label_w.ceil() as i32 + shortcuts + s(INSET))
+            .max(s(MIN_WIDTH))
+            .max(anchor_w);
         let heights: Vec<i32> = self
             .entries
             .iter()
@@ -235,12 +295,41 @@ impl<T: Copy> Menu<T> {
                 Entry::Separator => s(SEPARATOR),
             })
             .collect();
-        let height = 2 * s(PAD) + heights.iter().sum::<i32>();
-        let x = place(self.origin.0, width, win_w, s(OFFSET), s(MARGIN));
-        let y = place(self.origin.1, height, win_h, s(OFFSET), s(MARGIN));
+        // La bande de tête pousse les lignes vers le bas ; sans elle, la
+        // première ligne est à `PAD` du bord, comme avant.
+        let head_h = s(self.header);
+        let rows_top = if head_h > 0 {
+            s(HEAD_INSET) + head_h + s(HEAD_GAP)
+        } else {
+            s(PAD)
+        };
+        let height = rows_top + s(PAD) + heights.iter().sum::<i32>();
+        let (x, y) = match self.below {
+            Some(anchor) => drop_down(
+                anchor,
+                (width, height),
+                (win_w, win_h),
+                s(DROP_GAP),
+                s(MARGIN),
+            ),
+            None => (
+                place(self.origin.0, width, win_w, s(OFFSET), s(MARGIN)),
+                place(self.origin.1, height, win_h, s(OFFSET), s(MARGIN)),
+            ),
+        };
         self.card = (x, y, width, height);
+        self.head = if head_h > 0 {
+            (
+                x + s(HEAD_INSET),
+                y + s(HEAD_INSET),
+                width - 2 * s(HEAD_INSET),
+                head_h,
+            )
+        } else {
+            (x, y, 0, 0)
+        };
         self.rows.clear();
-        let mut ry = y + s(PAD);
+        let mut ry = y + rows_top;
         for h in heights {
             self.rows.push((x + s(4.0), ry, width - s(8.0), h));
             ry += h;
@@ -488,6 +577,28 @@ fn place(pointer: i32, extent: i32, window: i32, offset: i32, margin: i32) -> i3
     start.min(window - margin - extent).max(margin)
 }
 
+/// Coin d'une liste déroulante de taille `size` ouverte depuis le bouton
+/// `anchor` : sous lui, calée sur son bord gauche ; au-dessus quand la place
+/// manque dessous. Elle reste toujours dans la fenêtre `window`.
+fn drop_down(
+    anchor: Rect,
+    size: (i32, i32),
+    window: (i32, i32),
+    gap: i32,
+    margin: i32,
+) -> (i32, i32) {
+    let (ax, ay, _, ah) = anchor;
+    let ((width, height), (win_w, win_h)) = (size, window);
+    let x = ax.min(win_w - margin - width).max(margin);
+    let under = ay + ah + gap;
+    let y = if under + height <= win_h - margin {
+        under
+    } else {
+        ay - gap - height
+    };
+    (x, y.min(win_h - margin - height).max(margin))
+}
+
 fn inside(r: Rect, x: i32, y: i32) -> bool {
     x >= r.0 && x < r.0 + r.2 && y >= r.1 && y < r.1 + r.3
 }
@@ -694,6 +805,57 @@ mod tests {
         assert_eq!(m.card.3, 2 * 5 + 30 + 9 + 30);
         assert!(Menu::<u8>::new(0, 0).separator().is_empty());
         assert!(!m.is_empty());
+    }
+
+    /// Liste déroulante : sous son bouton, calée à gauche, au moins aussi
+    /// large que lui ; au-dessus quand elle ne tient pas dessous.
+    #[test]
+    fn la_liste_deroulante_s_ouvre_sous_ou_au_dessus_de_son_bouton() {
+        let bouton = (300, 10, 260, 30);
+        let mut m = Menu::below(bouton)
+            .item(None, "50 %", "", 50, true)
+            .item(None, "100 %", "", 100, true);
+        m.layout(&mut measure, 13.0, 1.0, 800, 600);
+        let (x, y, w, _) = m.card;
+        assert_eq!((x, y), (300, 44), "sous le bouton, calée à gauche");
+        assert_eq!(w, 260, "aussi large que le bouton");
+
+        // Un bouton de la barre d'état : la place manque dessous.
+        let etat = (600, 575, 60, 20);
+        let mut m = Menu::below(etat).item(None, "Un", "", 1, true);
+        m.layout(&mut measure, 13.0, 1.0, 800, 600);
+        let (x, y, w, h) = m.card;
+        assert_eq!(y + h, 571, "au-dessus du bouton, à distance");
+        assert!(x + w <= 792, "recalée dans la fenêtre : {:?}", m.card);
+    }
+
+    /// La bande de tête prend place au-dessus des lignes, dans la carte ; un
+    /// clic dedans ne ferme ni ne choisit rien.
+    #[test]
+    fn la_bande_de_tete_repousse_les_lignes() {
+        let mut m = Menu::below((100, 10, 80, 30))
+            .header(32.0)
+            .item(None, "Alpha", "", 'a', true);
+        m.layout(&mut measure, 13.0, 1.0, 800, 600);
+        let (hx, hy, hw, hh) = m.head();
+        let (x, y, w, _) = m.card;
+        assert_eq!((hx, hy, hw, hh), (x + 8, y + 8, w - 16, 32));
+        assert!(m.rows[0].1 >= hy + hh, "la ligne passe sous la bande");
+        assert_eq!(m.mouse_down(hx + 5, hy + 5), Outcome::Stay);
+        assert_eq!(m.mouse_up(hx + 5, hy + 5), Outcome::Stay);
+        // Sans bande, rien de réservé.
+        assert_eq!(sample().head().2, 0);
+    }
+
+    #[test]
+    fn la_liste_s_ouvre_sur_la_valeur_en_cours() {
+        let mut m = sample();
+        m.highlight_where(|c| c == 'c');
+        assert_eq!(m.highlight, Some(3));
+        // Un élément grisé ne se met pas en avant, même s'il correspond.
+        m.highlight_where(|c| c == 'b');
+        assert_eq!(m.highlight, Some(3));
+        assert_eq!(m.key(Key::Enter), Outcome::Pick('c'));
     }
 
     #[test]

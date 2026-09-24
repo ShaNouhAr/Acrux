@@ -178,16 +178,34 @@ function Drag($points) {
 # coordonnees lues sur la capture. WM_MOUSEWHEEL porte des coordonnees
 # d'ECRAN, a la difference des autres messages de souris : le harnais applique
 # l'echelle, puis convertit le point client en point d'ecran, comme le ferait
-# Windows.
-function Wheel($x, $y, $notches) {
+# Windows. Les fractions de cran sont permises (0.25 : le quart de cran d'un
+# pave tactile). -Ctrl tient Ctrl enfonce le temps du cran : Ctrl+molette
+# zoome vers le pointeur.
+function Wheel($x, $y, [double]$notches, [switch]$Ctrl) {
     $p = New-Object W.HL2+POINT
     $p.X = [int][Math]::Round($x * $script:Scale)
     $p.Y = [int][Math]::Round($y * $script:Scale)
     [W.HL2]::ClientToScreen($script:Hwnd, [ref]$p) | Out-Null
-    $w = [IntPtr][int64]((([int]$notches * 120) -band 0xFFFF) * 65536)
+    $units = [int][Math]::Round($notches * 120)
+    $w = [IntPtr][int64](($units -band 0xFFFF) * 65536)
     $l = [IntPtr][int64]((($p.Y -band 0xFFFF) * 65536) -bor ($p.X -band 0xFFFF))
+    if ($Ctrl) {
+        [W.HL]::PostMessage($script:Hwnd, 0x0100, [IntPtr]0x11, [IntPtr]1) | Out-Null
+        Start-Sleep -Milliseconds 60
+    }
     [W.HL]::PostMessage($script:Hwnd, 0x020A, $w, $l) | Out-Null
+    if ($Ctrl) {
+        Start-Sleep -Milliseconds 60
+        [W.HL]::PostMessage($script:Hwnd, 0x0101, [IntPtr]0x11, $script:KeyUp) | Out-Null
+    }
     Start-Sleep -Milliseconds 350
+}
+
+# Capture immediate, sans attendre que les rendus arrivent : ce qu'on voit
+# juste apres un geste (l'apercu d'une page pendant son rendu, par exemple).
+function ShotNow($name) {
+    Start-Sleep -Milliseconds 40
+    Copy-Item "$script:Dir/frame.ppm" "$script:Dir/$name.ppm" -Force
 }
 
 # Redimensionne la fenetre invisible (largeur et hauteur exterieures, en

@@ -13,7 +13,7 @@
 //! | `text`    | rendu de texte d'interface avec une police système    |
 //! | `theme`   | couleurs et dimensions                                |
 //! | `lang`    | langue de l'interface : français ou anglais           |
-//! | `menu`    | menu contextuel du clic droit : éléments, raccourcis, clavier |
+//! | `menu`    | menu contextuel du clic droit et listes déroulantes : éléments, raccourcis, clavier |
 //! | `modal`   | modèle commun des cartes modales : carte, fondu, rangée de boutons, invite |
 //! | `input`   | champ de saisie sur une ligne                         |
 //! | `icons`   | icônes vectorielles rasterisées à la demande          |
@@ -31,6 +31,7 @@
 //! | `objects` | outil « modifier » : boîte de sélection et poignées   |
 //! | `tools`   | barre latérale des outils, à droite                   |
 //! | `video`   | image de vidéo composée dans la page, barre de commandes |
+//! | `zoompicker` | liste du zoom : niveaux, ajustements, niveau tapé |
 //!
 //! À venir : info-bulles détaillées.
 
@@ -61,3 +62,4 @@ pub mod theme;
 pub mod toolbar;
 pub mod tools;
 pub mod video;
+pub mod zoompicker;

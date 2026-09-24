@@ -70,9 +70,11 @@ pub enum Command {
     ZoomOut,
     /// Zoom 100 %.
     ZoomReset,
+    /// Dérouler la liste du zoom : niveaux, ajustements, niveau tapé.
+    ZoomMenu,
     /// Ajuster à la largeur.
     FitWidth,
-    /// Afficher la page entière.
+    /// Ajuster à la page : la page entière tient dans la fenêtre.
     FitPage,
     /// Ajustement automatique : la largeur, sans agrandir au-delà de 100 %.
     FitAutomatic,
@@ -187,6 +189,7 @@ impl Command {
             Command::ZoomIn => "zoom-in",
             Command::ZoomOut => "zoom-out",
             Command::ZoomReset => "zoom-reset",
+            Command::ZoomMenu => "zoom-menu",
             Command::FitWidth => "fit-width",
             Command::FitPage => "fit-page",
             Command::FitAutomatic => "fit-auto",
@@ -481,6 +484,13 @@ const ENTRIES: &[Entry] = &[
         needs_document: true,
     },
     Entry {
+        label: "Choisir le niveau de zoom…",
+        shortcut: "",
+        keywords: "zoom pourcentage pourcent niveau taille liste agrandir reduire loupe",
+        command: Command::ZoomMenu,
+        needs_document: true,
+    },
+    Entry {
         label: "Ajustement automatique",
         shortcut: "Ctrl+0",
         keywords: "auto automatique defaut largeur sans agrandir",
@@ -495,9 +505,9 @@ const ENTRIES: &[Entry] = &[
         needs_document: true,
     },
     Entry {
-        label: "Afficher la page entière",
+        label: "Ajuster à la page",
         shortcut: "",
-        keywords: "page entiere ajuster hauteur tout voir",
+        keywords: "page entiere afficher hauteur tout voir fenetre",
         command: Command::FitPage,
         needs_document: true,
     },

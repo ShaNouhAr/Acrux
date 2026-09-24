@@ -94,6 +94,10 @@ pub enum Icon {
     Attach,
     /// Cadenas fermé (protéger par mot de passe).
     Lock,
+    /// Coche : l'élément en vigueur d'une liste (le zoom en cours).
+    Check,
+    /// Chevron vers le bas : un bouton qui déroule une liste.
+    ChevronDown,
 }
 
 /// Contour d'une page, motif commun à beaucoup d'icônes.
@@ -468,6 +472,8 @@ pub fn geometry(icon: Icon) -> (Path, Path) {
             anse.push((15.5, 11.0));
             polyline(&mut lines, &anse);
         }
+        Icon::Check => polyline(&mut lines, &[(5.0, 12.5), (10.0, 17.5), (19.0, 7.5)]),
+        Icon::ChevronDown => polyline(&mut lines, &[(7.0, 10.0), (12.0, 15.0), (17.0, 10.0)]),
         Icon::Redact => {
             page(&mut lines, 5.0, 3.5, 14.0, 17.0);
             bar(&mut fills, 7.5, 9.5, 9.0, 5.0);
@@ -670,6 +676,8 @@ mod tests {
             Icon::Save,
             Icon::Print,
             Icon::ViewMode,
+            Icon::Check,
+            Icon::ChevronDown,
         ];
         let mut raster = Rasterizer::new();
         for icon in icons {

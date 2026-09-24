@@ -87,9 +87,18 @@ l'Explorateur.
 La molette et Ctrl+touche ont leurs fonctions :
 
 ```powershell
-Wheel 815 540 -3   # trois crans vers le bas, pointeur en (815, 540)
-KeyCtrl 0x23       # Ctrl+Fin (0x24 : Ctrl+Origine)
+Wheel 815 540 -3          # trois crans vers le bas, pointeur en (815, 540)
+Wheel 815 540 1 -Ctrl     # Ctrl+molette : un cran de zoom vers le pointeur
+Wheel 815 540 0.25 -Ctrl  # un quart de cran, comme un pavé tactile de précision
+KeyCtrl 0x23              # Ctrl+Fin (0x24 : Ctrl+Origine)
+ShotNow "apercu"          # capture immédiate, sans attendre la fin des rendus
 ```
+
+`Shot` attend 700 ms que les rendus arrivent ; `ShotNow` capture tout de suite ce qui est à
+l'écran — par exemple la page étirée qu'affiche le zoom pendant le rendu à la nouvelle échelle.
+Le journal note `zoom : 300 % vers (x, y)` à chaque changement de zoom, `aperçu étiré : …` quand
+une page est montrée étirée, et `rendu : page N en M ms` pour chaque rendu (la barre d'état ne
+l'affiche plus).
 
 `WM_MOUSEWHEEL` est le seul message de souris dont la position est en coordonnées
 **d'écran** : `Wheel` applique l'échelle puis convertit le point (`ClientToScreen`), comme le

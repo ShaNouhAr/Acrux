@@ -74,13 +74,17 @@ mod context;
 mod dialogs;
 mod editmode;
 mod protect;
+mod status;
 mod three_d;
+mod zoom;
 use crate::ui::editpdf::EditTool;
 use crate::ui::modebar::ModeBar;
 use context::{ContextMenu, Target};
 use dialogs::{Asking, Then};
 use editmode::EditMode;
 use protect::OwnerThen;
+use status::StatusSeg;
+use zoom::ZoomAnchor;
 
 /// Rectangle semi-transparent (alpha 0..255) composé sur le tampon.
 // Position, taille, couleur, alpha : primitive de dessin à coordonnées courtes.
@@ -303,6 +307,10 @@ fn row_of(rows: &[(usize, usize)], page: usize) -> usize {
 const GAP: i32 = 16;
 /// Largeur du panneau latéral, en pixels logiques.
 const PANEL_WIDTH: u32 = 240;
+/// Poids du cache des pages rendues au-delà duquel on l'élague, même s'il
+/// compte moins de douze images : à 400 %, une seule page pèse déjà plus de
+/// cent mégaoctets.
+const CACHE_BYTES: usize = 256 * 1024 * 1024;
 
 /// Documents récents montrés sur l'écran d'accueil.
 const MAX_WELCOME: usize = 8;
@@ -373,11 +381,6 @@ struct Inking {
     /// Points relevés, en coordonnées de page.
     points: Vec<InkPoint>,
 }
-
-/// Paliers de zoom.
-const ZOOM_STEPS: [f64; 16] = [
-    0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 6.0,
-];
 
 struct Loaded {
     path: PathBuf,
@@ -671,8 +674,15 @@ pub struct Viewer {
     raster: Rasterizer,
     /// Barre d'outils.
     toolbar: Toolbar,
-    /// Dernier temps de rendu d'une page (ms), pour la barre d'état.
-    last_render_ms: f64,
+    /// Liste du zoom déroulée, et d'où (voir `viewer/zoom.rs`).
+    zoom_menu: Option<(crate::ui::zoompicker::ZoomPicker, ZoomAnchor)>,
+    /// Fraction de cran de Ctrl+molette pas encore convertie en zoom.
+    zoom_wheel: f32,
+    /// Indications cliquables de la barre d'état au dernier dessin, en
+    /// coordonnées de la fenêtre (voir `viewer/status.rs`).
+    status_hits: Vec<(StatusSeg, (i32, i32, i32, i32))>,
+    /// Indication de la barre d'état sous le pointeur.
+    status_hover: Option<StatusSeg>,
     /// Recherche en cours (Ctrl+F).
     search: Option<Search>,
     /// Sélection de texte.
@@ -1086,7 +1096,10 @@ impl Viewer {
             text: TextRenderer::system(),
             raster: Rasterizer::new(),
             toolbar: Toolbar::new(),
-            last_render_ms: 0.0,
+            zoom_menu: None,
+            zoom_wheel: 0.0,
+            status_hits: Vec::new(),
+            status_hover: None,
             search: None,
             selection: None,
             sel_dragging: false,
@@ -2687,7 +2700,8 @@ impl Viewer {
             .toolbar
             .hover_tip(&info)
             .or_else(|| self.tab_tip())
-            .or_else(|| self.recent_tip());
+            .or_else(|| self.recent_tip())
+            .or_else(|| self.status_tip());
         // Même texte ne veut pas dire même élément : les croix des onglets
         // disent toutes « Fermer l'onglet ». Sans le rectangle, passer de
         // l'une à l'autre laissait la bulle sous la première.
@@ -2802,9 +2816,17 @@ impl Viewer {
         let text_w = renderer.measure(size, &text).ceil();
         let w = text_w as i32 + 2 * pad;
         let h = (renderer.line_height(size)) as i32 + pad;
-        // Sous le bouton, recalée dans la fenêtre si elle dépasse à droite.
+        // Sous le bouton, recalée dans la fenêtre si elle dépasse à droite ;
+        // au-dessus quand la place manque dessous — une indication de la
+        // barre d'état : recalée vers le haut, la bulle la couvrirait.
         let x = (rect.0 + rect.2 / 2 - w / 2).clamp(4, (frame.width as i32 - w - 4).max(4));
-        let y = (rect.1 + rect.3 + (4.0 * dpi) as i32).min(frame.height as i32 - h - 2);
+        let gap = (4.0 * dpi) as i32;
+        let below = rect.1 + rect.3 + gap;
+        let y = if below + h <= frame.height as i32 - 2 {
+            below
+        } else {
+            (rect.1 - gap - h).max(2)
+        };
         shadow(
             frame,
             x,
@@ -3689,6 +3711,10 @@ impl Viewer {
             tools_open: self.wanted_tools_width() > 0.0,
             tools_fit: self.tools_fit(),
             dark_theme: self.theme.is_dark(),
+            zoom_open: self
+                .zoom_menu
+                .as_ref()
+                .is_some_and(|(_, anchor)| *anchor == ZoomAnchor::Toolbar),
         }
     }
 
@@ -4024,6 +4050,7 @@ impl Viewer {
             Command::ZoomIn => self.zoom_step(1),
             Command::ZoomOut => self.zoom_step(-1),
             Command::ZoomReset => self.set_zoom(1.0),
+            Command::ZoomMenu => self.open_zoom_menu(ZoomAnchor::Toolbar, window),
             Command::FitWidth => self.set_fit(Fit::Width),
             Command::FitPage => self.set_fit(Fit::Page),
             Command::FitAutomatic => self.set_fit(Fit::Automatic),
@@ -4632,6 +4659,7 @@ impl Viewer {
             }
             ToolAction::Print => self.print(window),
             ToolAction::CycleViewMode => self.set_view_mode(self.view_mode.next()),
+            ToolAction::ZoomMenu => self.open_zoom_menu(ZoomAnchor::Toolbar, window),
         }
     }
 
@@ -4702,13 +4730,6 @@ impl Viewer {
             // plus étroite que la fenêtre s'affiche à sa taille réelle.
             _ => largeur.min(cent_pour_cent),
         }
-    }
-
-    /// Change le mode d'ajustement et recale le défilement.
-    fn set_fit(&mut self, fit: Fit) {
-        self.fit = fit;
-        self.clamp_scroll();
-        self.title_dirty = true;
     }
 
     /// Positions des pages : (y, largeur, hauteur) en pixels.
@@ -6709,37 +6730,6 @@ impl Viewer {
         self.scale() / (self.dpi_scale * (96.0 / 72.0))
     }
 
-    fn set_zoom(&mut self, zoom: f64) {
-        // Conserve le point du document au centre de la vue.
-        let old_scale = self.scale();
-        let center = (self.scroll_y + f64::from(self.view_height()) / 2.0) / old_scale;
-        self.fit = Fit::Fixed;
-        self.zoom = zoom.clamp(0.1, 16.0);
-        let new_scale = self.scale();
-        self.scroll_y = center * new_scale - f64::from(self.view_height()) / 2.0;
-        self.clamp_scroll();
-        self.title_dirty = true;
-    }
-
-    fn zoom_step(&mut self, direction: i32) {
-        let real = self.effective_zoom();
-        let next = if direction > 0 {
-            ZOOM_STEPS
-                .iter()
-                .copied()
-                .find(|z| *z > real + 1e-6)
-                .unwrap_or(real * 1.25)
-        } else {
-            ZOOM_STEPS
-                .iter()
-                .rev()
-                .copied()
-                .find(|z| *z < real - 1e-6)
-                .unwrap_or(real / 1.25)
-        };
-        self.set_zoom(next);
-    }
-
     fn update_title(&mut self, window: &mut dyn WindowHandle) {
         let title = match &self.loaded {
             Some(l) => {
@@ -6768,7 +6758,9 @@ impl Viewer {
         let mut any = false;
         let live = self.live_edit;
         for r in worker.poll() {
-            self.last_render_ms = r.ms;
+            // La durée de rendu est une mesure de développement : elle va au
+            // journal, plus dans la barre d'état.
+            log_line(&format!("rendu : page {} en {:.0} ms", r.page + 1, r.ms));
             // Image d'une page qu'on est en train de bouger : elle vient
             // d'un état dépassé, la garder ferait clignoter la page.
             if live == Some(r.page) {
@@ -6798,7 +6790,6 @@ impl Viewer {
         let view_h = self.view_height();
         let (scroll_x, scroll_y) = (self.scroll_x, self.scroll_y);
         let dpi = self.dpi_scale as f32;
-        let mut last_ms = None;
         let Some(l) = &mut self.loaded else { return };
         let thumb_key = self.thumb_key;
         if let Some(w) = &mut l.worker {
@@ -6842,7 +6833,30 @@ impl Viewer {
             if !l.cache.contains_key(&key) {
                 if let Some(worker) = &mut l.worker {
                     worker.request(i, scale, key_scale);
-                    // Page blanche en attendant le rendu.
+                    // En attendant le rendu, l'image de la page à une autre
+                    // échelle, étirée : zoomer ne fait plus clignoter la page
+                    // en blanc à chaque cran, comme dans Acrobat. La plus
+                    // grande échelle disponible, la plus nette ; la vignette
+                    // du panneau fait l'affaire à défaut.
+                    let stand_in = l
+                        .cache
+                        .iter()
+                        .filter(|((page, s), _)| *page == i && *s != key_scale)
+                        .max_by_key(|((_, s), _)| *s);
+                    if let Some(((_, from), bitmap)) = stand_in {
+                        log_line(&format!(
+                            "aperçu étiré : page {} de {from} à {key_scale}",
+                            i + 1
+                        ));
+                        frame.blit_rgba_scaled(
+                            (dx, dy, *w, *h),
+                            bitmap.width(),
+                            bitmap.height(),
+                            bitmap.data(),
+                        );
+                        continue;
+                    }
+                    // Rien à étirer : page blanche en attendant le rendu.
                     frame.fill_rect(
                         dx,
                         dy,
@@ -6858,7 +6872,11 @@ impl Viewer {
                 // Sans fil de rendu : rendu direct.
                 let start = std::time::Instant::now();
                 let b = render_page(&l.doc, &l.pages[i], scale, &options).bitmap;
-                last_ms = Some(start.elapsed().as_secs_f64() * 1000.0);
+                log_line(&format!(
+                    "rendu direct : page {} en {:.0} ms",
+                    i + 1,
+                    start.elapsed().as_secs_f64() * 1000.0
+                ));
                 l.cache.insert(key, b);
             }
             if let Some(bitmap) = l.cache.get(&key) {
@@ -6866,119 +6884,43 @@ impl Viewer {
                 frame.blit_rgba_premultiplied(dx, dy, bitmap.width(), visible_h, bitmap.data());
             }
         }
-        if let Some(ms) = last_ms {
-            self.last_render_ms = ms;
-        }
-        // Le cache ne garde que les pages proches de la vue.
-        if l.cache.len() > 12 {
-            let keep: Vec<(usize, u32)> = l
-                .cache
-                .keys()
-                .filter(|(i, s)| {
-                    *s == thumb_key
-                        || (*s == key_scale
-                            && layout.get(*i).is_some_and(|b| {
-                                b.visible
-                                    && f64::from(b.y + b.h as i32) >= view_top - 2000.0
-                                    && f64::from(b.y) <= view_bottom + 2000.0
-                            }))
+        // Le cache ne garde que les pages proches de la vue. Il est aussi
+        // borné en octets : à fort zoom, une douzaine d'images d'échelles
+        // passées pèserait des centaines de mégaoctets.
+        let bytes: usize = l.cache.values().map(|b| b.data().len()).sum();
+        if l.cache.len() > 12 || bytes > CACHE_BYTES {
+            let near = |i: usize| {
+                layout.get(i).is_some_and(|b| {
+                    b.visible
+                        && f64::from(b.y + b.h as i32) >= view_top - 2000.0
+                        && f64::from(b.y) <= view_bottom + 2000.0
                 })
-                .copied()
-                .collect();
-            l.cache.retain(|k, _| keep.contains(k));
+            };
+            // Une page proche qui attend son rendu garde sa meilleure image
+            // d'une autre échelle : c'est son aperçu, sans lui elle
+            // repasserait au blanc dès le deuxième cran de zoom.
+            let mut stand_ins: HashMap<usize, u32> = HashMap::new();
+            for &(i, s) in l.cache.keys() {
+                if s != key_scale && near(i) && !l.cache.contains_key(&(i, key_scale)) {
+                    let best = stand_ins.entry(i).or_insert(s);
+                    *best = (*best).max(s);
+                }
+            }
+            l.cache.retain(|&(i, s), _| {
+                s == thumb_key || (s == key_scale && near(i)) || stand_ins.get(&i) == Some(&s)
+            });
         }
         // Indication « rendu en cours » sur les pages en attente.
         if let Some(text) = &mut self.text {
             let size = t.font_size * dpi;
             for (dx, dy, w, h) in placeholders {
-                let label = "Rendu en cours…";
+                let label = lang::tr("Rendu en cours…");
                 let tw = text.measure(size, label);
                 let cx = dx as f32 + (w as f32 - tw) / 2.0;
                 let cy = dy as f32 + (h as f32).min(view_h as f32 - dy as f32) / 2.0;
                 text.draw(frame, cx, cy, size, label, t.text_dim);
             }
         }
-    }
-
-    fn paint_status(&mut self, frame: &mut Frame<'_>) {
-        let t = self.theme;
-        let h = self.status_height() as i32;
-        let top = self.height as i32 - h;
-        frame.fill_rect(0, top, self.width as i32, h, t.bar.0, t.bar.1, t.bar.2);
-        frame.fill_rect(
-            0,
-            top,
-            self.width as i32,
-            1,
-            t.separator.0,
-            t.separator.1,
-            t.separator.2,
-        );
-        let page = self.current_page() + 1;
-        let zoom = self.effective_zoom();
-        // Un message passager (fin d'export…) prend la place du nom de fichier
-        // pendant quelques secondes.
-        let notice = self.notice.as_ref().and_then(|(m, at)| {
-            (at.elapsed() < std::time::Duration::from_secs(8)).then(|| m.clone())
-        });
-        let (left, right) = if let Some(l) = self.loaded.as_ref().filter(|_| !self.showing_home()) {
-            let name = l
-                .path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            // Document étiqueté : l'étiquette d'abord, le rang physique
-            // entre parenthèses — « page iii (3 / 240) », comme Acrobat.
-            let position = match l.labels.get(page - 1) {
-                Some(label) if *label != page.to_string() => {
-                    format!("page {label} ({page} / {})", l.pages.len())
-                }
-                _ => format!("page {page} / {}", l.pages.len()),
-            };
-            let right = format!(
-                "{position}   {:.0} %{}   {}   {:.0} ms",
-                zoom * 100.0,
-                match self.fit.label() {
-                    "" => String::new(),
-                    mode => format!(" ({})", lang::tr(mode)),
-                },
-                lang::tr(self.view_mode.label()),
-                self.last_render_ms
-            );
-            (notice.unwrap_or(name), right)
-        } else if self.home {
-            // Un document est ouvert derrière : on dit comment y revenir,
-            // c'est la question qu'on se pose ici.
-            let count = self.prefs.recent.len().min(MAX_WELCOME);
-            let right = match count {
-                0 => String::new(),
-                1 => lang::tr("1 document récent").to_string(),
-                n => lang::trf("{} documents récents", &[&n.to_string()]),
-            };
-            let left =
-                lang::tr("Accueil — Échap ou la maison pour revenir au document").to_string();
-            (notice.unwrap_or(left), right)
-        } else {
-            let left =
-                lang::tr("Aucun document — Ctrl+O pour ouvrir, ou déposez un PDF ici").to_string();
-            (notice.unwrap_or(left), String::new())
-        };
-        let Some(text) = &mut self.text else { return };
-        let size = t.font_size * self.dpi_scale as f32;
-        let baseline = top as f32 + (h as f32 + text.ascent(size)) / 2.0 - 1.0;
-        let pad = 10.0 * self.dpi_scale as f32;
-        // La version, tout au bout, en plus petit : on sait d'un coup d'œil
-        // quelle version on a sous la main, sans ouvrir de fenêtre « À propos ».
-        let version = concat!("v", env!("CARGO_PKG_VERSION"));
-        let small = size * 0.85;
-        let version_w = text.measure(small, version);
-        let version_x = self.width as f32 - pad - version_w;
-        text.draw(frame, version_x, baseline, small, version, t.text_dim);
-        let right_w = text.measure(size, &right);
-        let right_x = version_x - if right.is_empty() { 0.0 } else { 1.6 * pad } - right_w;
-        text.draw(frame, right_x, baseline, size, &right, t.text_dim);
-        let max_left = (right_x - 2.0 * pad).max(40.0);
-        text.draw_clipped(frame, pad, baseline, size, &left, t.text, max_left);
     }
 }
 
@@ -7041,9 +6983,11 @@ impl Viewer {
         if self.context_menu.is_some() && self.menu_blocked() {
             self.context_menu = None;
         }
+        self.drop_blocked_zoom_menu();
         if self.dialog_event(&event, window)
             || self.protect_event(&event, window)
             || self.modal_event(&event, window)
+            || self.zoom_menu_event(&event, window)
             || self.context_menu_event(&event, window)
         {
             self.swallow_space = pressing;
@@ -7124,7 +7068,7 @@ impl Viewer {
                     let (h, dpi) = (f64::from(self.view_height()), self.dpi_scale);
                     self.tools.scroll(f64::from(-delta) * 60.0, h, dpi);
                 } else if modifiers.ctrl {
-                    self.zoom_step(if delta > 0.0 { 1 } else { -1 });
+                    self.wheel_zoom(delta, x, y);
                 } else if modifiers.shift {
                     self.scroll_x -= f64::from(delta) * 80.0;
                 } else {
@@ -7489,6 +7433,13 @@ impl Viewer {
                             TabAction::None => {}
                         }
                     }
+                } else if self.in_status_bar(y) {
+                    // La barre d'état passe avant la colonne d'outils et le
+                    // panneau, dont les tests ne regardent que l'abscisse :
+                    // sans quoi le zoom, sous la colonne, cliquait un outil.
+                    if self.prompt.is_none() {
+                        self.status_click(x, y, window);
+                    }
                 } else if y < top && self.annot_tool.is_some() && !self.edit_on() {
                     if self.mode_bar.closes(x, y) {
                         self.annot_tool = None;
@@ -7723,6 +7674,7 @@ impl Viewer {
                 } else {
                     hover_changed |= self.tabs.mouse_leave();
                 }
+                hover_changed |= self.status_mouse_move(x, y);
                 if hover_changed {
                     self.update_tip(window);
                 }
@@ -7970,10 +7922,15 @@ impl Viewer {
                 }
             }
             self.paint_status(frame);
+        } else {
+            // Plein écran, lecture : pas de barre d'état, rien à y cliquer.
+            self.status_hits.clear();
+            self.status_hover = None;
         }
         // L'info-bulle parle d'un bouton de la barre : elle passe sous les
         // cartes qui s'ouvrent par-dessus, avec lui.
         self.paint_tip(frame);
+        self.paint_zoom_menu(frame);
         self.paint_capture(frame);
         self.paint_protect(frame);
         self.paint_prompt(frame);

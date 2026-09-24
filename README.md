@@ -251,8 +251,10 @@ la commande de la palette et affiche son raccourci ; flèches, `Entrée`, `Écha
 élément s'y emploient comme dans un menu de Windows.
 
 Barre d'outils : accueil, panneau latéral (vignettes et signets), ouvrir, page précédente /
-suivante, numéro de page (champ encadré : cliquer pour saisir), zoom −/+, ajuster à la largeur,
-disposition des pages, **annuler, rétablir** (grisés quand il n'y a rien à défaire ou à refaire),
+suivante, numéro de page (champ encadré : cliquer pour saisir), zoom −/+ et **liste du zoom**
+(la case « 125 % » se déroule : 50 à 400 %, ajustement automatique, à la largeur, à la page, et un
+champ où taper n'importe quel niveau, « 137 » ou « 137,5 % », puis `Entrée` ; sans document, elle
+affiche « – % » grisé), ajuster à la largeur, disposition des pages, **annuler, rétablir** (grisés quand il n'y a rien à défaire ou à refaire),
 pivoter, enregistrer, imprimer, recherche, tous les outils, paramètres, thème (la lune en thème
 clair, le soleil en thème sombre : le bouton montre où l'on va). Les bascules du panneau et des
 outils s'allument quand ce qu'elles montrent est affiché. Chaque bouton affiche au survol ce qu'il
@@ -264,6 +266,13 @@ proposant d'abord d'enregistrer). Quand le document déclare des **étiquettes d
 l'étiquette qui s'affiche et qui se tape : une préface numérotée i, ii, iii donne « iii / 240 »
 dans la barre d'outils et « page iii (3 / 240) » dans la barre d'état, et saisir « iv » ou
 « Annexe-A » mène à la bonne page.
+
+La **barre d'état** se clique : la page y prend le champ de page (comme `Ctrl+G`), le zoom y
+déroule la même liste que la barre d'outils, au-dessus de lui, et la disposition y passe à la
+suivante ; chacun s'éclaire au survol et dit ce que fera le clic. Zoomer ne fait plus clignoter la
+page en blanc : en attendant le rendu à la nouvelle échelle, l'image précédente est étirée à sa
+place. Le zoom est plafonné pour qu'une page rendue ne dépasse pas 256 Mo (environ 570 % pour de
+l'A4 sur un écran à 150 %) ; la barre d'état le dit quand on bute dessus.
 
 | Naviguer | |
 | --- | --- |
@@ -277,8 +286,10 @@ dans la barre d'outils et « page iii (3 / 240) » dans la barre d'état, et sai
 
 | Voir | |
 | --- | --- |
-| `+` / `-`, `Ctrl+molette` | zoom |
-| `F` | ajuster à la largeur |
+| `+` / `-` | zoom, centré sur la vue |
+| `Ctrl+molette` | zoom **vers le pointeur** : ce qui est sous la souris y reste (les petits crans d'un pavé tactile s'additionnent) |
+| clic sur la case du zoom, ou sur le zoom de la barre d'état | liste du zoom : niveaux, ajustements, niveau tapé |
+| `F`, `Ctrl+0` | ajuster à la largeur, ajustement automatique (la liste ajoute « ajuster à la page ») |
 | bouton « disposition » | continu, page unique, continu deux pages, deux pages |
 | `F11` | plein écran |
 | `F5` | mode lecture : plus de barres ni de panneau, seulement les pages (Échap pour revenir) |

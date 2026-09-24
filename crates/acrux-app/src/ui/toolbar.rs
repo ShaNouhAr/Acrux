@@ -1,5 +1,5 @@
-//! Barre d'outils : boutons à icône, séparateurs, champ de page et libellé
-//! de zoom, disposés de gauche à droite avec un groupe aligné à droite.
+//! Barre d'outils : boutons à icône, séparateurs, champ de page et liste
+//! du zoom, disposés de gauche à droite avec un groupe aligné à droite.
 //! Tout est dessiné par le toolkit interne ; la barre ne connaît pas le
 //! document, elle reçoit un [`ToolbarInfo`] et renvoie des [`ToolAction`].
 
@@ -74,6 +74,8 @@ pub enum ToolAction {
     Print,
     /// Changer la disposition des pages.
     CycleViewMode,
+    /// Dérouler la liste du zoom sous sa case.
+    ZoomMenu,
 }
 
 impl ToolAction {
@@ -100,13 +102,14 @@ impl ToolAction {
             ToolAction::Save => Command::Save,
             ToolAction::Print => Command::Print,
             ToolAction::CycleViewMode => Command::CycleViewMode,
+            ToolAction::ZoomMenu => Command::ZoomMenu,
             ToolAction::GoToPage(_) | ToolAction::GoToLabel(_) => return None,
         })
     }
 }
 
 /// Ce que la barre affiche.
-// Sept états indépendants que la barre ne fait que lire : une énumération les
+// Des états indépendants que la barre ne fait que lire : une énumération les
 // multiplierait sans rien apprendre de plus.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Default)]
@@ -138,6 +141,8 @@ pub struct ToolbarInfo {
     /// Le thème en vigueur est sombre : le bouton du thème montre le soleil
     /// (on passera au clair), sinon la lune.
     pub dark_theme: bool,
+    /// La liste du zoom est déroulée sous sa case : la case reste enfoncée.
+    pub zoom_open: bool,
 }
 
 /// Le bouton répond-il ? « Annuler » et « Rétablir » suivent l'historique,
@@ -191,6 +196,24 @@ fn tip_text(action: &ToolAction, info: &ToolbarInfo) -> Option<String> {
     Some(with_shortcut(label, shortcut))
 }
 
+/// Info-bulle de la case du zoom, reprise par le zoom de la barre d'état :
+/// ce que fait le clic, et le geste qui zoome sans passer par la liste.
+#[must_use]
+pub fn zoom_tip() -> String {
+    with_shortcut(tr("Choisir le niveau de zoom"), tr("Ctrl+molette"))
+}
+
+/// Info-bulle du champ de page, reprise par la page de la barre d'état :
+/// on peut y taper un numéro, et le raccourci pour y venir au clavier.
+#[must_use]
+pub fn page_tip() -> Option<String> {
+    let (label, shortcut) = describe(Command::GoToPage)?;
+    Some(with_shortcut(label, shortcut))
+}
+
+/// Côté du chevron de la case du zoom, en pixels logiques.
+const CHEVRON: f32 = 14.0;
+
 /// « libellé  (raccourci) », ou le libellé seul s'il n'y a pas de raccourci.
 fn with_shortcut(label: &str, shortcut: &str) -> String {
     if shortcut.is_empty() {
@@ -205,7 +228,7 @@ fn with_shortcut(label: &str, shortcut: &str) -> String {
 /// paramètres, thème) était repoussé hors de la fenêtre. Chacun de ceux-ci
 /// garde un autre accès : un raccourci, la molette, la palette ou le clic
 /// droit. Restent jusqu'au bout le panneau, l'ouverture, le champ de page,
-/// le zoom affiché, Annuler, Rétablir et Enregistrer.
+/// la case du zoom, Annuler, Rétablir et Enregistrer.
 ///
 /// Les paires partent ensemble : un « + » sans son « − », une page suivante
 /// sans la précédente, se liraient comme des oublis.
@@ -230,8 +253,8 @@ enum Item {
     Separator,
     /// Champ « page / total », éditable au clic.
     PageBox,
-    /// Libellé « 128 % ».
-    ZoomLabel,
+    /// Case « 128 % » et son chevron : un clic déroule la liste du zoom.
+    ZoomBox,
     /// Espace extensible : ce qui suit est aligné à droite.
     Spacer,
 }
@@ -264,7 +287,7 @@ impl Toolbar {
     #[must_use]
     #[allow(clippy::too_many_lines)] // un élément par bouton, dans l'ordre de la barre
     pub fn new() -> Self {
-        use Item::{Button, PageBox, Separator, Spacer, ZoomLabel};
+        use Item::{Button, PageBox, Separator, Spacer, ZoomBox};
         let items = vec![
             // L'accueil d'abord, tout à gauche : c'est le retour à la base,
             // et on le cherche là.
@@ -301,7 +324,7 @@ impl Toolbar {
                 action: ToolAction::ZoomOut,
                 needs_document: true,
             },
-            ZoomLabel,
+            ZoomBox,
             Button {
                 icon: Icon::ZoomIn,
                 action: ToolAction::ZoomIn,
@@ -424,14 +447,17 @@ impl Toolbar {
             let wanted = text.measure(size, &Self::page_box_label(info));
             wanted.clamp(floor, ceiling).round() as i32 + 2 * pad
         };
-        let zoom_label = text.measure(size, "1000 %").round() as i32 + 2 * pad;
-        self.place(width, dpi, Self::height(theme, dpi), page_box, zoom_label);
+        // La case du zoom garde la largeur de « 1000 % » : elle ne bouge pas
+        // d'un zoom à l'autre, ni à l'ouverture d'un document.
+        let chevron = (CHEVRON * dpi).round() as i32;
+        let zoom_box = text.measure(size, "1000 %").round() as i32 + chevron + 2 * pad;
+        self.place(width, dpi, Self::height(theme, dpi), page_box, zoom_box);
     }
 
     /// Place les éléments de gauche à droite, une fois les textes mesurés :
     /// la part de la disposition qui ne dépend pas de la police, et qu'une
     /// épreuve peut donc exercer seule.
-    fn place(&mut self, width: i32, dpi: f32, h: i32, page_box: i32, zoom_label: i32) {
+    fn place(&mut self, width: i32, dpi: f32, h: i32, page_box: i32, zoom_box: i32) {
         let button = (32.0 * dpi).round() as i32;
         let gap = (2.0 * dpi).round() as i32;
         let pad = (6.0 * dpi).round() as i32;
@@ -442,7 +468,7 @@ impl Toolbar {
                 Item::Button { .. } => button,
                 Item::Separator => (9.0 * dpi).round() as i32,
                 Item::PageBox => page_box,
-                Item::ZoomLabel => zoom_label,
+                Item::ZoomBox => zoom_box,
                 Item::Spacer => 0,
             })
             .collect();
@@ -560,6 +586,78 @@ impl Toolbar {
         );
     }
 
+    /// Dessine la case du zoom, d'indice `i` dans la barre : le niveau, et
+    /// un chevron qui dit qu'elle se déroule. Elle est encadrée comme le
+    /// champ de page, et reste enfoncée tant que sa liste est ouverte. Sans
+    /// document, « – % » grisé tient la même place — comme « – / – » pour le
+    /// champ de page : pas de trou dans la barre, et rien ne bouge quand un
+    /// document s'ouvre.
+    fn paint_zoom_box(
+        &self,
+        frame: &mut Frame<'_>,
+        text: &mut TextRenderer,
+        raster: &mut Rasterizer,
+        t: &Theme,
+        dpi: f32,
+        i: usize,
+        info: &ToolbarInfo,
+    ) {
+        let (x, y, w, bh) = self.rects[i];
+        let radius = 7.0 * dpi;
+        // Même case que le champ de page, pour que les deux se lisent comme
+        // des champs de la même famille.
+        let (fy, fh) = (y + 3, bh - 6);
+        let on = info.has_document;
+        let hovered = on && self.hover == Some(i);
+        if on {
+            let fill = if info.zoom_open { t.hover } else { t.canvas };
+            round_rect(frame, x, fy, w, fh, radius, fill);
+            let edge = if info.zoom_open {
+                t.accent
+            } else if hovered {
+                t.text_dim
+            } else {
+                t.separator
+            };
+            round_rect_outline(frame, x, fy, w, fh, radius, dpi.max(1.0), edge);
+        }
+        if self.focus == Some(i) {
+            inner_ring(frame, x, fy, w, fh, radius, dpi, t.accent);
+        }
+        let pad = (6.0 * dpi).round() as i32;
+        let chevron = (CHEVRON * dpi).round() as i32;
+        let ix = x + w - pad / 2 - chevron;
+        let color = if on { t.text } else { t.disabled() };
+        icons::draw(
+            frame,
+            raster,
+            Icon::ChevronDown,
+            ix,
+            y + (bh - chevron) / 2,
+            chevron as f32,
+            if on { t.text_dim } else { color },
+        );
+        let size = t.font_size * dpi;
+        let label = if on {
+            format!("{} %", info.zoom_percent)
+        } else {
+            "– %".to_string()
+        };
+        // Le niveau est centré dans ce qui reste à gauche du chevron.
+        let room = (ix - x - pad / 2).max(0) as f32;
+        let tw = text.measure(size, &label).min(room);
+        let baseline = y as f32 + (bh as f32 + text.ascent(size)) / 2.0 - 1.0;
+        text.draw_clipped(
+            frame,
+            (x + pad / 2) as f32 + (room - tw) / 2.0,
+            baseline,
+            size,
+            &label,
+            color,
+            room,
+        );
+    }
+
     /// Dessine la barre en haut de la fenêtre.
     pub fn paint(
         &mut self,
@@ -584,7 +682,6 @@ impl Toolbar {
             t.separator.2,
         );
         self.layout(width, dpi, text, t, info);
-        let size = t.font_size * dpi;
         let icon_px = (20.0 * dpi).round();
         let radius = 7.0 * dpi;
         for (i, it) in self.items.iter().enumerate() {
@@ -638,23 +735,7 @@ impl Toolbar {
                     );
                 }
                 Item::PageBox => self.paint_page_box(frame, text, t, dpi, i, info),
-                Item::ZoomLabel => {
-                    let label = if info.has_document {
-                        format!("{} %", info.zoom_percent)
-                    } else {
-                        String::new()
-                    };
-                    let tw = text.measure(size, &label);
-                    let baseline = y as f32 + (bh as f32 + text.ascent(size)) / 2.0 - 1.0;
-                    text.draw(
-                        frame,
-                        x as f32 + (w as f32 - tw) / 2.0,
-                        baseline,
-                        size,
-                        &label,
-                        t.text,
-                    );
-                }
+                Item::ZoomBox => self.paint_zoom_box(frame, text, raster, t, dpi, i, info),
                 Item::Spacer => {}
             }
         }
@@ -666,12 +747,7 @@ impl Toolbar {
             .position(|&(rx, ry, rw, rh)| {
                 rw > 0 && x >= rx && x < rx + rw && y >= ry && y < ry + rh
             })
-            .filter(|&i| {
-                !matches!(
-                    self.items[i],
-                    Item::Separator | Item::Spacer | Item::ZoomLabel
-                )
-            })
+            .filter(|&i| !matches!(self.items[i], Item::Separator | Item::Spacer))
     }
 
     /// Texte de l'info-bulle de l'élément survolé et rectangle de cet
@@ -694,13 +770,23 @@ impl Toolbar {
                 }
                 tip_text(action, info)?
             }
-            Item::PageBox if info.has_document && self.page_input.is_none() => {
-                let (label, shortcut) = describe(Command::GoToPage)?;
-                with_shortcut(label, shortcut)
-            }
+            Item::PageBox if info.has_document && self.page_input.is_none() => page_tip()?,
+            // Liste déroulée : l'info-bulle se tairait sous elle.
+            Item::ZoomBox if info.has_document && !info.zoom_open => zoom_tip(),
             _ => return None,
         };
         Some((text, *self.rects.get(index)?))
+    }
+
+    /// Rectangle de la case du zoom au dernier dessin, pour y accrocher sa
+    /// liste ; `None` si elle n'a pas encore été dessinée.
+    #[must_use]
+    pub fn zoom_rect(&self) -> Option<(i32, i32, i32, i32)> {
+        let i = self
+            .items
+            .iter()
+            .position(|it| matches!(it, Item::ZoomBox))?;
+        self.rects.get(i).copied().filter(|r| r.2 > 0)
     }
 
     /// Survol : vrai si l'élément sous la souris a changé (il faut repeindre).
@@ -730,6 +816,10 @@ impl Toolbar {
             Item::PageBox if info.has_document => {
                 self.focus_page(info);
                 None
+            }
+            Item::ZoomBox if info.has_document => {
+                self.page_input = None;
+                Some(ToolAction::ZoomMenu)
             }
             _ => None,
         }
@@ -818,7 +908,7 @@ impl Toolbar {
                             needs_document,
                             ..
                         } => enabled(action, *needs_document, info),
-                        Item::PageBox => info.has_document,
+                        Item::PageBox | Item::ZoomBox => info.has_document,
                         _ => false,
                     }
             })
@@ -906,6 +996,7 @@ impl Toolbar {
                 self.focus_page(info);
                 None
             }
+            Item::ZoomBox => info.has_document.then_some(ToolAction::ZoomMenu),
             _ => None,
         }
     }
@@ -1117,6 +1208,41 @@ mod tests {
         let (tip, _) = tb.hover_tip(&with_document()).unwrap_or_default();
         assert!(tip.contains("Ctrl+G"), "{tip}");
         // Sans document, le champ est éteint : pas d'info-bulle.
+        assert_eq!(tb.hover_tip(&ToolbarInfo::default()), None);
+    }
+
+    /// La case du zoom déroule sa liste — à la souris comme au clavier —
+    /// dès qu'un document est ouvert, et dit ce qu'elle fait au survol.
+    #[test]
+    fn zoom_box_opens_its_list() {
+        let mut tb = Toolbar::new();
+        let zoom = tb
+            .items
+            .iter()
+            .position(|it| matches!(it, Item::ZoomBox))
+            .unwrap_or(usize::MAX);
+        assert_eq!(tb.zoom_rect(), None, "pas encore dessinée");
+        tb.rects[zoom] = (300, 4, 90, 32);
+        assert_eq!(tb.zoom_rect(), Some((300, 4, 90, 32)));
+        let doc = with_document();
+        assert_eq!(tb.mouse_down(320, 10, &doc), Some(ToolAction::ZoomMenu));
+        assert_eq!(tb.mouse_down(320, 10, &ToolbarInfo::default()), None);
+        // Au clavier : atteinte par les flèches, activée par Entrée.
+        assert!(tb.focusable(&doc).contains(&zoom));
+        assert!(!tb.focusable(&ToolbarInfo::default()).contains(&zoom));
+        tb.focus = Some(zoom);
+        assert_eq!(tb.activate_focus(&doc), Some(ToolAction::ZoomMenu));
+        assert_eq!(tb.activate_focus(&ToolbarInfo::default()), None);
+        // L'info-bulle, sauf liste déroulée ou sans document.
+        assert!(tb.mouse_move(320, 10));
+        let (tip, rect) = tb.hover_tip(&doc).unwrap_or_default();
+        assert!(tip.contains("Ctrl+"), "{tip}");
+        assert_eq!(rect, (300, 4, 90, 32));
+        let open = ToolbarInfo {
+            zoom_open: true,
+            ..with_document()
+        };
+        assert_eq!(tb.hover_tip(&open), None);
         assert_eq!(tb.hover_tip(&ToolbarInfo::default()), None);
     }
 
