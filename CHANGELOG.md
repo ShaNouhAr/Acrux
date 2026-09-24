@@ -7,7 +7,7 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
-## 0.23.0 — non publiée
+## 0.23.0 — 24 septembre 2026
 
 - **Dessiner sur la page : rectangle, ellipse, ligne, flèche, crayon.** La
   barre des commentaires a un second groupe d'outils, après un filet. On
