@@ -958,6 +958,10 @@ pub struct Palette {
     scrubbing: bool,
     /// Un document est ouvert.
     has_document: bool,
+    /// Commandes qui n'ont rien à faire maintenant (« Vue précédente » au
+    /// début de l'historique) : la palette ne les propose pas, comme elle
+    /// tait celles qui demandent un document quand il n'y en a pas.
+    hidden: Vec<Command>,
     /// Langue lue à l'ouverture : celle des libellés, du filtrage et du
     /// dessin.
     english: bool,
@@ -1006,6 +1010,7 @@ impl Palette {
             pressed: None,
             scrubbing: false,
             has_document,
+            hidden: Vec::new(),
             english,
             recent: unique,
             full_len,
@@ -1015,10 +1020,26 @@ impl Palette {
         p
     }
 
+    /// La même palette, sans les commandes `hidden`, qui n'auraient rien à
+    /// faire : une ligne qui ne répond que « Aucune vue précédente » n'a pas
+    /// sa place dans la liste.
+    #[must_use]
+    pub fn without(mut self, hidden: &[Command]) -> Self {
+        self.hidden = hidden.to_vec();
+        self.full_len = ENTRIES.iter().filter(|e| self.allowed(e)).count();
+        self.refilter();
+        self
+    }
+
+    /// La commande `e` peut être proposée.
+    fn allowed(&self, e: &Entry) -> bool {
+        (self.has_document || !e.needs_document) && !self.hidden.contains(&e.command)
+    }
+
     /// Recalcule la liste filtrée ; la sélection revient en tête.
     fn refilter(&mut self) {
         let query: Vec<char> = self.input.value.chars().map(fold_char).collect();
-        let allowed = |e: &Entry| self.has_document || !e.needs_document;
+        let allowed = |e: &Entry| self.allowed(e);
         let mut hits = Vec::with_capacity(ENTRIES.len());
         if query.is_empty() {
             // Les récentes d'abord, dans leur ordre, puis tout le reste dans
@@ -2013,6 +2034,20 @@ mod tests {
             .find(|e| e.command == Command::Properties)
             .map(|e| (e.label, e.shortcut));
         assert_eq!(properties, Some(("Propriétés du document", "Ctrl+D")));
+    }
+
+    #[test]
+    fn une_commande_sans_effet_n_est_pas_proposee() {
+        let full = Palette::with_lang(true, &[], false);
+        let p = Palette::with_lang(true, &[], false)
+            .without(&[Command::ViewBack, Command::ViewForward]);
+        assert_eq!(p.full_len, full.full_len - 2);
+        assert!(commands(&full).contains(&Command::ViewBack));
+        assert!(!commands(&p).contains(&Command::ViewBack));
+        assert!(!commands(&p).contains(&Command::ViewForward));
+        assert!(commands(&p).contains(&Command::RotateViewRight));
+        // La frappe ne les fait pas revenir.
+        assert_ne!(typed(p, "vue prec").current(), Some(Command::ViewBack));
     }
 
     #[test]

@@ -1951,7 +1951,19 @@ impl Viewer {
             .iter()
             .filter_map(|key| Command::from_key(key))
             .collect();
-        self.palette = Some(Palette::new(self.loaded.is_some(), &recent));
+        // « Vue précédente » au début de l'historique ne ferait que dire
+        // qu'il n'y en a pas : comme le clic droit la grise, la palette la
+        // tait.
+        let mut idle = Vec::new();
+        if let Some(l) = &self.loaded {
+            if !l.nav.can_back() {
+                idle.push(Command::ViewBack);
+            }
+            if !l.nav.can_forward() {
+                idle.push(Command::ViewForward);
+            }
+        }
+        self.palette = Some(Palette::new(self.loaded.is_some(), &recent).without(&idle));
     }
 
     /// Lance une commande choisie dans la palette, et la retient parmi les
@@ -3888,6 +3900,15 @@ impl Viewer {
         if self.loaded.is_some() && !self.require_right(op.required_right()) {
             return false;
         }
+        // Pivoter une page change sa taille à l'écran, et celle de toutes
+        // les suivantes avec l'ajustement à la largeur : le même décalage en
+        // pixels montrait ensuite autre chose. On garde la page et la part
+        // de page qu'on regardait.
+        let keep = if matches!(op, EditOp::Rotate { .. }) {
+            self.view_spot()
+        } else {
+            None
+        };
         let Some(l) = &mut self.loaded else {
             return false;
         };
@@ -3934,6 +3955,9 @@ impl Viewer {
         // Le modèle activé décrivait un document qui vient de changer.
         self.three_d = None;
         self.title_dirty = true;
+        if let Some(s) = keep {
+            self.restore_spot(s);
+        }
         self.clamp_scroll();
         true
     }
@@ -3976,11 +4000,13 @@ impl Viewer {
                 return;
             }
         };
+        // L'endroit où l'on est, en page et en part de page : un décalage en
+        // pixels ne désigne plus le même endroit quand la taille d'une page
+        // change (Ctrl+Z après R ramenait ailleurs).
+        let spot = self.view_spot();
         // La vue de l'onglet n'est pas une modification : l'annulation ne la
-        // défait pas. L'historique de la vue survit, sauf si l'opération
-        // défaite ou refaite a supprimé, inséré ou déplacé des pages : les
-        // siennes ne désigneraient plus les mêmes.
-        let Some((view_rotation, count, nav, before)) = self
+        // défait pas. L'historique de la vue survit.
+        let Some((view_rotation, count, mut nav, before)) = self
             .loaded
             .take()
             .map(|l| (l.view_rotation, l.pages.len(), l.nav, l.history))
@@ -3989,16 +4015,18 @@ impl Viewer {
         };
         // L'opération en jeu est la dernière de l'historique le plus long :
         // celui d'avant pour une annulation, le nouveau pour un rétablissement.
-        let changed = if before.len() > ops.len() {
-            before.last()
-        } else {
-            ops.last()
-        };
-        let keep_nav = !changed.is_some_and(history::moves_pages);
+        // Seule compte celle qui supprime, insère ou déplace des pages : les
+        // vues retenues, et l'endroit où l'on est, la suivent — à l'envers
+        // pour une annulation.
+        let undoing = before.len() > ops.len();
+        let moved = if undoing { before.last() } else { ops.last() }
+            .filter(|op| history::moves_pages(op))
+            .cloned();
         // Le document rechargé **remplace** celui de l'onglet courant : sans
         // cela, `finish_open` le rangerait en arrière-plan et ouvrirait un
         // onglet de plus à chaque annulation.
         self.finish_open(path, doc, pages, password, window);
+        let mut here = None;
         if let Some(l) = &mut self.loaded {
             // Le fil de rendu repart du fichier : on lui rejoue l'historique.
             if let Some(w) = &mut l.worker {
@@ -4013,14 +4041,31 @@ impl Viewer {
             l.history = ops;
             l.redo = redo;
             l.view_rotation = view_rotation;
-            if keep_nav && l.pages.len() == count {
-                l.nav = nav;
-            }
+            let now = l.pages.len();
+            let place = |page: usize| {
+                match &moved {
+                    None => Some(page),
+                    Some(op) if undoing => {
+                        history::page_before(op, page, count.saturating_sub(now))
+                    }
+                    Some(op) => history::page_after(op, page, now.saturating_sub(count)),
+                }
+                .filter(|&p| p < now)
+            };
+            nav.remap(place);
+            l.nav = nav;
+            here = spot.and_then(|s| place(s.page).map(|page| Spot { page, ..s }));
         }
         // L'utilisateur ne doit pas perdre sa place en annulant.
-        self.anchor = anchor;
         self.scroll_x = scroll_x;
-        self.scroll_y = scroll_y;
+        if let Some(s) = here {
+            self.restore_spot(s);
+        } else {
+            // La page d'où l'on regardait n'existe plus (une suppression
+            // refaite) : on reste au même décalage.
+            self.anchor = anchor;
+            self.scroll_y = scroll_y;
+        }
         self.panel.tab = panel_tab;
         self.clamp_scroll();
         self.title_dirty = true;

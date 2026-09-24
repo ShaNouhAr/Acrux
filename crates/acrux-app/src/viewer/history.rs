@@ -159,6 +159,44 @@ pub(super) fn page_after(op: &EditOp, page: usize, inserted: usize) -> Option<us
     }
 }
 
+/// L'inverse de [`page_after`], pour une annulation : où revient la page
+/// `page` quand on défait `op`. `None` si elle n'existait pas avant (une
+/// page insérée). `inserted` est le nombre de pages que `op` avait ajoutées.
+///
+/// Sans elle, Ctrl+Z après une suppression vidait l'historique de la vue
+/// et ramenait l'écran à un décalage en pixels qui ne désignait plus la
+/// même page.
+pub(super) fn page_before(op: &EditOp, page: usize, inserted: usize) -> Option<usize> {
+    match op {
+        EditOp::Delete { pages } => {
+            // La `page`-ième des pages restées : chaque page supprimée
+            // avant elle la repousse d'un cran.
+            let mut gone: Vec<usize> = pages.clone();
+            gone.sort_unstable();
+            gone.dedup();
+            let mut before = page;
+            for d in gone {
+                if d <= before {
+                    before += 1;
+                }
+            }
+            Some(before)
+        }
+        // Une copie revient à la page dont elle est la copie.
+        EditOp::Reorder { order } => order.get(page).copied(),
+        EditOp::Insert { at, .. } => {
+            if page < *at {
+                Some(page)
+            } else if page >= at + inserted {
+                Some(page - inserted)
+            } else {
+                None
+            }
+        }
+        _ => Some(page),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,6 +329,43 @@ mod tests {
         };
         assert_eq!(page_after(&rotate, 1, 0), Some(1));
         assert!(moves_pages(&op) && !moves_pages(&rotate));
+    }
+
+    #[test]
+    fn annuler_ramene_chaque_page_a_sa_place() {
+        let delete = EditOp::Delete {
+            pages: vec![5, 2, 2],
+        };
+        let reorder = EditOp::Reorder {
+            order: vec![2, 0, 0, 1],
+        };
+        let insert = EditOp::Insert {
+            path: std::path::PathBuf::new(),
+            password: None,
+            pages: Vec::new(),
+            at: 2,
+        };
+        // Pour chaque page restée, défaire après avoir fait ne bouge rien.
+        for (op, inserted) in [(&delete, 0), (&insert, 3)] {
+            for page in 0..9 {
+                if let Some(after) = page_after(op, page, inserted) {
+                    assert_eq!(page_before(op, after, inserted), Some(page), "{op:?}");
+                }
+            }
+        }
+        for page in 0..3 {
+            let back = page_after(&reorder, page, 0).and_then(|a| page_before(&reorder, a, 0));
+            assert_eq!(back, Some(page));
+        }
+        // La copie de la page 0 revient à la page 0 ; une page insérée
+        // n'existait pas.
+        assert_eq!(page_before(&reorder, 2, 0), Some(0));
+        assert_eq!(page_before(&insert, 3, 3), None);
+        let rotate = EditOp::Rotate {
+            pages: vec![1],
+            degrees: 90,
+        };
+        assert_eq!(page_before(&rotate, 4, 0), Some(4));
     }
 
     #[test]

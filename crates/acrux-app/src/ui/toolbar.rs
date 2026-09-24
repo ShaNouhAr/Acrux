@@ -828,6 +828,10 @@ impl Toolbar {
     /// Donne le focus au champ de page, pré-rempli avec la position courante
     /// (son étiquette si le document en a). Appelé par le clic sur le champ et
     /// par la commande « Aller à une page » de la palette.
+    ///
+    /// Le numéro est **sélectionné** : ce qu'on tape le remplace. Le curseur
+    /// seul à la fin, Ctrl+G puis « 5 » depuis la page 1 donnait « 15 », et
+    /// menait à la page 15 — ou à la dernière.
     pub fn focus_page(&mut self, info: &ToolbarInfo) {
         if !info.has_document {
             return;
@@ -837,7 +841,7 @@ impl Toolbar {
             .page_label
             .clone()
             .unwrap_or_else(|| info.page.to_string());
-        input.caret = input.value.chars().count();
+        input.select_all();
         self.page_input = Some(input);
     }
 
@@ -1088,6 +1092,15 @@ mod tests {
             ..ToolbarInfo::default()
         };
         assert_eq!(Toolbar::page_box_label(&info), "iii / 240");
+        // Sans étiquette, un numéro tapé remplace celui de la page courante
+        // au lieu de s'y ajouter (« 3 » puis « 5 » ne fait pas « 35 »).
+        let numbers = ToolbarInfo {
+            page_label: None,
+            ..info.clone()
+        };
+        tb.focus_page(&numbers);
+        tb.char('5', &numbers);
+        assert_eq!(tb.key(Key::Enter, &numbers), Some(ToolAction::GoToPage(5)));
         tb.focus_page(&info);
         assert!(tb.has_focus());
         // Le champ est pré-rempli avec l'étiquette, pas avec « 3 ».

@@ -1238,6 +1238,25 @@ fn file_dialog(
 static SIMULATED_CTRL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static SIMULATED_SHIFT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Dernière touche enfoncée (code virtuel) : voir [`typed_by_key`].
+static LAST_KEY_DOWN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Vrai si le caractère `code` est celui qu'écrit d'elle-même la touche
+/// `vk` — Tab, Entrée, Retour arrière — et non un Ctrl+lettre.
+///
+/// Ctrl+I et Tab écrivent tous deux le caractère 9 : lu avec Ctrl, il
+/// devenait « Ctrl+I ». Un vrai clavier n'envoie pas de caractère pour
+/// Ctrl+Tab, mais le mode invisible, où Ctrl n'est enfoncée que pour
+/// l'application, en reçoit un ; et Ctrl+Entrée écrit 10, lu « Ctrl+J ».
+/// Ctrl+Tab insérait des pages, Ctrl+Retour arrière ouvrait le
+/// remplacement.
+fn typed_by_key(vk: u32, code: u32) -> bool {
+    matches!(
+        (vk, code),
+        (0x08, 0x08) | (0x09, 0x09) | (0x0D, 0x0A | 0x0D)
+    )
+}
+
 /// Retient l'état d'un modificateur posté au mode invisible.
 fn note_simulated(vk: u32, down: bool) {
     use std::sync::atomic::Ordering;
@@ -1671,6 +1690,7 @@ fn handle_message(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRES
         }
         WM_KEYDOWN => {
             note_simulated(wparam as u32, true);
+            LAST_KEY_DOWN.store(wparam as u32, std::sync::atomic::Ordering::Relaxed);
             deliver(state, Event::Key(key_from_vk(wparam as u32), modifiers()));
             0
         }
@@ -1713,6 +1733,10 @@ fn handle_message(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRES
             // codes ASCII historiques.
             let m = modifiers();
             let code = wparam as u32;
+            let last = LAST_KEY_DOWN.load(std::sync::atomic::Ordering::Relaxed);
+            if m.ctrl && typed_by_key(last, code) {
+                return 0;
+            }
             let normalized = if m.ctrl && (1..=26).contains(&code) {
                 char::from_u32(code - 1 + u32::from(b'a'))
             } else {
@@ -2189,5 +2213,21 @@ mod tests {
         assert_eq!(key_from_table(0x25), Key::Left);
         assert_eq!(key_from_table(0x73), Key::F(4));
         assert_eq!(key_from_table(0x41), Key::Other(0x41));
+    }
+
+    #[test]
+    fn tab_et_entree_ne_passent_pas_pour_ctrl_lettre() {
+        assert!(typed_by_key(0x09, 9), "Ctrl+Tab n'est pas Ctrl+I");
+        assert!(typed_by_key(0x0D, 10), "Ctrl+Entrée n'est pas Ctrl+J");
+        assert!(
+            typed_by_key(0x08, 8),
+            "Ctrl+Retour arrière n'est pas Ctrl+H"
+        );
+        assert!(!typed_by_key(0x49, 9), "Ctrl+I reste Ctrl+I");
+        assert!(!typed_by_key(0x48, 8), "Ctrl+H reste Ctrl+H");
+        assert!(
+            !typed_by_key(0x11, 6),
+            "le harnais poste Ctrl+F sans la lettre"
+        );
     }
 }

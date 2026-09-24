@@ -15,12 +15,12 @@ c'est la section correspondante de ce fichier qui devient la page de version.
   Alt+→ refait le saut. Les boutons latéraux de la souris et les touches
   « Précédent » et « Suivant » d'un clavier multimédia font de même, comme
   dans Acrobat et les navigateurs. Chaque onglet a son historique, qui suit
-  les pages supprimées, insérées ou déplacées et reste juste après une
-  annulation.
+  les pages supprimées, insérées ou déplacées, et les suit encore à l'envers
+  quand on annule ces modifications.
   Taper une recherche n'y laisse qu'une entrée, pas une par lettre ; la
   molette, les flèches et les pages suivantes n'en laissent aucune. Le clic
-  droit sur la page et la palette proposent « Vue précédente » et « Vue
-  suivante », grisées quand il n'y a pas où aller.
+  droit sur la page propose « Vue précédente » et « Vue suivante », grisées
+  quand il n'y a pas où aller ; la palette ne les propose alors pas.
 - **Faire pivoter la vue** (Ctrl+Maj+Plus, Ctrl+Maj+Moins, clic droit,
   palette) : les pages s'affichent tournées d'un quart de tour — pour lire un
   tableau couché ou un plan scanné de travers — **sans que le document
@@ -39,11 +39,23 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 - **Chaque onglet retrouve sa page.** Changer d'onglet, ou fermer celui qu'on
   regarde, ramenait le document suivant à sa première page, comme s'il venait
   de s'ouvrir ; chacun reprend désormais là où on l'avait laissé.
+- **Ctrl+G remplace le numéro de page au lieu de s'y ajouter.** Le champ
+  s'ouvrait le curseur après le numéro courant : depuis la page 1, Ctrl+G
+  puis « 5 » menait à la page 15, ou à la dernière. Le numéro est maintenant
+  sélectionné, comme quand on clique dans le champ.
+- **Pivoter une page (R) et annuler (Ctrl+Z) gardent la vue.** La page change
+  de taille à l'écran : le même décalage en pixels montrait ensuite autre
+  chose, et Ctrl+Z après R ramenait ailleurs. On garde la page et l'endroit
+  de la page qu'on regardait, y compris quand l'annulation remet des pages
+  supprimées ou retire des pages insérées.
 - Afficher ou masquer un calque ne laisse plus, de temps à autre, une page
   dessinée avec l'ancienne visibilité : un rendu parti avant le changement et
   arrivé après était pris pour neuf, jusqu'au zoom suivant.
 - Le harnais invisible gagne `AltKey` (Alt+←), `XButton` (boutons latéraux
-  de la souris) et `CtrlShiftKey` (Ctrl+Maj+touche).
+  de la souris) et `CtrlShiftKey` (Ctrl+Maj+touche). Ctrl+Tab et
+  Ctrl+Retour arrière n'y passent plus pour Ctrl+I (insérer des pages) et
+  Ctrl+H (remplacer) : la touche écrit son propre caractère, que
+  l'application lisait avec Ctrl.
 - **La recherche est complète.** La carte de Ctrl+F gagne « Aa » (respecter la
   casse), « Mot entier », les flèches occurrence précédente et suivante et une
   croix pour fermer, chacun avec son info-bulle ; le compteur dit « 3 sur 12 »,
