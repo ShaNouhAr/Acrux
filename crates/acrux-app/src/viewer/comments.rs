@@ -138,7 +138,8 @@ pub(super) struct CommentMenuOpen {
     authors: Vec<String>,
 }
 
-/// Types qui se déplacent.
+/// Types qui se déplacent. Pas un signe d'insertion : il désigne un
+/// endroit du texte, et déplacé il ne voudrait plus rien dire.
 fn movable(subtype: &str) -> bool {
     matches!(
         subtype,
@@ -153,7 +154,6 @@ fn movable(subtype: &str) -> bool {
             | "Text"
             | "FileAttachment"
             | "Sound"
-            | "Caret"
     )
 }
 

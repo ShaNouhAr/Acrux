@@ -7690,17 +7690,21 @@ impl Viewer {
             // recherche du panneau des commentaires : le clavier va à eux,
             // les raccourcis d'une lettre y sont des lettres.
             Event::Key(key, m)
-                if self.bubble_typing() && !is_global_key(key, m) && self.bubble_key(key, m) =>
+                if self.bubble_typing()
+                    && self.palette.is_none()
+                    && !is_global_key(key, m)
+                    && self.bubble_key(key, m) =>
             {
                 window.request_redraw();
             }
-            Event::Char(c, m) if self.bubble_typing() && !m.ctrl => {
+            Event::Char(c, m) if self.bubble_typing() && self.palette.is_none() && !m.ctrl => {
                 self.bubble_char(c);
                 window.request_redraw();
             }
             Event::Key(key, m)
                 if self.panel_open
                     && self.panel.comment_search_focused()
+                    && self.palette.is_none()
                     && !is_global_key(key, m)
                     && !m.ctrl =>
             {
@@ -7708,7 +7712,10 @@ impl Viewer {
                 window.request_redraw();
             }
             Event::Char(c, m)
-                if self.panel_open && self.panel.comment_search_focused() && !m.ctrl =>
+                if self.panel_open
+                    && self.panel.comment_search_focused()
+                    && self.palette.is_none()
+                    && !m.ctrl =>
             {
                 self.panel.comment_search_char(c);
                 window.request_redraw();
