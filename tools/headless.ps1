@@ -59,7 +59,7 @@ function Start-App {
     $env:ACRUX_SHOT = "$script:Dir/frame.ppm"
     $env:ACRUX_HWND = "$script:Dir/hwnd.txt"
     Remove-Item $env:ACRUX_LOG, $env:ACRUX_HWND -ErrorAction SilentlyContinue
-    Remove-Item Env:ACRUX_THEME, Env:ACRUX_OPEN_FILE, Env:ACRUX_SAVE_FILE, Env:ACRUX_SAVE_DIR, Env:ACRUX_CONFIRM -ErrorAction SilentlyContinue
+    Remove-Item Env:ACRUX_THEME, Env:ACRUX_OPEN_FILE, Env:ACRUX_OPEN_IMAGE, Env:ACRUX_SAVE_FILE, Env:ACRUX_SAVE_DIR, Env:ACRUX_CONFIRM, Env:ACRUX_CLIPBOARD_IMAGE -ErrorAction SilentlyContinue
     foreach ($k in $Env.Keys) { Set-Item -Path "Env:$k" -Value $Env[$k] }
     # ACRUX_EXE designe un autre executable que celui de target\debug : une copie
     # figee pendant qu'une compilation le remplace, par exemple.

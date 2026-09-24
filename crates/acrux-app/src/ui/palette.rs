@@ -187,6 +187,17 @@ pub enum Command {
     /// Outil « légende » : une zone de texte reliée à un point par une
     /// flèche.
     CalloutTool,
+    /// Outil « tamponner » : Approuvé, Confidentiel, Brouillon… posés d'un
+    /// clic.
+    StampTool,
+    /// Poser une image choisie sur le disque.
+    AddImage,
+    /// Poser l'image du presse-papiers au milieu de la page visible.
+    PasteImage,
+    /// Nouveau document d'une page blanche.
+    NewBlank,
+    /// Nouveau document fait de l'image ou du texte du presse-papiers.
+    NewFromClipboard,
     /// Poser une note.
     Note,
     /// Chercher une version plus récente.
@@ -249,6 +260,7 @@ impl Command {
     /// rester lisible d'une version à l'autre. Le `match` est exhaustif, si
     /// bien qu'une commande ajoutée sans sa clé ne compile pas.
     #[must_use]
+    #[allow(clippy::too_many_lines)] // une ligne par commande, à la suite
     pub fn key(self) -> &'static str {
         match self {
             Command::Home => "home",
@@ -324,6 +336,11 @@ impl Command {
             Command::PencilTool => "pencil-tool",
             Command::TextBoxTool => "text-box-tool",
             Command::CalloutTool => "callout-tool",
+            Command::StampTool => "stamp-tool",
+            Command::AddImage => "add-image",
+            Command::PasteImage => "paste-image",
+            Command::NewBlank => "new-blank",
+            Command::NewFromClipboard => "new-from-clipboard",
             Command::Note => "note",
             Command::CheckUpdates => "check-updates",
             Command::EditObjects => "edit-objects",
@@ -567,6 +584,20 @@ const ENTRIES: &[Entry] = &[
         needs_document: true,
     },
     Entry {
+        label: "Nouveau PDF vierge",
+        shortcut: "",
+        keywords: "creer nouveau document blanc vide page vierge",
+        command: Command::NewBlank,
+        needs_document: false,
+    },
+    Entry {
+        label: "Nouveau PDF depuis le presse-papiers",
+        shortcut: "",
+        keywords: "creer nouveau coller capture ecran image texte presse papiers",
+        command: Command::NewFromClipboard,
+        needs_document: false,
+    },
+    Entry {
         label: "Exporter (page web, Word, Excel, images, texte)",
         shortcut: "Ctrl+E",
         keywords: "conversion convertir html docx xlsx png jpeg markdown texte",
@@ -742,10 +773,31 @@ const ENTRIES: &[Entry] = &[
         needs_document: true,
     },
     Entry {
+        label: "Tamponner",
+        shortcut: "",
+        keywords: "tampon approuve confidentiel brouillon refuse paye recu final cachet outil",
+        command: Command::StampTool,
+        needs_document: true,
+    },
+    Entry {
         label: "Modifier : objets de la page",
         shortcut: "O",
         keywords: "image deplacer redimensionner recadrer ordre supprimer objet dessin logo",
         command: Command::EditObjects,
+        needs_document: true,
+    },
+    Entry {
+        label: "Ajouter une image",
+        shortcut: "",
+        keywords: "image photo logo inserer placer poser png jpeg fichier",
+        command: Command::AddImage,
+        needs_document: true,
+    },
+    Entry {
+        label: "Coller une image",
+        shortcut: "Ctrl+V",
+        keywords: "coller presse papiers capture ecran image inserer",
+        command: Command::PasteImage,
         needs_document: true,
     },
     Entry {

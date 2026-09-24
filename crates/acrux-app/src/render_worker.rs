@@ -208,6 +208,29 @@ pub enum EditOp {
         /// Auteur, identifiant et date de la réponse, tirés une fois.
         meta: AnnotMeta,
     },
+    /// Poser un tampon (Approuvé, Confidentiel…, dynamique ou image).
+    ///
+    /// Tout ce qui dépend du moment — la ligne dynamique, l'identité de
+    /// l'annotation — est déjà dans les options : la pose se rejoue à
+    /// l'identique.
+    Stamp {
+        /// Le tampon, sa page, sa place.
+        options: Box<acrux_features::rubber_stamp::Options>,
+    },
+    /// Poser une image sur la page, comme objet de son contenu
+    /// (« Ajouter une image »).
+    AddImage {
+        /// Indice de page.
+        page: usize,
+        /// L'image, décodée une fois : l'opération est appliquée deux fois
+        /// puis rejouée à chaque annulation, sans redécoder, et ses copies
+        /// partagent les mêmes octets.
+        image: std::sync::Arc<acrux_features::stamp::PreparedImage>,
+        /// Centre, en coordonnées de page.
+        center: acrux_core::Point,
+        /// Largeur et hauteur telles qu'on les voit, en points.
+        size: (f64, f64),
+    },
     /// Donner un statut à un commentaire, ou cocher sa case.
     AnnotState {
         /// Indice de page.
@@ -297,7 +320,8 @@ impl EditOp {
             | EditOp::AnnotSet { .. }
             | EditOp::AnnotRemove { .. }
             | EditOp::AnnotReply { .. }
-            | EditOp::AnnotState { .. } => Right::Annotate,
+            | EditOp::AnnotState { .. }
+            | EditOp::Stamp { .. } => Right::Annotate,
             EditOp::SetField { .. } | EditOp::ResetForm => Right::FillForms,
             EditOp::EditText { .. }
             | EditOp::ReplaceAll { .. }
@@ -306,7 +330,8 @@ impl EditOp {
             | EditOp::Attach { .. }
             | EditOp::Detach { .. }
             | EditOp::Paragraph { .. }
-            | EditOp::FlattenForm => Right::Modify,
+            | EditOp::FlattenForm
+            | EditOp::AddImage { .. } => Right::Modify,
         }
     }
 
@@ -368,6 +393,22 @@ impl EditOp {
             EditOp::FillSign { options } => {
                 acrux_features::fillsign::place(doc, options).map(|_| ())
             }
+            EditOp::Stamp { options } => {
+                acrux_features::rubber_stamp::place(doc, options).map(|_| ())
+            }
+            EditOp::AddImage {
+                page,
+                image,
+                center,
+                size,
+            } => acrux_features::edit_objects::add_image(
+                doc,
+                &page_of(doc, *page)?,
+                image,
+                *center,
+                *size,
+            )
+            .map(|_| ()),
             EditOp::Mark { marks } => mark_redactions(doc, marks).map(|_| ()),
             EditOp::ApplyRedactions => apply_redactions(doc).map(|_| ()),
             EditOp::Insert {
@@ -1242,5 +1283,63 @@ mod tests {
             "{refused:?}"
         );
         assert!(allowed.is_ok(), "{allowed:?}");
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)] // tests
+    fn un_tampon_et_une_image_se_posent_pareil_sur_chaque_copie() {
+        use acrux_features::create::{new_document, PageSetup};
+        use acrux_features::rubber_stamp::{Options, Source, StandardStamp};
+        let bytes = new_document(&PageSetup::default())
+            .unwrap()
+            .save_full()
+            .unwrap();
+        let png = acrux_graphics::encode_png_rgb(3, 2, &[90; 18]);
+        let image = std::sync::Arc::new(acrux_features::stamp::prepare_image(&png).unwrap());
+        let stamp = EditOp::Stamp {
+            options: Box::new(Options {
+                dynamic: Some("par Nina, le 23/09/2026 à 14:05".into()),
+                meta: AnnotMeta::fresh(Some("Nina")),
+                ..Options::new(
+                    Source::Standard(StandardStamp::Approved),
+                    0,
+                    acrux_core::Point::new(200.0, 300.0),
+                )
+            }),
+        };
+        let add = EditOp::AddImage {
+            page: 0,
+            image,
+            center: acrux_core::Point::new(300.0, 400.0),
+            size: (90.0, 60.0),
+        };
+        assert_eq!(stamp.required_right(), Right::Annotate);
+        assert_eq!(add.required_right(), Right::Modify);
+        // Le document affiché et la copie du fil de rendu reçoivent la même
+        // opération : ils doivent finir identiques.
+        let copies: Vec<(String, String)> = (0..2)
+            .map(|_| {
+                let doc = Document::from_bytes(bytes.clone()).unwrap();
+                stamp.apply(&doc).unwrap();
+                add.clone().apply(&doc).unwrap();
+                let doc = Document::from_bytes(doc.save_full().unwrap()).unwrap();
+                let pages = collect_pages(&doc).unwrap();
+                let annots =
+                    acrux_features::annotations::list_annotations(&doc, &pages[0]).unwrap();
+                let objects = acrux_features::edit_objects::list(&doc, &pages[0]).unwrap();
+                assert_eq!(annots.len(), 1);
+                assert_eq!(annots[0].subtype, "Stamp");
+                assert_eq!(objects.len(), 1);
+                assert_eq!(objects[0].kind, acrux_features::edit_objects::Kind::Image);
+                (
+                    format!(
+                        "{:?} {:?} {:?}",
+                        annots[0].rect, annots[0].name, annots[0].contents
+                    ),
+                    format!("{:?}", objects[0].bbox),
+                )
+            })
+            .collect();
+        assert_eq!(copies[0], copies[1]);
     }
 }

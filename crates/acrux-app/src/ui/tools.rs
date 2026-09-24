@@ -81,6 +81,7 @@ const ROWS: &[Row] = &[
         Command::EditObjects,
         true,
     ),
+    Row::Tool("Ajouter une image", Icon::Image, Command::AddImage, true),
     Row::Heading("Commenter"),
     Row::Tool("Surligner", Icon::Highlight, Command::HighlightTool, true),
     Row::Tool("Poser une note", Icon::Note, Command::NoteTool, true),
@@ -88,6 +89,7 @@ const ROWS: &[Row] = &[
     // qui s'ouvre avec le rectangle : une seule ligne ici.
     Row::Tool("Dessiner", Icon::Rectangle, Command::RectangleTool, true),
     Row::Tool("Zone de texte", Icon::TextBox, Command::TextBoxTool, true),
+    Row::Tool("Tamponner", Icon::Stamp, Command::StampTool, true),
     // Souligner, barrer, insérer, remplacer… : la barre des commentaires
     // les tient tous ensemble, au-dessus de la page.
     Row::Tool(
@@ -139,6 +141,12 @@ const ROWS: &[Row] = &[
         true,
     ),
     Row::Heading("Document"),
+    Row::Tool(
+        "Nouveau PDF vierge",
+        Icon::PageInsert,
+        Command::NewBlank,
+        false,
+    ),
     Row::Tool("Exporter", Icon::Export, Command::Export, true),
     Row::Tool(
         "Joindre un fichier",

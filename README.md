@@ -229,6 +229,15 @@ centre), `--rotate deg`, `--place x0,y0,x1,y1`, `--crop x0,y0,x1,y1`, `--order
 devant|derriere|avancer|reculer`, `--delete`, `--image f.png` pour en remplacer une, et
 `--object 2,4,7 --align gauche|centre-x|droite|haut|centre-y|bas` pour en aligner plusieurs ;
 l'objet est encadré dans le flux et **tout le reste est recopié octet pour octet** ;
+`stamp` pose un **tampon d'Acrobat** en annotation `/Stamp` : l'un des douze (`approuve`,
+`refuse`, `brouillon`, `confidentiel`, `final`, `termine`, `commentaire`, `information`, `recu`,
+`paye`, `non-approuve`, `nul` ; les noms anglais valent aussi, `--list` les donne), à
+l'apparence vectorielle (double cadre arrondi, fond teinté, capitales), en haut à droite par
+défaut, `--at x,y` ou dans un `--rect` ; `--dynamic` ajoute l'auteur (`--author`), la date et
+l'heure (`--utc-offset +02:00`), `--image cachet.png` tamponne une image, `--text … --color
+r,g,b` un texte libre, `--lang en` l'écrit en anglais ; sur une page tournée, le tampon reste
+droit ; `add-image` pose une **image comme objet de la page** (`--at x,y`, `--width` ou
+`--height`, sinon à 96 ppp dans la limite de la page), sans réécrire le contenu d'origine ;
 `fillsign` **remplit et signe** — l'outil courant d'Acrobat, celui qui n'a rien de
 cryptographique : `place --page N --rect x0,y0,x1,y1` avec `--draw traits.txt` (une signature
 **tracée** au pointeur : le relevé devient un contour à largeur variable, effilé aux bouts et
@@ -335,7 +344,9 @@ Un **modèle 3D** (annotation `/3D` au format U3D) s'affiche sur la page ; un cl
 tourne en glissant, la molette s'en approche, `Échap` le referme.
 
 Ouvrir une **image** (PNG, JPEG, BMP, GIF, TIFF) la convertit en PDF : un TIFF de scanner donne
-une page par feuille, et `Ctrl+S` demande où ranger le document obtenu.
+une page par feuille, et `Ctrl+S` demande où ranger le document obtenu. « Nouveau PDF vierge » et
+« Nouveau PDF depuis le presse-papiers » (palette, colonne d'outils) en font autant d'une page
+blanche, ou de l'image ou du texte copiés.
 
 | Modifier | |
 | --- | --- |
@@ -349,6 +360,8 @@ une page par feuille, et `Ctrl+S` demande où ranger le document obtenu.
 | `N` | poser une note à la position de la souris |
 | « Outils de commentaire » (colonne de droite, palette) | **barre des commentaires** : surligner, souligner, barrer, souligner d'un trait ondulé, **insérer du texte** (signe « ^ » là où l'on clique), **remplacer le texte** (passage barré et texte proposé, un seul commentaire), poser une note ; `Échap` éteint l'outil, puis ferme la barre. Un passage de plusieurs lignes fait une seule annotation par page, et se défait d'un seul `Ctrl+Z` |
 | « Dessiner », « Zone de texte » (colonne de droite, palette, barre des commentaires) | **rectangle, ellipse, ligne, flèche, crayon** : on glisse, l'aperçu suit, `Maj` donne un carré, un cercle, un angle de 45° ; le crayon fait plusieurs traits en un dessin (`Ctrl+Z` retire le dernier, `Échap` le pose). **Zone de texte** et **légende** : un clic, et l'on tape sur place (`Entrée` passe à la ligne, `Ctrl+Z` défait la frappe, `Échap` ou un clic ailleurs la pose). Couleur, remplissage, épaisseur, opacité, corps, police, cadre et fond se règlent dans la barre |
+| « Tamponner » (colonne de droite, palette, barre des commentaires) | les **douze tampons d'Acrobat** (Approuvé, Confidentiel, Brouillon…), dessinés tels qu'ils seront posés ; « Ajouter mon nom et la date » en fait un tampon dynamique, « Depuis une image… » tamponne un cachet ou une signature. Le tampon suit le pointeur, un clic le pose et le sélectionne (on l'agrandit aussitôt, proportions gardées) ; `Maj+clic` en pose d'autres |
+| « Ajouter une image » (colonne de droite, palette), `Ctrl+V` sur la page | poser une image choisie (un clic la place) ou **celle du presse-papiers** (au milieu de la vue) ; elle devient un objet de la page, sélectionné dans « Modifier les objets » |
 | clic sur un commentaire | **le sélectionner** : glisser le déplace, les poignées le redimensionnent, `Suppr` le supprime, les flèches le décalent ; barre de propriétés (couleur, fond, épaisseur, opacité, texte, répondre, supprimer). Un surlignage se sélectionne au relâchement, sans voler la sélection du texte |
 | clic sur une note, double-clic sur un commentaire | sa **bulle** : auteur, date, statut, texte et réponses ; « Répondre » puis `Entrée` publie une réponse |
 | clic droit sur un commentaire | répondre, modifier le texte, statut (Accepté, Refusé, Annulé, Terminé), cocher, supprimer |

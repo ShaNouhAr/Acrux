@@ -530,6 +530,15 @@ impl Viewer {
                 (Command::InsertText, here),
                 rights.annotate,
             )
+            // L'image du presse-papiers, posée au milieu de la vue : le
+            // collage d'Acrobat. Sans image copiée, la commande le dit.
+            .item(
+                Some(Icon::Image),
+                tr("Coller une image"),
+                shortcut(Command::PasteImage),
+                (Command::PasteImage, now),
+                rights.modify,
+            )
             .separator()
             .item(
                 None,

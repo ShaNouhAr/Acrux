@@ -457,6 +457,16 @@ pub trait WindowHandle {
     fn set_clipboard_text(&mut self, text: &str);
     /// Texte du presse-papiers du système, s'il en contient.
     fn clipboard_text(&mut self) -> Option<String>;
+    /// Image du presse-papiers du système, s'il en contient une, rendue
+    /// comme les octets d'un **fichier** image (PNG ou BMP) : le décodeur
+    /// d'images du moteur la lit comme un fichier ouvert.
+    fn clipboard_image(&mut self) -> Option<Vec<u8>> {
+        None
+    }
+    /// Dialogue « Ouvrir » limité aux images (PNG, JPEG, BMP, GIF, TIFF).
+    fn open_image_dialog(&mut self) -> Option<PathBuf> {
+        None
+    }
     /// Ouvre une adresse `http(s)`/`mailto` dans l'application par défaut.
     /// Les autres schémas sont refusés par la plateforme.
     fn open_url(&mut self, url: &str);
@@ -503,6 +513,101 @@ pub fn system_language() -> String {
             .and_then(|v| v.get(..2).map(str::to_lowercase))
             .unwrap_or_else(|| "en".into())
     }
+}
+
+/// Décalage du fuseau horaire de la personne par rapport à UTC, en minutes
+/// (+120 à Paris l'été) : l'heure d'un tampon dynamique est celle de sa
+/// montre, pas celle de Greenwich.
+#[must_use]
+pub fn local_offset_minutes() -> i32 {
+    #[cfg(windows)]
+    {
+        win32::local_offset_minutes()
+    }
+    #[cfg(not(windows))]
+    {
+        0
+    }
+}
+
+/// Fait d'un DIB du presse-papiers (`CF_DIB`, `CF_DIBV5` : un
+/// `BITMAPINFOHEADER` suivi des pixels) un fichier BMP complet, en lui
+/// ajoutant l'en-tête de fichier de 14 octets.
+///
+/// Le seul champ délicat est `bfOffBits`, le début des pixels : après
+/// l'en-tête d'image viennent, pour un en-tête de 40 octets en
+/// `BI_BITFIELDS`, les trois masques de couleur (quatre en
+/// `BI_ALPHABITFIELDS`), puis la palette d'une image de 8 bits ou moins.
+/// Mal compté, l'image se décale de quelques pixels. Rend `None` pour un
+/// DIB tronqué ou illisible.
+#[must_use]
+pub fn dib_to_bmp(dib: &[u8]) -> Option<Vec<u8>> {
+    let u16_at = |at: usize| -> Option<u16> {
+        let b = dib.get(at..at + 2)?;
+        Some(u16::from_le_bytes([b[0], b[1]]))
+    };
+    let u32_at = |at: usize| -> Option<u32> {
+        let b = dib.get(at..at + 4)?;
+        Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    let header = usize::try_from(u32_at(0)?).ok()?;
+    if header < 12 || dib.len() < header {
+        return None;
+    }
+    // En-tête « cœur » (12 octets) : dimensions sur 16 bits, palette de
+    // triplets ; tous les autres commencent comme le BITMAPINFOHEADER.
+    let (width, height, bits, compression, used) = if header == 12 {
+        (
+            u32::from(u16_at(4)?),
+            u32::from(u16_at(6)?),
+            u16_at(10)?,
+            0,
+            0,
+        )
+    } else {
+        if header < 40 {
+            return None;
+        }
+        let height = i32::from_le_bytes(u32_at(8)?.to_le_bytes()).unsigned_abs();
+        (u32_at(4)?, height, u16_at(14)?, u32_at(16)?, u32_at(32)?)
+    };
+    if width == 0 || height == 0 || !matches!(bits, 1 | 4 | 8 | 16 | 24 | 32) {
+        return None;
+    }
+    let masks = match (header, compression) {
+        (40, 3) => 12,
+        (40, 6) => 16,
+        _ => 0,
+    };
+    let entry = if header == 12 { 3 } else { 4 };
+    let colors = if used > 0 {
+        usize::try_from(used).ok()?
+    } else if bits <= 8 {
+        1 << bits
+    } else {
+        0
+    };
+    let start = header + masks + entry * colors;
+    // Sans compression, la taille des pixels se calcule : des lignes
+    // alignées sur quatre octets. Un DIB plus court est tronqué.
+    if matches!(compression, 0 | 3 | 6) {
+        let row = (usize::try_from(width).ok()? * usize::from(bits)).div_ceil(32) * 4;
+        let needed = row.checked_mul(usize::try_from(height).ok()?)?;
+        if dib.len() < start.checked_add(needed)? {
+            return None;
+        }
+    } else if dib.len() < start {
+        return None;
+    }
+    let total = u32::try_from(14 + dib.len()).ok()?;
+    let offset = u32::try_from(14 + start).ok()?;
+    let mut out = Vec::with_capacity(14 + dib.len());
+    out.extend_from_slice(b"BM");
+    out.extend_from_slice(&total.to_le_bytes());
+    out.extend_from_slice(&[0; 4]);
+    out.extend_from_slice(&offset.to_le_bytes());
+    out.extend_from_slice(dib);
+    Some(out)
 }
 
 /// Remplit `out` d'octets du générateur cryptographique du système ; faux
@@ -552,6 +657,123 @@ pub fn run(
     {
         let _ = (title, width, height, maximised, app);
         Err("plateforme non prise en charge pour l'instant (Windows uniquement)".into())
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod dib_tests {
+    use super::dib_to_bmp;
+
+    /// En-tête BITMAPINFOHEADER de 40 octets.
+    fn info(width: i32, height: i32, bits: u16, compression: u32, used: u32) -> Vec<u8> {
+        let mut h = Vec::new();
+        h.extend_from_slice(&40u32.to_le_bytes());
+        h.extend_from_slice(&width.to_le_bytes());
+        h.extend_from_slice(&height.to_le_bytes());
+        h.extend_from_slice(&1u16.to_le_bytes());
+        h.extend_from_slice(&bits.to_le_bytes());
+        h.extend_from_slice(&compression.to_le_bytes());
+        h.extend_from_slice(&[0; 12]); // taille, résolutions
+        h.extend_from_slice(&used.to_le_bytes());
+        h.extend_from_slice(&0u32.to_le_bytes());
+        h
+    }
+
+    /// Couleur du pixel (x, y) de l'image, compté du haut, telle que la
+    /// voit tout le chemin du moteur : décodée, posée sur une page (200 pt
+    /// de large, centrée en 300, 400), puis rendue.
+    fn pixel(bmp: &[u8], x: u32, y: u32) -> [u8; 3] {
+        use acrux_features::{create, edit_objects, stamp};
+        let image = stamp::prepare_image(bmp).unwrap();
+        let (w, h) = (f64::from(image.width()), f64::from(image.height()));
+        let size = (200.0, 200.0 * h / w);
+        let doc = create::new_document(&create::PageSetup::default()).unwrap();
+        let pages = acrux_document::collect_pages(&doc).unwrap();
+        let center = acrux_core::Point::new(300.0, 400.0);
+        edit_objects::add_image(&doc, &pages[0], &image, center, size).unwrap();
+        let pages = acrux_document::collect_pages(&doc).unwrap();
+        let options = acrux_render::RenderOptions {
+            background: Some(acrux_graphics::Color::WHITE),
+            ..acrux_render::RenderOptions::default()
+        };
+        let bitmap = acrux_render::render_page(&doc, &pages[0], 1.0, &options).bitmap;
+        let top = 400.0 + size.1 / 2.0;
+        let (px, py) = (
+            200.0 + (f64::from(x) + 0.5) * size.0 / w,
+            top - (f64::from(y) + 0.5) * size.1 / h,
+        );
+        let height = pages[0].crop_box(&doc).height();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // dans la page
+        let p = bitmap
+            .pixel(px as u32, (height - py) as u32)
+            .unwrap_or([0; 4]);
+        [p[0], p[1], p[2]]
+    }
+
+    #[test]
+    fn un_dib_24_bits_devient_un_bmp_lisible() {
+        // 2 × 2, de bas en haut, lignes de 6 octets alignées sur 8.
+        let mut dib = info(2, 2, 24, 0, 0);
+        dib.extend_from_slice(&[0, 0, 255, 0, 255, 0, 0, 0]); // bas : rouge, vert
+        dib.extend_from_slice(&[255, 0, 0, 255, 255, 255, 0, 0]); // haut : bleu, blanc
+        let bmp = dib_to_bmp(&dib).unwrap();
+        assert_eq!(&bmp[..2], b"BM");
+        assert_eq!(u32::from_le_bytes([bmp[10], bmp[11], bmp[12], bmp[13]]), 54);
+        assert_eq!(acrux_features::stamp::image_size(&bmp).unwrap(), (2, 2));
+        assert_eq!(pixel(&bmp, 0, 0), [0, 0, 255]);
+        assert_eq!(pixel(&bmp, 1, 1), [0, 255, 0]);
+    }
+
+    #[test]
+    fn les_masques_dun_bitfields_decalent_les_pixels() {
+        let mut dib = info(1, 1, 32, 3, 0);
+        for mask in [0x00FF_0000u32, 0x0000_FF00, 0x0000_00FF] {
+            dib.extend_from_slice(&mask.to_le_bytes());
+        }
+        dib.extend_from_slice(&[0x20, 0x40, 0xC0, 0x00]); // B G R X
+        let bmp = dib_to_bmp(&dib).unwrap();
+        assert_eq!(
+            u32::from_le_bytes([bmp[10], bmp[11], bmp[12], bmp[13]]),
+            14 + 40 + 12
+        );
+        assert_eq!(pixel(&bmp, 0, 0), [0xC0, 0x40, 0x20]);
+    }
+
+    #[test]
+    fn une_palette_complete_suit_len_tete() {
+        // 8 bits, biClrUsed nul : 256 couleurs de palette.
+        let mut dib = info(1, 1, 8, 0, 0);
+        for i in 0..=255u8 {
+            dib.extend_from_slice(&[i, 255 - i, 7, 0]);
+        }
+        dib.extend_from_slice(&[3, 0, 0, 0]);
+        let bmp = dib_to_bmp(&dib).unwrap();
+        assert_eq!(
+            u32::from_le_bytes([bmp[10], bmp[11], bmp[12], bmp[13]]),
+            14 + 40 + 1024
+        );
+        assert_eq!(pixel(&bmp, 0, 0), [7, 252, 3]);
+    }
+
+    #[test]
+    fn une_hauteur_negative_se_lit_de_haut_en_bas() {
+        let mut dib = info(1, -2, 24, 0, 0);
+        dib.extend_from_slice(&[0, 0, 255, 0]); // haut : rouge
+        dib.extend_from_slice(&[255, 0, 0, 0]); // bas : bleu
+        let bmp = dib_to_bmp(&dib).unwrap();
+        assert_eq!(acrux_features::stamp::image_size(&bmp).unwrap(), (1, 2));
+        assert_eq!(pixel(&bmp, 0, 0), [255, 0, 0]);
+        assert_eq!(pixel(&bmp, 0, 1), [0, 0, 255]);
+    }
+
+    #[test]
+    fn un_dib_tronque_est_refuse() {
+        let mut dib = info(4, 4, 24, 0, 0);
+        dib.extend_from_slice(&[0; 20]);
+        assert!(dib_to_bmp(&dib).is_none());
+        assert!(dib_to_bmp(&[40, 0, 0]).is_none());
+        assert!(dib_to_bmp(&[]).is_none());
     }
 }
 

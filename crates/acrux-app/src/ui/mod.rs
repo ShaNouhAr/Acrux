@@ -30,6 +30,7 @@
 //! | `paint`   | coins arrondis, ombres douces, aplats translucides    |
 //! | `palette` | palette de commandes filtrable (Ctrl+Maj+P)           |
 //! | `pickers` | liste des polices du système et nuancier (avec, au besoin, « aucune couleur ») |
+//! | `stamps`  | sélecteur de tampons : les douze tampons dessinés tels qu'ils seront posés, les images récentes, le nom et la date |
 //! | `signpanel` | panneau « remplir et signer » : signatures, encre  |
 //! | `sign`    | outil « remplir et signer » : barre et capture        |
 //! | `objects` | outil « modifier » : boîte de sélection et poignées   |
@@ -64,6 +65,7 @@ pub mod protect;
 pub mod settings;
 pub mod sign;
 pub mod signpanel;
+pub mod stamps;
 pub mod tabs;
 pub mod text;
 pub mod theme;

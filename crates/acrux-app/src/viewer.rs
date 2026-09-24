@@ -88,6 +88,7 @@ mod formfill;
 mod history;
 mod protect;
 mod search;
+mod stamps;
 mod status;
 mod three_d;
 mod zoom;
@@ -439,6 +440,8 @@ enum AnnotTool {
     TextBox,
     /// Un clic désigne un point, un glisser place la zone de texte reliée.
     Callout,
+    /// Un clic pose le tampon choisi (Approuvé, Confidentiel…).
+    Stamp,
 }
 
 /// Les outils de la barre des commentaires, dans l'ordre de ses boutons.
@@ -462,6 +465,7 @@ const COMMENT_TOOLS: &[AnnotTool] = &[
     AnnotTool::Pencil,
     AnnotTool::TextBox,
     AnnotTool::Callout,
+    AnnotTool::Stamp,
 ];
 
 impl AnnotTool {
@@ -519,6 +523,10 @@ impl AnnotTool {
                 "Légende",
                 "Cliquez le point à désigner, glissez jusqu'à la zone, puis tapez.",
             ),
+            AnnotTool::Stamp => (
+                "Tamponner",
+                "Cliquez sur la page pour poser le tampon ; Maj+clic pour en poser d'autres.",
+            ),
         }
     }
 
@@ -540,6 +548,7 @@ impl AnnotTool {
             AnnotTool::Pencil => Command::PencilTool,
             AnnotTool::TextBox => Command::TextBoxTool,
             AnnotTool::Callout => Command::CalloutTool,
+            AnnotTool::Stamp => Command::StampTool,
         }
     }
 
@@ -590,6 +599,7 @@ impl AnnotTool {
             AnnotTool::Pencil => Icon::Pencil,
             AnnotTool::TextBox => Icon::TextBox,
             AnnotTool::Callout => Icon::Callout,
+            AnnotTool::Stamp => Icon::Stamp,
         }
     }
 
@@ -1232,6 +1242,9 @@ pub struct Viewer {
     /// Le nuancier ou la liste déroulée (`draw_popup`) règle l'annotation
     /// sélectionnée, pas l'outil de dessin.
     popup_for_annot: bool,
+    /// Outil « Tamponner » et « Ajouter une image » (voir
+    /// `viewer/stamps.rs`) : sélecteur, aperçus, image en attente.
+    stamps: stamps::StampState,
     /// Ce que vise la commande en cours : la page, l'onglet ou le document
     /// récent sur lequel on a fait un clic droit. `Target::Current` hors
     /// d'un menu (voir `run_on`).
@@ -1384,6 +1397,7 @@ impl Viewer {
             annot_ghost: None,
             comment_menu: None,
             popup_for_annot: false,
+            stamps: stamps::StampState::default(),
         }
     }
 
@@ -3182,6 +3196,11 @@ impl Viewer {
         let (hovered, rect) = self.mode_bar.hovered()?;
         let index = match hovered {
             crate::ui::modebar::Hovered::Tool(index) => index,
+            crate::ui::modebar::Hovered::Setting(_)
+                if self.annot_tool == Some(AnnotTool::Stamp) =>
+            {
+                return Some((lang::tr("Choisir un tampon").to_string(), rect));
+            }
             crate::ui::modebar::Hovered::Setting(index) => {
                 let setting = draw::settings_for(self.annot_tool?).get(index)?;
                 return Some((lang::tr(setting.label()).to_string(), rect));
@@ -3467,71 +3486,17 @@ impl Viewer {
                 name: name.clone(),
             }],
             &acrux_features::create::ImageLayout::default(),
-        )
-        .and_then(|doc| doc.save_full());
-        let bytes = match made {
-            Ok(b) => b,
-            Err(e) => {
-                self.alert(
-                    "Ouverture impossible",
-                    &format!(
-                        "{}
-
-{e}",
-                        path.display()
-                    ),
-                );
-                return Some(false);
-            }
-        };
-        // Le fil de rendu relit le document sur le disque : le PDF fabriqué a
-        // donc besoin d'un fichier, qui va dans le dossier temporaire tant
-        // que l'utilisateur n'a pas dit où le ranger.
-        let dir = std::env::temp_dir().join("acrux-images");
-        let _ = std::fs::create_dir_all(&dir);
-        let target = dir.join(format!("{name}.pdf"));
-        if let Err(e) = std::fs::write(&target, &bytes) {
-            self.alert(
-                "Ouverture impossible",
-                &format!(
-                    "{}
-
-{e}",
-                    target.display()
-                ),
-            );
-            return Some(false);
-        }
-        match Document::load(&target).and_then(|doc| {
-            let pages = collect_pages(&doc)?;
-            Ok((doc, pages))
-        }) {
-            Ok((doc, pages)) => {
-                let count = pages.len();
-                self.finish_open(target, doc, pages, None, window);
-                if let Some(l) = &mut self.loaded {
-                    l.temporary = true;
-                    l.modified = true;
-                }
-                self.set_notice(crate::ui::lang::trf(
-                    "Image convertie en PDF ({} page(s)) — Ctrl+S pour l'enregistrer",
-                    &[&count.to_string()],
-                ));
-                Some(true)
-            }
-            Err(e) => {
-                self.alert(
-                    "Ouverture impossible",
-                    &format!(
-                        "{}
-
-{e}",
-                        path.display()
-                    ),
-                );
-                Some(false)
-            }
-        }
+        );
+        let count = made
+            .as_ref()
+            .ok()
+            .and_then(|doc| collect_pages(doc).ok())
+            .map_or(0, |pages| pages.len());
+        let notice = crate::ui::lang::trf(
+            "Image convertie en PDF ({} page(s)) — Ctrl+S pour l'enregistrer",
+            &[&count.to_string()],
+        );
+        Some(self.open_made(&name, made, ("Ouverture impossible", notice), window))
     }
 
     /// Installe un document analysé (et authentifié) comme document courant.
@@ -3664,7 +3629,10 @@ impl Viewer {
     /// Hauteur de la barre d'un outil d'annotation, ou de la barre des
     /// commentaires.
     fn mode_bar_height(&self) -> u32 {
-        if (self.annot_tool.is_some() || self.comment_bar) && !self.fullscreen && !self.reading {
+        if (self.annot_tool.is_some() || self.comment_bar || self.stamps.pending.is_some())
+            && !self.fullscreen
+            && !self.reading
+        {
             ModeBar::height(self.dpi_scale as f32).max(0) as u32
         } else {
             0
@@ -3684,6 +3652,7 @@ impl Viewer {
         // Changer d'outil termine le dessin ou la zone en cours.
         self.commit_draft();
         self.draw_popup = None;
+        self.close_stamp_tools();
         if self.annot_tool == Some(tool) {
             self.annot_tool = None;
             log_line(&format!("outil : {tool:?} éteint"));
@@ -3701,6 +3670,10 @@ impl Viewer {
         self.annot_tool = Some(tool);
         self.comment_bar = tool.in_comment_bar();
         log_line(&format!("outil : {tool:?}"));
+        // Comme Acrobat : choisir l'outil déroule les tampons.
+        if tool == AnnotTool::Stamp {
+            self.open_stamp_picker(None);
+        }
         self.clamp_scroll();
         // Du texte déjà sélectionné est traité tout de suite : choisir
         // « surligner » après avoir sélectionné fait ce qu'on attend.
@@ -3745,6 +3718,7 @@ impl Viewer {
         // Ce qui est dessiné ou tapé est posé avant qu'on quitte l'outil.
         self.commit_draft();
         self.draw_popup = None;
+        self.close_stamp_tools();
         self.annot_tool = None;
         self.comment_bar = false;
     }
@@ -3760,6 +3734,10 @@ impl Viewer {
     /// elle : ouverte depuis longtemps, on l'a oubliée, et c'est eux qu'on
     /// voit.
     fn escape_comment_tools(&mut self) -> bool {
+        if self.stamps.pending.take().is_some() {
+            log_line("image : pose annulée");
+            return true;
+        }
         if self.annot_tool.is_some() {
             self.annot_tool = None;
             if !self.comment_bar {
@@ -4005,10 +3983,12 @@ impl Viewer {
             active: if let Some(tool) = self.annot_tool.filter(|t| {
                 matches!(
                     t,
-                    AnnotTool::Highlight | AnnotTool::Note | AnnotTool::Redact
+                    AnnotTool::Highlight | AnnotTool::Note | AnnotTool::Redact | AnnotTool::Stamp
                 )
             }) {
                 Some(tool.command())
+            } else if self.stamps.pending.is_some() {
+                Some(Command::AddImage)
             } else if let Some(tool) = self.annot_tool.filter(|t| t.draws()) {
                 // Les formes et le crayon s'allument sous « Dessiner », la
                 // zone de texte et la légende sous « Zone de texte ».
@@ -4476,6 +4456,15 @@ impl Viewer {
             Command::PencilTool => self.toggle_annot_tool(AnnotTool::Pencil, window),
             Command::TextBoxTool => self.toggle_annot_tool(AnnotTool::TextBox, window),
             Command::CalloutTool => self.toggle_annot_tool(AnnotTool::Callout, window),
+            Command::StampTool => self.toggle_annot_tool(AnnotTool::Stamp, window),
+            Command::AddImage => self.add_image_command(window),
+            Command::PasteImage => {
+                if !self.paste_image(window) {
+                    self.set_notice(lang::tr("Le presse-papiers ne contient pas d'image").into());
+                }
+            }
+            Command::NewBlank => self.new_blank(window),
+            Command::NewFromClipboard => self.new_from_clipboard(window),
             Command::CommentBar => self.toggle_comment_bar(window),
             Command::AddTextBox => {
                 self.close_annot_tools();
@@ -5611,6 +5600,8 @@ impl Viewer {
         self.drop_annot_selection();
         self.annot_ghost = None;
         self.comment_menu = None;
+        // L'image en attente et le sélecteur visaient l'ancien document.
+        self.close_stamp_tools();
         self.panel = Panel::new();
         self.title_dirty = true;
     }
@@ -7573,6 +7564,7 @@ impl Viewer {
             || self.modal_event(&event, window)
             || self.zoom_menu_event(&event, window)
             || self.draw_popup_event(&event, window)
+            || self.stamp_picker_event(&event, window)
             || self.comment_menu_event(&event, window)
             || self.context_menu_event(&event, window)
             || self.field_menu_event(&event, window)
@@ -7962,6 +7954,12 @@ impl Viewer {
                             }
                         }
                         'd' | 'D' | '\u{4}' => self.show_properties(),
+                        // Rien d'autre ne l'a pris (champ, invite, texte en
+                        // saisie) : une image du presse-papiers se pose sur
+                        // la page, comme dans Acrobat.
+                        'v' | 'V' | '\u{16}' => {
+                            let _ = self.paste_image(window);
+                        }
                         'f' | 'F' | '\u{6}' => self.open_search_ui(),
                         // Ctrl+G : le champ de page prend le focus, prêt à
                         // recevoir un numéro ou une étiquette.
@@ -8094,7 +8092,9 @@ impl Viewer {
                         self.form_bar_click(x, y, window);
                     }
                 } else if y < top
-                    && (self.annot_tool.is_some() || self.comment_bar)
+                    && (self.annot_tool.is_some()
+                        || self.comment_bar
+                        || self.stamps.pending.is_some())
                     && !self.edit_on()
                 {
                     if self.prompt.is_none() {
@@ -8188,6 +8188,10 @@ impl Viewer {
                             self.start_note();
                         } else if self.annot_tool == Some(AnnotTool::Insert) {
                             self.start_insert(x, y);
+                        } else if self.annot_tool == Some(AnnotTool::Stamp) {
+                            self.place_stamp(x, y, modifiers.shift);
+                        } else if self.place_pending_image(x, y) {
+                            // L'image en attente est posée, et sélectionnée.
                         } else if self.draw_mouse_down(x, y, modifiers.shift, clicks) {
                             // Un outil de dessin a pris le clic : sur un
                             // lien ou un champ aussi, on dessine.
@@ -8523,8 +8527,11 @@ impl Viewer {
                             Some(AnnotTool::Note) => Cursor::Note,
                             Some(AnnotTool::Redact) => Cursor::Redact,
                             Some(AnnotTool::Highlight) => Cursor::Highlight,
+                            Some(AnnotTool::Stamp) => Cursor::Place,
                             _ => Cursor::IBeam,
                         }
+                    } else if in_view && self.stamps.pending.is_some() {
+                        Cursor::Place
                     } else if let Some(cursor) = in_view.then(|| self.annot_cursor(x, y)).flatten()
                     {
                         // La main qui déplace une annotation, la flèche
@@ -8549,7 +8556,9 @@ impl Viewer {
                     window.set_cursor(cursor);
                     // L'aperçu de ce qu'on va poser suit le pointeur : il
                     // faut repeindre à chaque mouvement.
-                    if hover_changed || sign_item.is_some_and(|i| i != SignItem::Draw) {
+                    let placing =
+                        self.annot_tool == Some(AnnotTool::Stamp) || self.stamps.pending.is_some();
+                    if hover_changed || placing || sign_item.is_some_and(|i| i != SignItem::Draw) {
                         window.request_redraw();
                     }
                     return;
@@ -8633,6 +8642,18 @@ impl Viewer {
                 title,
                 hint,
             );
+        } else if self.stamps.pending.is_some() {
+            self.mode_bar.paint(
+                frame,
+                text,
+                &mut self.raster,
+                &theme,
+                dpi,
+                y,
+                Icon::Image,
+                "Ajouter une image",
+                "Cliquez sur la page pour poser l'image ; Échap pour renoncer.",
+            );
         }
     }
 
@@ -8678,6 +8699,8 @@ impl Viewer {
             self.paint_inking(&mut view);
             self.paint_draft(&mut view);
             self.paint_sign_ghost(&mut view);
+            self.paint_stamp_ghost(&mut view);
+            self.paint_pending_image(&mut view);
             if self.sign_panel.is_some() {
                 self.paint_placed(&mut view);
             }
@@ -8723,6 +8746,7 @@ impl Viewer {
         self.paint_tip(frame);
         self.paint_zoom_menu(frame);
         self.paint_draw_popup(frame);
+        self.paint_stamp_picker(frame);
         self.paint_comment_menu(frame);
         self.paint_field_menu(frame);
         self.paint_capture(frame);

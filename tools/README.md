@@ -37,6 +37,12 @@ l'écran : ouverture et enregistrement de fichier (`ACRUX_OPEN_FILE`, `ACRUX_SAV
 ` et `
 ` en toutes
 lettres) : le vrai presse-papiers de la machine n'est jamais lu ni écrit.
+`ACRUX_CLIPBOARD_IMAGE` fait de même pour une **image** : le chemin d'un fichier image (PNG,
+BMP…) que `Ctrl+V` sur la page et « Nouveau PDF depuis le presse-papiers » liront comme si on
+l'avait copiée. `ACRUX_OPEN_IMAGE` répond au choix d'une image (« Ajouter une image », « Depuis
+une image… » du sélecteur de tampons), comme `ACRUX_OPEN_FILE` à l'ouverture d'un document.
+Le journal note `tampon : …` (sélecteur, choix, `tampon posé page N …`) et `image : …`
+(`image posée page N en (x, y), L × H pt`).
 
 Les captures sont des PPM bruts ; `tools/ppm2png.py` les convertit en PNG pour les regarder :
 `python tools/ppm2png.py capture.ppm capture.png [pas] [x,y,largeur,hauteur]` (le pas sous-échantillonne,

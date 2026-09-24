@@ -164,6 +164,9 @@ pub const MAX_SIGNATURES: usize = 3;
 /// palette, avant l'ordre habituel, sans la faire défiler.
 pub const MAX_RECENT_COMMANDS: usize = 5;
 
+/// Images de tampon retenues : une rangée du sélecteur de tampons.
+pub const MAX_STAMP_IMAGES: usize = crate::ui::stamps::MAX_IMAGES;
+
 /// Réglages persistants.
 // Plusieurs booléens indépendants : ce sont des cases à cocher de l'interface,
 // les regrouper dans un type dédié n'apporterait rien au lecteur.
@@ -215,6 +218,14 @@ pub struct Prefs {
     /// et corps des zones de texte), sous la forme texte que lit
     /// `viewer::draw::DrawStyle::decode` ; vide : ceux par défaut.
     pub draw_style: String,
+    /// Dernier tampon choisi : la clé d'un tampon standard (`approuve`…) ;
+    /// vide pour la première image récente, ou pour « Approuvé » s'il n'y
+    /// en a pas.
+    pub stamp: String,
+    /// Le tampon ajoute le nom et la date (tampon dynamique).
+    pub stamp_dynamic: bool,
+    /// Images choisies comme tampon, de la plus récente à la plus ancienne.
+    pub stamp_images: Vec<PathBuf>,
     /// Documents ouverts récemment, du plus récent au plus ancien.
     pub recent: Vec<PathBuf>,
     /// Commandes lancées depuis la palette, de la plus récente à la plus
@@ -246,6 +257,9 @@ impl Default for Prefs {
             sign_weight: 1,
             sign_color: 0,
             draw_style: String::new(),
+            stamp: String::new(),
+            stamp_dynamic: false,
+            stamp_images: Vec::new(),
             recent: Vec::new(),
             recent_commands: Vec::new(),
         }
@@ -350,6 +364,11 @@ impl Prefs {
                 "encre-epaisseur" => p.sign_weight = value.parse().unwrap_or(1).min(2),
                 "encre-couleur" => p.sign_color = value.parse().unwrap_or(0),
                 "dessin" => p.draw_style = value.to_string(),
+                "tampon" => p.stamp = value.to_string(),
+                "tampon-dynamique" => p.stamp_dynamic = value == "1" || value == "true",
+                "tampon-image" if !value.is_empty() && p.stamp_images.len() < MAX_STAMP_IMAGES => {
+                    p.stamp_images.push(PathBuf::from(value));
+                }
                 "signature" if !value.is_empty() && p.signatures.len() < MAX_SIGNATURES => {
                     p.signatures.push(value.to_string());
                 }
@@ -398,6 +417,13 @@ impl Prefs {
         let _ = writeln!(out, "encre-couleur={}", self.sign_color);
         if !self.draw_style.is_empty() {
             let _ = writeln!(out, "dessin={}", self.draw_style);
+        }
+        if !self.stamp.is_empty() {
+            let _ = writeln!(out, "tampon={}", self.stamp);
+        }
+        let _ = writeln!(out, "tampon-dynamique={}", u8::from(self.stamp_dynamic));
+        for path in self.stamp_images.iter().take(MAX_STAMP_IMAGES) {
+            let _ = writeln!(out, "tampon-image={}", path.display());
         }
         if let Some(value) = &self.initials {
             let _ = writeln!(out, "initials={value}");
@@ -465,6 +491,9 @@ mod tests {
             sign_weight: 0,
             sign_color: 3,
             draw_style: "stroke=1F4E99;width=4".into(),
+            stamp: "confidentiel".into(),
+            stamp_dynamic: true,
+            stamp_images: vec![PathBuf::from(r"C:\docs\cachet.png")],
             recent: vec![PathBuf::from(r"C:\docs\a.pdf"), PathBuf::from(r"C:\b.pdf")],
             recent_commands: vec!["toggle-theme".into(), "print".into()],
         };

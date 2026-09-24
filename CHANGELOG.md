@@ -9,6 +9,41 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 
 ## 0.23.0 — non publiée
 
+- **Tamponner, comme dans Acrobat.** L'outil « Tamponner » (barre des
+  commentaires, colonne d'outils, palette) déroule les douze tampons
+  d'Acrobat — Approuvé, Refusé, Brouillon, Confidentiel, Final, Terminé,
+  Pour commentaire, Pour information, Reçu, Payé, Non approuvé, Nul —,
+  chacun **dessiné tel qu'il sera posé** : double cadre arrondi, fond teinté
+  qui laisse lire le texte dessous, libellé en capitales, vert, rouge ou
+  bleu. Le tampon suit le pointeur en transparence, un clic le pose, puis il
+  est **sélectionné** : on le déplace et on l'agrandit tout de suite, ses
+  proportions gardées, net à toutes les tailles. `Maj+clic` en pose
+  d'autres. La case « Ajouter mon nom et la date » en fait un **tampon
+  dynamique** (« par Nina, le 24/09/2026 à 14:05 », à l'heure de votre
+  fuseau) ; « Depuis une image… » tamponne une signature scannée, un logo ou
+  un cachet, et les images choisies restent proposées. Sur une page tournée,
+  le tampon s'affiche droit. Le choix est retenu d'une séance à l'autre.
+- **Ajouter une image sur la page.** « Ajouter une image » (colonne d'outils,
+  palette) choisit un fichier (PNG, JPEG, BMP, GIF, TIFF) ; un cadre à sa
+  taille réelle suit le pointeur, un clic la pose. `Ctrl+V` sur la page pose
+  **l'image du presse-papiers** — une capture d'écran, une image copiée
+  d'un navigateur, transparence comprise — au milieu de ce qu'on voit. Dans
+  les deux cas l'image devient un objet de la page, aussitôt sélectionné dans
+  « Modifier les objets » : on la déplace, on l'agrandit, on la supprime. Le
+  contenu d'origine n'est pas réécrit, et un JPEG est incorporé sans perte.
+- **Nouveau PDF vierge, nouveau PDF depuis le presse-papiers** (palette,
+  colonne d'outils) : une page A4 blanche, ou un document fait de l'image ou
+  du texte copiés. Le premier `Ctrl+S` demande où l'enregistrer.
+- **`acr stamp`** pose un tampon d'Acrobat (`acr stamp doc.pdf 1 confidentiel
+  -o sortie.pdf`, `--list` pour les douze noms, en français ou en anglais),
+  dynamique (`--dynamic --author Nina --utc-offset +02:00`), d'image
+  (`--image cachet.png`) ou de texte libre (`--text … --color r,g,b`), en
+  haut à droite par défaut, ou `--at x,y`, ou dans un `--rect` ; `--lang en`
+  l'écrit en anglais. **`acr add-image`** pose une image comme objet de la
+  page (`--at x,y`, `--width` ou `--height`).
+- Ouvrir une image ne met plus son fichier PDF temporaire dans les documents
+  récents : il disparaîtrait.
+
 - **Gérer les commentaires sur la page, comme dans Acrobat.** Un clic sur une
   annotation — une des nôtres ou celle d'un autre logiciel — la sélectionne :
   cadre d'accent, poignées, et au-dessus une **barre de propriétés** (couleur,

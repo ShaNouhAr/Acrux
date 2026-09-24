@@ -246,6 +246,10 @@ const WM_SETCURSOR: UINT = 0x0020;
 const WM_LBUTTONDBLCLK: UINT = 0x0203;
 const HTCLIENT: isize = 1;
 const CF_UNICODETEXT: UINT = 13;
+/// Image en DIB : un `BITMAPINFOHEADER` suivi des pixels.
+const CF_DIB: UINT = 8;
+/// Image en DIB à en-tête V5, qui peut porter l'alpha.
+const CF_DIBV5: UINT = 17;
 const GMEM_MOVEABLE: UINT = 0x0002;
 const GWLP_USERDATA: i32 = -21;
 const DIB_RGB_COLORS: UINT = 0;
@@ -372,6 +376,8 @@ extern "system" {
     fn SetClipboardData(format: UINT, handle: *mut c_void) -> *mut c_void;
     fn GetClipboardData(format: UINT) -> *mut c_void;
     fn CloseClipboard() -> BOOL;
+    fn IsClipboardFormatAvailable(format: UINT) -> BOOL;
+    fn RegisterClipboardFormatW(name: *const u16) -> UINT;
 }
 
 /// Réveil d'une fenêtre depuis un autre fil.
@@ -500,6 +506,58 @@ extern "system" {
     fn GlobalUnlock(handle: *mut c_void) -> BOOL;
     fn GlobalFree(handle: *mut c_void) -> *mut c_void;
     fn GlobalSize(handle: *mut c_void) -> usize;
+    fn GetTimeZoneInformation(info: *mut TIME_ZONE_INFORMATION) -> DWORD;
+}
+
+/// `SYSTEMTIME` : une date découpée, seize octets.
+#[repr(C)]
+struct SYSTEMTIME {
+    fields: [u16; 8],
+}
+
+/// `TIME_ZONE_INFORMATION` : le décalage du fuseau et ses deux régimes.
+#[repr(C)]
+struct TIME_ZONE_INFORMATION {
+    Bias: LONG,
+    StandardName: [u16; 32],
+    StandardDate: SYSTEMTIME,
+    StandardBias: LONG,
+    DaylightName: [u16; 32],
+    DaylightDate: SYSTEMTIME,
+    DaylightBias: LONG,
+}
+
+/// `TIME_ZONE_ID_DAYLIGHT` : l'heure d'été est en vigueur.
+const TIME_ZONE_ID_DAYLIGHT: DWORD = 2;
+
+/// Décalage du fuseau local par rapport à UTC, en minutes.
+///
+/// Windows donne le « biais » dans l'autre sens (UTC = local + biais), et
+/// celui de l'heure d'été ou d'hiver à part : on les additionne selon le
+/// régime en vigueur, puis on change le signe.
+#[must_use]
+pub fn local_offset_minutes() -> i32 {
+    let mut info = TIME_ZONE_INFORMATION {
+        Bias: 0,
+        StandardName: [0; 32],
+        StandardDate: SYSTEMTIME { fields: [0; 8] },
+        StandardBias: 0,
+        DaylightName: [0; 32],
+        DaylightDate: SYSTEMTIME { fields: [0; 8] },
+        DaylightBias: 0,
+    };
+    // SAFETY : `info` est une structure de la taille attendue, vivante et
+    // inscriptible pendant l'appel, qui ne retient pas le pointeur.
+    let regime = unsafe { GetTimeZoneInformation(&raw mut info) };
+    if regime == u32::MAX {
+        return 0;
+    }
+    let extra = if regime == TIME_ZONE_ID_DAYLIGHT {
+        info.DaylightBias
+    } else {
+        info.StandardBias
+    };
+    -(info.Bias + extra)
 }
 
 /// Copie du texte dans le presse-papiers (format Unicode).
@@ -556,6 +614,61 @@ fn clipboard_text(hwnd: HWND) -> Option<String> {
         }
         CloseClipboard();
         out
+    }
+}
+
+/// Copie le bloc d'un format du presse-papiers, ouvert par l'appelant.
+///
+/// # Safety
+/// Le presse-papiers doit être ouvert (`OpenClipboard`) par ce fil.
+unsafe fn clipboard_bytes(format: UINT) -> Option<Vec<u8>> {
+    // SAFETY : le presse-papiers est ouvert (contrat de la fonction). Le
+    // bloc rendu appartient au système : on le verrouille le temps de le
+    // copier, sans jamais lire au-delà de la taille que GlobalSize annonce,
+    // puis on le rend.
+    unsafe {
+        if IsClipboardFormatAvailable(format) == 0 {
+            return None;
+        }
+        let handle = GetClipboardData(format);
+        if handle.is_null() {
+            return None;
+        }
+        let src = GlobalLock(handle).cast::<u8>();
+        if src.is_null() {
+            return None;
+        }
+        let bytes = std::slice::from_raw_parts(src, GlobalSize(handle)).to_vec();
+        GlobalUnlock(handle);
+        Some(bytes)
+    }
+}
+
+/// Lit une image du presse-papiers, sous la forme d'un fichier.
+///
+/// Dans l'ordre : le format « PNG » que déposent les navigateurs et Office
+/// (il garde la transparence), puis `CF_DIBV5` et `CF_DIB`, que Windows
+/// fabrique lui-même à partir d'un `CF_BITMAP` — une capture d'écran
+/// arrive donc aussi par là, sans passer par GDI.
+fn clipboard_image(hwnd: HWND) -> Option<Vec<u8>> {
+    let png_name = wide("PNG");
+    // SAFETY : chaîne terminée par 0, vivante pendant l'appel ; les formats
+    // sont lus presse-papiers ouvert, et il est refermé sur tous les
+    // chemins.
+    unsafe {
+        let png = RegisterClipboardFormatW(png_name.as_ptr());
+        if OpenClipboard(hwnd) == 0 {
+            return None;
+        }
+        let found = if png == 0 {
+            None
+        } else {
+            clipboard_bytes(png).filter(|b| b.starts_with(&[0x89, b'P', b'N', b'G']))
+        }
+        .or_else(|| clipboard_bytes(CF_DIBV5).and_then(|d| super::dib_to_bmp(&d)))
+        .or_else(|| clipboard_bytes(CF_DIB).and_then(|d| super::dib_to_bmp(&d)));
+        CloseClipboard();
+        found
     }
 }
 
@@ -829,6 +942,27 @@ impl WindowHandle for Handle<'_> {
                 .map(|t| t.replace("\\r", "\r").replace("\\n", "\n"));
         }
         clipboard_text(self.state.hwnd)
+    }
+
+    fn clipboard_image(&mut self) -> Option<Vec<u8>> {
+        if headless() {
+            // Comme pour le texte : le mode invisible ne lit jamais le vrai
+            // presse-papiers. `ACRUX_CLIPBOARD_IMAGE` nomme le fichier image
+            // qu'un essai y aurait copié.
+            let path = std::env::var_os("ACRUX_CLIPBOARD_IMAGE")?;
+            return std::fs::read(path).ok();
+        }
+        clipboard_image(self.state.hwnd)
+    }
+
+    fn open_image_dialog(&mut self) -> Option<PathBuf> {
+        if let Some(scripted) = scripted_path("ACRUX_OPEN_IMAGE") {
+            return scripted.answer();
+        }
+        if headless_skips("choix d'une image") {
+            return None;
+        }
+        file_dialog(self.state.hwnd, false, "", IMAGE_TYPES, "Choisir une image")
     }
 
     fn open_url(&mut self, url: &str) {
@@ -1148,12 +1282,17 @@ const OPEN_TYPES: &[(&str, &str)] = &[
     ("Images", "png;jpg;jpeg;bmp;gif;tif;tiff"),
 ];
 
+/// Ce qu'accepte le choix d'une image (« Ajouter une image », tampon).
+const IMAGE_TYPES: &[(&str, &str)] = &[("Images", "png;jpg;jpeg;bmp;gif;tif;tiff")];
+
+/// Dialogue standard « Ouvrir » ou « Enregistrer sous ». `title` le nomme ;
+/// vide à l'ouverture, c'est « Ouvrir un document ».
 fn file_dialog(
     hwnd: HWND,
     save: bool,
     suggested: &str,
     types: &[(&str, &str)],
-    save_title: &str,
+    title: &str,
 ) -> Option<PathBuf> {
     let mut buffer = vec![0u16; 32768];
     if save {
@@ -1172,8 +1311,8 @@ fn file_dialog(
     }
     spec.push_str("Tous les fichiers\0*.*\0");
     let filter = wide(&spec);
-    let title = wide(if save {
-        save_title
+    let title = wide(if save || !title.is_empty() {
+        title
     } else {
         "Ouvrir un document"
     });

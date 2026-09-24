@@ -1331,6 +1331,11 @@ impl Viewer {
         let Some(tool) = self.annot_tool else {
             return Vec::new();
         };
+        // Le tampon n'a qu'un réglage : lequel. Son bouton déroule le
+        // sélecteur des tampons (`viewer/stamps.rs`).
+        if tool == AnnotTool::Stamp {
+            return vec![Setting::Choice(self.stamp_label())];
+        }
         let s = &self.draw_style;
         let color = |c: Option<[f64; 3]>, swatch| Setting::Color {
             color: c.map(preview_rgb),
@@ -1367,6 +1372,9 @@ impl Viewer {
         if self.popup_for_annot {
             return None;
         }
+        if self.annot_tool == Some(AnnotTool::Stamp) {
+            return self.stamp_picker_open().then_some(0);
+        }
         let target = self.draw_popup.as_ref()?.target();
         let tool = self.annot_tool?;
         settings_for(tool).iter().position(|s| *s == target)
@@ -1379,6 +1387,10 @@ impl Viewer {
         let Some(tool) = self.annot_tool else {
             return;
         };
+        if tool == AnnotTool::Stamp {
+            self.open_stamp_picker(Some(anchor));
+            return;
+        }
         let Some(&target) = settings_for(tool).get(index) else {
             return;
         };

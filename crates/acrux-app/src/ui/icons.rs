@@ -138,6 +138,10 @@ pub enum Icon {
     Trash,
     /// Flèche qui revient en arrière (répondre).
     Reply,
+    /// Tampon encreur : poignée, socle et son empreinte (tamponner).
+    Stamp,
+    /// Cadre, montagnes et soleil (ajouter une image).
+    Image,
 }
 
 /// Contour d'une page, motif commun à beaucoup d'icônes.
@@ -630,6 +634,38 @@ pub fn geometry(icon: Icon) -> (Path, Path) {
             polyline(&mut lines, &[(9.0, 13.0), (4.0, 19.5)]);
             polyline(&mut lines, &[(4.0, 15.0), (4.0, 19.5), (8.5, 19.5)]);
         }
+        Icon::Stamp => {
+            // Le pommeau, le col, le socle, puis l'empreinte qu'il laisse :
+            // sans elle, on lirait un champignon.
+            circle(&mut lines, 12.0, 5.8, 2.6);
+            polyline(&mut lines, &[(10.4, 8.2), (10.4, 12.0)]);
+            polyline(&mut lines, &[(13.6, 8.2), (13.6, 12.0)]);
+            polyline(
+                &mut lines,
+                &[
+                    (5.0, 12.0),
+                    (19.0, 12.0),
+                    (19.0, 16.0),
+                    (5.0, 16.0),
+                    (5.0, 12.0),
+                ],
+            );
+            polyline(&mut lines, &[(4.0, 20.0), (20.0, 20.0)]);
+        }
+        Icon::Image => {
+            page(&mut lines, 3.5, 5.0, 17.0, 14.0);
+            polyline(
+                &mut lines,
+                &[
+                    (4.0, 17.5),
+                    (9.0, 12.0),
+                    (12.5, 15.5),
+                    (15.0, 13.0),
+                    (20.0, 18.0),
+                ],
+            );
+            circle(&mut fills, 15.5, 9.0, 1.7);
+        }
         Icon::Trash => {
             // Le couvercle et sa poignée, puis la cuve et ses trois stries.
             polyline(&mut lines, &[(4.0, 6.5), (20.0, 6.5)]);
@@ -877,6 +913,8 @@ mod tests {
             Icon::Callout,
             Icon::Trash,
             Icon::Reply,
+            Icon::Stamp,
+            Icon::Image,
         ];
         let mut raster = Rasterizer::new();
         for icon in icons {
