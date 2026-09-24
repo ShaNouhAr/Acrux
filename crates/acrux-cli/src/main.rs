@@ -107,6 +107,11 @@ fn usage() {
     eprintln!("                                  extrait le texte : paragraphes, colonnes, tableaux, en-têtes et pieds dans");
     eprintln!("                                  l'ordre de lecture ; --markdown / --html : titres, gras, listes, tableaux ;");
     eprintln!("                                  --layout : texte positionné (colonnes alignées par des espaces)");
+    eprintln!("  find    <fichier> <texte> [--case] [--word] [--page N]");
+    eprintln!("                                  cherche comme la carte de recherche : une ligne par occurrence");
+    eprintln!("                                  (page, ligne, contexte), puis le total ; --case respecte la casse,");
+    eprintln!("                                  --word ne prend que le mot entier ; une occurrence peut passer à la");
+    eprintln!("                                  ligne dans un paragraphe (« documen- / tation »)");
     eprintln!("  bench   <fichier> [--dpi N]                    mesure ouverture, rendu et extraction de texte");
     eprintln!("  annots  <fichier> [pages]                       liste les annotations");
     eprintln!("  links   <fichier> [pages]                       liste les liens et leurs cibles");
@@ -210,7 +215,7 @@ fn usage() {
     eprintln!(
         "  edit-text <fichier> --find <texte> --replace <texte> [--page N] [--all] [--size N]"
     );
-    eprintln!("            [--color r,g,b] [--font <nom>] [--bold] [--italic] -o <sortie>");
+    eprintln!("            [--color r,g,b] [--font <nom>] [--bold] [--italic] [--case] [--word] -o <sortie>");
     eprintln!("                                  remplace du texte dans la page sans rien déplacer d'autre :");
     eprintln!("                                  le flux de contenu est réécrit octet pour octet sauf le mot visé,");
     eprintln!(
@@ -345,6 +350,7 @@ fn main() -> ExitCode {
         (Some("render"), Some(f)) => cmd_render(f, &args[2..]),
         (Some("export"), Some(f)) => cmd_export(f, &args[2..]),
         (Some("text"), Some(f)) => cmd_text(f, &args[2..]),
+        (Some("find"), Some(f)) => cmd_find(f, &args[2..]),
         (Some("bench"), Some(f)) => cmd_bench(f, &args[2..]),
         (Some("annots"), Some(f)) => cmd_annots(f, &args[2..]),
         (Some("links"), Some(f)) => cmd_links(f, &args[2..]),
@@ -1705,6 +1711,60 @@ fn cmd_text(path: &str, rest: &[String]) -> acrux_core::Result<()> {
     Ok(())
 }
 
+/// Casse et mot entier, tels que `--case` et `--word` les demandent.
+fn search_options(rest: &[String]) -> acrux_features::text::SearchOptions {
+    acrux_features::text::SearchOptions {
+        match_case: rest.iter().any(|a| a == "--case"),
+        whole_word: rest.iter().any(|a| a == "--word"),
+    }
+}
+
+/// `find` : cherche un texte avec le moteur de la carte de recherche de
+/// l'application — même ordre, mêmes options, mêmes occurrences à cheval sur
+/// deux lignes. Une ligne par occurrence, puis le total.
+fn cmd_find(path: &str, rest: &[String]) -> acrux_core::Result<()> {
+    let usage = "usage : find <fichier> <texte> [--case] [--word] [--page N]";
+    let pos = positional(rest);
+    let Some(needle) = pos.first() else {
+        return Err(acrux_core::Error::Corrupt(usage.into()));
+    };
+    let options = search_options(rest);
+    let (doc, _) = open(path)?;
+    let pages = collect_pages(&doc)?;
+    let indices = match option_value(rest, "--page") {
+        Some(spec) => acrux_features::pages::parse_page_spec(spec, pages.len())?,
+        None => (0..pages.len()).collect(),
+    };
+    let mut total = 0;
+    for index in indices {
+        let text = acrux_features::text::extract_page_text(&doc, &pages[index])?;
+        for m in acrux_features::text::find_matches(&text, needle, options) {
+            let Some(first) = m.pieces.first() else {
+                continue;
+            };
+            total += 1;
+            let context: Vec<String> = m
+                .pieces
+                .iter()
+                .filter_map(|p| text.lines.get(p.line).map(acrux_features::text::Line::text))
+                .collect();
+            let spans = if m.pieces.len() > 1 {
+                " (sur deux lignes)"
+            } else {
+                ""
+            };
+            println!(
+                "page {}, ligne {} : {}{spans}",
+                index + 1,
+                first.line + 1,
+                context.join(" / ")
+            );
+        }
+    }
+    println!("{total} occurrence(s) de « {needle} »");
+    Ok(())
+}
+
 /// `export` : conversion vers un autre format (phase 8 de la feuille de route).
 ///
 /// `render` reste la commande dédiée au rendu PNG d'une page ; `export`
@@ -2333,7 +2393,7 @@ fn cmd_sanitize(path: &str, rest: &[String]) -> acrux_core::Result<()> {
 
 fn cmd_edit_text(path: &str, rest: &[String]) -> acrux_core::Result<()> {
     let out = output_arg(rest)?;
-    let usage = "usage : edit-text <fichier> --find <texte> --replace <texte> [--page N] [--all] [--size N] [--color r,g,b] [--font <nom>] [--bold] [--italic] -o <sortie>";
+    let usage = "usage : edit-text <fichier> --find <texte> --replace <texte> [--page N] [--all] [--size N] [--color r,g,b] [--font <nom>] [--bold] [--italic] [--case] [--word] -o <sortie>";
     let (Some(needle), Some(replacement)) = (
         option_value(rest, "--find"),
         option_value(rest, "--replace"),
@@ -2360,7 +2420,8 @@ fn cmd_edit_text(path: &str, rest: &[String]) -> acrux_core::Result<()> {
     let mut edits = Vec::new();
     for index in indices {
         let text = acrux_features::text::extract_page_text(&doc, &pages[index])?;
-        let mut ranges = acrux_features::edit_text::find_ranges(&text, needle);
+        let mut ranges =
+            acrux_features::edit_text::find_ranges_with(&text, needle, search_options(rest));
         if !all {
             ranges.truncate(1);
         }

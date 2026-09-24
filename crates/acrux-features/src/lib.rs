@@ -29,7 +29,7 @@
 //! | `stamp`  | filigranes, arrière-plans, en-têtes et pieds de page, numérotation Bates | §4 |
 //! | `three_d` | modèles 3D (§13.6) : annotations `/3D`, lecture du format U3D (ECMA-363), rendu et manipulation | §13 |
 //! | `sysfonts` | catalogue des polices installées : familles et leurs quatre dessins | §3 |
-//! | `text`   | extraction de texte structurée (paragraphes, colonnes, tableaux, styles), recherche, export texte / Markdown / HTML | §2, §6 |
+//! | `text`   | extraction de texte structurée (paragraphes, colonnes, tableaux, styles), recherche (casse, mot entier, occurrences à cheval sur deux lignes), export texte / Markdown / HTML | §2, §6 |
 //! | `zip`    | écrivain et lecteur ZIP minimal (conteneur des `.docx` et `.xlsx`) | —      |
 //!
 //! Modules prévus : `security`, `optimize`, `scripting`, `ai`.

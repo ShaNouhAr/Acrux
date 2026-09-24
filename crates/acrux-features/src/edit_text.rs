@@ -79,7 +79,7 @@ use acrux_render::content::ContentLexer;
 use acrux_render::font::LoadedFont;
 use acrux_render::page::page_content;
 
-use crate::text::{extract_page_text, Glyph, PageText};
+use crate::text::{extract_page_text, find_matches, Glyph, PageText, SearchOptions, TextMatch};
 
 pub use live::{Face, LaidText, LaidTextLine, LiveText, PlacedGlyph};
 pub use reflow::{
@@ -364,57 +364,31 @@ pub(crate) fn add_font_reference(
 }
 
 /// Positions des occurrences de `needle` sous forme de plages éditables
-/// (recherche insensible à la casse, comme [`crate::text::find`]).
+/// (recherche insensible à la casse ; voir [`find_ranges_with`]).
 #[must_use]
 pub fn find_ranges(text: &PageText, needle: &str) -> Vec<TextRange> {
-    let pattern: Vec<char> = needle
-        .chars()
-        .filter_map(|c| c.to_lowercase().next())
-        .collect();
-    if pattern.is_empty() {
-        return Vec::new();
-    }
-    let mut out = Vec::new();
-    for (index, line) in text.lines.iter().enumerate() {
-        // Caractères de la ligne, avec l'indice du glyphe qui les porte
-        // (`None` pour les espaces entre mots).
-        let mut chars: Vec<(char, Option<usize>)> = Vec::new();
-        let mut glyph = 0;
-        for (w, word) in line.words.iter().enumerate() {
-            if w > 0 {
-                chars.push((' ', None));
-            }
-            for g in &word.glyphs {
-                for c in g.text.chars() {
-                    chars.push((c, Some(glyph)));
-                }
-                glyph += 1;
-            }
-        }
-        let lower: Vec<char> = chars
-            .iter()
-            .filter_map(|(c, _)| c.to_lowercase().next())
-            .collect();
-        if lower.len() < pattern.len() {
-            continue;
-        }
-        for start in 0..=lower.len() - pattern.len() {
-            if lower[start..start + pattern.len()] != pattern[..] {
-                continue;
-            }
-            let hit = &chars[start..start + pattern.len()];
-            let first = hit.iter().find_map(|(_, g)| *g);
-            let last = hit.iter().rev().find_map(|(_, g)| *g);
-            if let (Some(first), Some(last)) = (first, last) {
-                out.push(TextRange {
-                    line: index,
-                    start: first,
-                    end: last + 1,
-                });
-            }
-        }
-    }
-    out
+    find_ranges_with(text, needle, SearchOptions::default())
+}
+
+/// Positions des occurrences de `needle` sous forme de plages éditables,
+/// selon les options de la recherche.
+///
+/// C'est le parcours de [`crate::text::find_matches`], dans le même ordre :
+/// l'occurrence que la carte de recherche surligne est celle que l'on
+/// remplace. Une occurrence à cheval sur deux lignes (une césure, une fin de
+/// ligne au milieu d'une expression) n'est pas une plage éditable — une
+/// édition réécrit une ligne à la fois — et elle est omise.
+#[must_use]
+pub fn find_ranges_with(text: &PageText, needle: &str, options: SearchOptions) -> Vec<TextRange> {
+    find_matches(text, needle, options)
+        .iter()
+        .filter_map(TextMatch::single_line)
+        .map(|p| TextRange {
+            line: p.line,
+            start: p.start,
+            end: p.end,
+        })
+        .collect()
 }
 
 /// Applique des éditions de texte au document.
@@ -1417,6 +1391,36 @@ mod tests {
         let page = page_of(&doc);
         let after = extract_page_text(&doc, &page).unwrap();
         assert_eq!(after.lines[0].text(), "alpha gamma");
+    }
+
+    /// Les plages éditables sont les occurrences d'une ligne de la
+    /// recherche, dans le même ordre : ce qu'on remplace est ce qu'on voit.
+    #[test]
+    fn find_ranges_suit_find_matches() {
+        // Deux lignes d'un même paragraphe, avec une césure : « remplacement »
+        // se trouve trois fois, dont une fois coupé en fin de ligne.
+        let doc = pdf("BT /F1 12 Tf 20 250 Td (Un remplacement, puis un autre rempla-) Tj 0 -14 Td (cement et un Remplacement encore.) Tj ET");
+        let page = page_of(&doc);
+        let text = extract_page_text(&doc, &page).unwrap();
+        let matches = crate::text::find_matches(&text, "remplacement", SearchOptions::default());
+        assert_eq!(matches.len(), 3, "{matches:?}");
+        let ranges = find_ranges(&text, "remplacement");
+        let single: Vec<TextRange> = matches
+            .iter()
+            .filter_map(TextMatch::single_line)
+            .map(|p| TextRange {
+                line: p.line,
+                start: p.start,
+                end: p.end,
+            })
+            .collect();
+        assert_eq!(ranges, single);
+        assert_eq!(ranges.len(), 2, "la coupure n'est pas une plage éditable");
+        let case = SearchOptions {
+            match_case: true,
+            whole_word: false,
+        };
+        assert_eq!(find_ranges_with(&text, "Remplacement", case).len(), 1);
     }
 
     #[test]

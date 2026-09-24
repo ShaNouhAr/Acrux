@@ -7,7 +7,9 @@
 //! 2. tableaux (`tables`) : grilles de filets fins ou colonnes de texte alignées ;
 //! 3. colonnes et ordre de lecture par découpe XY récursive, puis paragraphes,
 //!    en-têtes et pieds de page, listes, titres (`layout`) ;
-//! 4. sorties texte brut, Markdown, HTML et texte positionné (`export`).
+//! 4. sorties texte brut, Markdown, HTML et texte positionné (`export`) ;
+//! 5. recherche (`search`) : casse, mot entier, occurrences à cheval sur
+//!    deux lignes d'un même paragraphe.
 //!
 //! Les styles (police, taille, gras, italique, couleur) sont suivis pendant
 //! l'interprétation du contenu (`extract`). L'ordre de lecture est purement
@@ -17,12 +19,14 @@
 mod export;
 mod extract;
 mod layout;
+mod search;
 mod tables;
 
 use acrux_core::{Point, Rect, Result};
 use acrux_document::{Document, Page};
 
 pub use layout::mark_repeated_headers;
+pub use search::{find_matches, MatchPiece, SearchOptions, TextMatch};
 
 /// Style d'un mot ou d'une suite de glyphes.
 #[derive(Debug, Clone, PartialEq)]
@@ -419,45 +423,17 @@ fn make_word(glyphs: Vec<Glyph>) -> Word {
     }
 }
 
-/// Recherche (insensible à la casse) : positions des occurrences sous forme de boîtes.
+/// Recherche insensible à la casse : une boîte par morceau d'occurrence.
+///
+/// Raccourci de [`find_matches`] avec les options par défaut : une occurrence
+/// qui passe à la ligne donne une boîte par ligne. Les occurrences ne se
+/// chevauchent pas (« aa » se trouve deux fois dans « aaaa »).
 #[must_use]
 pub fn find(text: &PageText, needle: &str) -> Vec<Rect> {
-    let needle = needle.to_lowercase();
-    if needle.is_empty() {
-        return Vec::new();
-    }
-    let mut hits = Vec::new();
-    for line in &text.lines {
-        // Concatène les mots avec un espace, en gardant la correspondance glyphe → boîte.
-        let mut chars: Vec<(char, Rect)> = Vec::new();
-        for (i, w) in line.words.iter().enumerate() {
-            if i > 0 {
-                let prev = line.words[i - 1].bbox;
-                chars.push((' ', Rect::new(prev.x1, prev.y0, w.bbox.x0, prev.y1)));
-            }
-            for g in &w.glyphs {
-                for c in g.text.chars() {
-                    chars.push((c, g.bbox));
-                }
-            }
-        }
-        let lower: Vec<char> = chars.iter().flat_map(|(c, _)| c.to_lowercase()).collect();
-        let pat: Vec<char> = needle.chars().collect();
-        if lower.len() < pat.len() {
-            continue;
-        }
-        for start in 0..=lower.len() - pat.len() {
-            if lower[start..start + pat.len()] == pat[..] {
-                let boxes = &chars[start..start + pat.len()];
-                let r = boxes
-                    .iter()
-                    .skip(1)
-                    .fold(boxes[0].1, |acc, (_, b)| acc.union(b));
-                hits.push(r);
-            }
-        }
-    }
-    hits
+    find_matches(text, needle, SearchOptions::default())
+        .into_iter()
+        .flat_map(|m| m.pieces.into_iter().map(|p| p.rect))
+        .collect()
 }
 
 #[cfg(test)]

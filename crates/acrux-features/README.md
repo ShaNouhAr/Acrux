@@ -270,6 +270,27 @@ Dans l'application : touche `S`, ou « Remplir et signer » dans la palette.
 Tests : `tests/fillsign_corpus.rs` (géométrie de l'encre, pose et retrait au
 pixel près sur tout le corpus, aplatissement qui ne déplace rien, détourage).
 
+## Chercher dans le texte (`text::search`)
+
+Un seul moteur, [`text::find_matches`], sert la carte de recherche de
+l'application, le remplacement (`edit_text::find_ranges_with`, que « Tout
+remplacer » réécrit) et la commande `acr find` : ce qui est surligné est ce
+qui sera remplacé, dans le même ordre.
+
+| Ce qu'il sait | Comment |
+| --- | --- |
+| casse, mot entier | `SearchOptions { match_case, whole_word }` ; la borne de mot ne compte que du côté d'une lettre (« (art » se trouve collé) |
+| passer à la ligne | le texte d'un **paragraphe** est parcouru d'un tenant : une fin de ligne vaut une espace, une césure se referme avec la règle du texte des paragraphes (`layout::is_hyphen_break`) ; rien ne se joint d'un paragraphe ou d'une cellule à l'autre |
+| comparer comme on lit | repli **un pour un** : blancs (insécable, fine) → espace, apostrophe et guillemets typographiques → droits, minuscule si la casse est libre ; ligatures (« ﬁ ») dépliées, chaque lettre gardant son glyphe |
+| désigner l'occurrence | un `MatchPiece` par ligne traversée : ligne, glyphes (comptés comme `TextRange`), boîte ; une occurrence d'un seul morceau est éditable |
+
+Les occurrences ne se chevauchent pas (« aa » deux fois dans « aaaa ») : les
+éditions de « Tout remplacer » ne peuvent pas se recouvrir. Une occurrence à
+cheval sur deux lignes n'est pas éditable (une édition réécrit une ligne) :
+elle est surlignée et comptée, mais `find_ranges` l'omet. Les épreuves :
+les tests du module, `tests/search_corpus.rs` sur tout le corpus, et
+`acrux-app/tests/replace_corpus.rs` pour le remplacement.
+
 ## Export et conversion (`export`)
 
 Le pendant des « Exporter vers » d'Acrobat, construit sur le moteur de rendu

@@ -723,16 +723,31 @@ fn breaks_paragraph(
     col_right - prev.x1 > 2.5 * size && ends_sentence(&prev.text) && !cur.starts_lower
 }
 
-/// Joint deux lignes en réparant une césure : un tiret final suivi d'une
-/// minuscule est retiré ; un trait d'union conditionnel (U+00AD) est toujours retiré.
+/// Vrai si une ligne qui finit par `last` et la suivante, qui commence par
+/// `next_first`, sont les deux moitiés d'un mot coupé en fin de ligne : le
+/// tiret disparaît à la jonction.
+///
+/// Un trait d'union conditionnel (U+00AD) n'est là que pour la coupure : il
+/// part toujours. Un tiret ordinaire ne part que si la suite commence par une
+/// minuscule — « docu- / mentation » est une césure, « Jean- / Pierre » un
+/// prénom composé. La recherche (`search`) applique cette même règle au
+/// texte qu'elle parcourt : on trouve ce qu'on lit.
+pub(super) fn is_hyphen_break(last: char, next_first: Option<char>) -> bool {
+    last == '\u{ad}'
+        || (matches!(last, '-' | '\u{2010}' | '\u{2011}')
+            && next_first.is_some_and(char::is_lowercase))
+}
+
+/// Joint deux lignes en réparant une césure (voir [`is_hyphen_break`]).
 pub(super) fn join_lines(acc: &mut String, next: &str) {
     if acc.is_empty() {
         acc.push_str(next);
         return;
     }
-    let next_lower = next.chars().next().is_some_and(char::is_lowercase);
-    let last = acc.chars().last();
-    if last == Some('\u{ad}') || (matches!(last, Some('-' | '\u{2010}' | '\u{2011}')) && next_lower)
+    if acc
+        .chars()
+        .last()
+        .is_some_and(|last| is_hyphen_break(last, next.chars().next()))
     {
         acc.pop();
         acc.push_str(next);
