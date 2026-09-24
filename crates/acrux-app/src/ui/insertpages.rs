@@ -495,6 +495,11 @@ impl InsertSheet {
         self.targets.push((left, cy, inner, field_h, Target::Pages));
         cy += field_h + s(6.0);
         let (line, tone) = match self.chosen_pages() {
+            // « Les 1 pages » ne se dit pas : une source d'une seule page
+            // (une image, le plus souvent) a sa phrase.
+            Ok(p) if p.is_empty() && self.source_pages == 1 => {
+                (tr("La page du fichier").to_string(), theme.text_dim)
+            }
             Ok(p) if p.is_empty() => (
                 trf("Les {} pages du fichier", &[&self.source_pages.to_string()]),
                 theme.text_dim,

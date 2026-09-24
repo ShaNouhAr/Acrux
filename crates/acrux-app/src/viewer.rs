@@ -1819,15 +1819,26 @@ impl Viewer {
             t.text,
         );
         self.welcome_combine = Some((cx, y, cw, bh));
-        text.draw(
-            frame,
-            (cx + cw + (18.0 * dpi) as i32) as f32,
-            y as f32 + f32::midpoint(bh as f32, text.ascent(size)) - 1.0,
-            size,
-            lang::tr("ou déposez des PDF ou des images · Ctrl+Maj+P pour toutes les commandes"),
-            t.text_dim,
-        );
+        // Le rappel suit les boutons s'il tient sur la ligne ; sinon (fenêtre
+        // étroite, panneau latéral ouvert) il passe dessous plutôt que d'être
+        // coupé par le bord.
+        let hint =
+            lang::tr("ou déposez des PDF ou des images · Ctrl+Maj+P pour toutes les commandes");
+        let hint_x = cx + cw + (18.0 * dpi) as i32;
+        let fits = hint_x as f32 + text.measure(size, hint) <= (frame.width as i32 - pad) as f32;
+        let (hint_x, hint_mid) = if fits {
+            (
+                hint_x,
+                y as f32 + f32::midpoint(bh as f32, text.ascent(size)) - 1.0,
+            )
+        } else {
+            (x, (y + bh) as f32 + 12.0 * dpi + text.ascent(size))
+        };
+        text.draw(frame, hint_x as f32, hint_mid, size, hint, t.text_dim);
         y += bh + (34.0 * dpi) as i32;
+        if !fits {
+            y += (size * 1.6) as i32;
+        }
         if recent.is_empty() {
             self.welcome_clear = None;
             self.recent_hits = hits;

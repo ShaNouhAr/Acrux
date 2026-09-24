@@ -205,9 +205,7 @@ pub fn image_format(data: &[u8]) -> Option<&'static str> {
         Some("PNG")
     } else if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
         Some("JPEG")
-    } else if data.starts_with(b"BM") && data.len() >= 26 {
-        // En-tête de fichier (14 octets), puis au moins l'en-tête d'image
-        // le plus court (12 octets) : en deçà, rien ne se décode.
+    } else if data.starts_with(b"BM") && bmp_info_size(data) {
         Some("BMP")
     } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
         Some("GIF")
@@ -216,6 +214,20 @@ pub fn image_format(data: &[u8]) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// Vrai si l'en-tête d'image d'un BMP, qui suit les 14 octets de l'en-tête
+/// de fichier, annonce l'une des tailles que Windows et OS/2 ont définies
+/// (cœur 12, info 40, 52, 56, OS/2 64, V4 108, V5 124). « BM » seul ne
+/// suffit pas : un texte qui commence par « BM : bilan mensuel… » passerait
+/// pour une image, et sa combinaison échouerait sur une « compression »
+/// absurde. Un texte n'a pas d'octet nul, et ces tailles en ont trois.
+fn bmp_info_size(data: &[u8]) -> bool {
+    data.get(14..18)
+        .and_then(|b| <[u8; 4]>::try_from(b).ok())
+        .is_some_and(|b| {
+            data.len() >= 26 && matches!(u32::from_le_bytes(b), 12 | 40 | 52 | 56 | 64 | 108 | 124)
+        })
 }
 
 /// Vrai si ces octets sont ceux d'une image que nous savons lire (voir
@@ -716,6 +728,10 @@ pub(crate) mod tests {
         assert!(!is_supported(b"BMx"), "BMP tronqué");
         assert!(!is_supported(b"IIxx un texte qui commence par II"));
         assert!(!is_supported(b"MM. le maire"));
+        assert!(
+            !is_supported(b"BM : bilan mensuel de septembre, chiffres et commentaires."),
+            "un texte long qui commence par BM"
+        );
         assert!(!is_supported(b"GIF8"));
         assert!(!is_supported(b"%PDF-1.7\n"));
         assert!(!is_supported(&[0x89, b'P', b'N', b'G']));
