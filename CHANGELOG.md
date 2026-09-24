@@ -51,6 +51,13 @@ c'est la section correspondante de ce fichier qui devient la page de version.
   fois tout parcouru. Chaque tranche est désormais prise pendant la peinture,
   qui demande un réveil par image. Les vignettes de l'écran d'accueil, qui se
   calculaient de la même façon, suivent le même chemin.
+- **La colonne de droite se sélectionne.** Sur une page à deux colonnes (un
+  article, une revue, un rapport), cliquer ou glisser dans la colonne de droite
+  sélectionnait la ligne de gauche à la même hauteur — ou rien : le geste
+  faisait glisser la page — et un double-clic y choisissait un mot de la
+  colonne de gauche. Le pointeur vise maintenant la colonne sous lui, puis la
+  ligne ; la fin d'une ligne courte se clique toujours à sa droite, et les
+  cellules d'un tableau restent chacune la sienne.
 - `acr find <fichier> <texte>` cherche avec le moteur de l'application : une
   ligne par occurrence (page, ligne, contexte, « sur deux lignes »), puis le
   total ; `--case`, `--word`, `--page N`. `acr edit-text` accepte aussi `--case`

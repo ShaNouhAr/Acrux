@@ -11,7 +11,7 @@
 //! évite les cas limites des sélections « inclusives ».
 
 use acrux_core::{Point, Rect};
-use acrux_features::text::PageText;
+use acrux_features::text::{BlockKind, PageText};
 
 /// Un glyphe sélectionnable.
 #[derive(Debug, Clone)]
@@ -36,6 +36,44 @@ struct LineSpan {
     start: usize,
     end: usize,
     bbox: Rect,
+    /// Largeur de la colonne qui porte la ligne (`x0`, `x1`) : celle de son
+    /// bloc, ou la sienne propre hors d'un bloc et dans un tableau.
+    column: (f64, f64),
+}
+
+/// Distance d'une valeur à un intervalle (nulle dedans).
+fn axis_distance(v: f64, lo: f64, hi: f64) -> f64 {
+    if v < lo {
+        lo - v
+    } else if v > hi {
+        v - hi
+    } else {
+        0.0
+    }
+}
+
+/// Largeur de colonne de chaque ligne : le bloc (colonne, encadré) qui la
+/// contient, s'il la contient vraiment — un paragraphe qui continue d'une
+/// colonne à l'autre garde ses lignes de droite dans le bloc de gauche. Un
+/// tableau ne compte pas : ses cellules sont côte à côte, chacune sa colonne.
+fn line_columns(text: &PageText) -> Vec<Option<(f64, f64)>> {
+    let mut out = vec![None; text.lines.len()];
+    for block in &text.blocks {
+        if matches!(block.kind, BlockKind::Table(_)) {
+            continue;
+        }
+        let (x0, x1) = (block.bbox.x0, block.bbox.x1);
+        for &li in block.paragraphs.iter().flat_map(|p| p.lines.iter()) {
+            let Some(line) = text.lines.get(li) else {
+                continue;
+            };
+            let mid = f64::midpoint(line.bbox.x0, line.bbox.x1);
+            if (x0..=x1).contains(&mid) {
+                out[li] = Some((x0.min(line.bbox.x0), x1.max(line.bbox.x1)));
+            }
+        }
+    }
+    out
 }
 
 /// Texte d'une page prêt pour la sélection.
@@ -76,6 +114,7 @@ impl SelectableText {
     pub fn from_page_text(text: &PageText) -> Self {
         let mut glyphs = Vec::new();
         let mut lines = Vec::new();
+        let columns = line_columns(text);
         for (li, line) in text.lines.iter().enumerate() {
             let start = glyphs.len();
             // Indice du glyphe dans la ligne au sens de `acrux_features::text`
@@ -112,6 +151,7 @@ impl SelectableText {
                     start,
                     end: glyphs.len(),
                     bbox: line.bbox,
+                    column: columns[li].unwrap_or((line.bbox.x0, line.bbox.x1)),
                 });
             }
         }
@@ -132,29 +172,35 @@ impl SelectableText {
 
     /// Curseur le plus proche d'un point de la page.
     ///
-    /// Choisit la ligne la plus proche verticalement (distance nulle si le
-    /// point est dedans), puis la position horizontale : avant le premier
-    /// glyphe, après le dernier, ou de part et d'autre du milieu d'un glyphe.
-    /// Au-dessus de tout texte → `0`, en dessous → `len()`.
+    /// Choisit d'abord la **colonne** sous le point (ou la plus proche), puis
+    /// dans cette colonne la ligne la plus proche verticalement (distance
+    /// nulle si le point est dedans), enfin la position horizontale : avant
+    /// le premier glyphe, après le dernier, ou de part et d'autre du milieu
+    /// d'un glyphe. Au-dessus de tout texte → `0`, en dessous → `len()`.
+    ///
+    /// La colonne d'abord : sur une page à deux colonnes, les lignes de
+    /// gauche et de droite sont à la même hauteur, et la seule distance
+    /// verticale choisissait toujours celle de gauche — cliquer ou glisser
+    /// dans la colonne de droite sélectionnait à gauche, ou rien. La fin
+    /// d'une ligne courte se clique toujours à sa droite : la colonne
+    /// entière est à distance nulle.
     #[must_use]
     pub fn hit(&self, p: Point) -> Option<Hit> {
         if self.lines.is_empty() {
             return None;
         }
-        let mut best: Option<(f64, usize)> = None;
+        let mut best: Option<((f64, f64, f64), usize)> = None;
         for (i, l) in self.lines.iter().enumerate() {
-            let d = if p.y > l.bbox.y1 {
-                p.y - l.bbox.y1
-            } else if p.y < l.bbox.y0 {
-                l.bbox.y0 - p.y
-            } else {
-                0.0
-            };
-            if best.is_none_or(|(bd, _)| d < bd) {
-                best = Some((d, i));
+            let key = (
+                axis_distance(p.x, l.column.0, l.column.1),
+                axis_distance(p.y, l.bbox.y0, l.bbox.y1),
+                axis_distance(p.x, l.bbox.x0, l.bbox.x1),
+            );
+            if best.is_none_or(|(bk, _)| key < bk) {
+                best = Some((key, i));
             }
         }
-        let (dist, li) = best?;
+        let ((_, dist, _), li) = best?;
         let line = &self.lines[li];
         let inside_v = dist == 0.0;
         // Au-dessus de la première ligne / en dessous de la dernière : extrémités.
@@ -431,6 +477,69 @@ mod tests {
         assert!(SelectableText::default()
             .hit(Point::new(0.0, 0.0))
             .is_none());
+    }
+
+    /// Deux colonnes : « ab cd » / « ef » à gauche, « gh ij » / « kl » à
+    /// droite, aux mêmes hauteurs, chacune dans son bloc.
+    fn two_columns() -> PageText {
+        use acrux_features::text::{Block, Paragraph};
+        let bb = |ws: &[Word]| ws.iter().fold(ws[0].bbox, |r, w| r.union(&w.bbox));
+        let rows = [
+            vec![word(0.0, 100.0, "ab"), word(30.0, 100.0, "cd")],
+            vec![word(0.0, 80.0, "ef")],
+            vec![word(200.0, 100.0, "gh"), word(230.0, 100.0, "ij")],
+            vec![word(200.0, 80.0, "kl")],
+        ];
+        let lines: Vec<Line> = rows
+            .into_iter()
+            .map(|ws| Line {
+                bbox: bb(&ws),
+                words: ws,
+            })
+            .collect();
+        let block = |x0: f64, lines: Vec<usize>| Block {
+            bbox: Rect::new(x0, 80.0, x0 + 100.0, 110.0),
+            paragraphs: vec![Paragraph {
+                lines,
+                ..Paragraph::default()
+            }],
+            ..Block::default()
+        };
+        PageText {
+            lines,
+            blocks: vec![block(0.0, vec![0, 1]), block(200.0, vec![2, 3])],
+            ..PageText::default()
+        }
+    }
+
+    #[test]
+    fn la_colonne_de_droite_se_selectionne() {
+        let t = SelectableText::from_page_text(&two_columns());
+        // Sur le « h » de « gh » (x 210..220), à droite du milieu.
+        let h = t.hit(Point::new(217.0, 105.0)).unwrap();
+        assert_eq!(
+            h,
+            Hit {
+                caret: 8,
+                on_text: true
+            }
+        );
+        assert_eq!(t.text(6, 10), "gh ij");
+        let (a, b) = t.word_at(h.caret - 1);
+        assert_eq!(t.text(a, b), "gh");
+        // Dans l'interligne de droite : une ligne de droite, pas celle de
+        // gauche qui serait à la même hauteur.
+        assert_eq!(t.hit(Point::new(203.0, 92.0)).unwrap().caret, 10);
+        // À droite de la courte « kl », dans sa colonne : sa fin.
+        let h = t.hit(Point::new(280.0, 85.0)).unwrap();
+        assert_eq!(h.caret, 12);
+        assert!(!h.on_text);
+        // La colonne de gauche ne bouge pas : à droite de « ef », sa fin,
+        // même si « cd », plus longue, est juste au-dessus.
+        assert_eq!(t.hit(Point::new(60.0, 85.0)).unwrap().caret, 6);
+        // Dans la gouttière, la colonne la plus proche.
+        assert_eq!(t.hit(Point::new(190.0, 105.0)).unwrap().caret, 6);
+        assert_eq!(t.hit(Point::new(110.0, 105.0)).unwrap().caret, 4);
     }
 
     #[test]
