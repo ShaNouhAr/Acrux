@@ -17,6 +17,7 @@ use acrux_features::export::{
     export_tables_xlsx, export_text, HtmlOptions,
 };
 use acrux_features::forms::{set_field_value, FieldValue};
+use acrux_features::pages::split::{part_file_name, plan_parts, write_parts, SplitPlan};
 use acrux_features::redact::{apply_redactions, mark_redactions, RedactionMark};
 use acrux_features::text::SearchOptions;
 use acrux_graphics::{Bitmap, Color};
@@ -117,6 +118,26 @@ pub enum EditOp {
         pages: Vec<usize>,
         /// Position d'insertion (0 = avant la première page).
         at: usize,
+    },
+    /// Insérer une page vierge.
+    InsertBlank {
+        /// Position (0 = avant la première page).
+        at: usize,
+        /// Format de la page : celui de la page voisine.
+        media: acrux_core::Rect,
+        /// Rotation de la page : celle de la page voisine.
+        rotate: i32,
+    },
+    /// Remplacer le contenu de pages par celui des pages d'un autre fichier
+    /// (voir `pages::replace_pages`). Comme `Insert`, le fichier source est
+    /// relu à chaque rejeu.
+    Replace {
+        /// Fichier source.
+        path: PathBuf,
+        /// Mot de passe du fichier source, s'il est chiffré.
+        password: Option<Vec<u8>>,
+        /// Paires (page remplacée, page source).
+        pairs: Vec<(usize, usize)>,
     },
     /// Réordonner les pages (ordre complet des indices d'origine).
     Reorder {
@@ -312,6 +333,8 @@ impl EditOp {
             EditOp::Rotate { .. }
             | EditOp::Delete { .. }
             | EditOp::Insert { .. }
+            | EditOp::InsertBlank { .. }
+            | EditOp::Replace { .. }
             | EditOp::Reorder { .. } => Right::Assemble,
             EditOp::Annotate { .. }
             | EditOp::Mark { .. }
@@ -417,29 +440,24 @@ impl EditOp {
                 pages,
                 at,
             } => {
-                let src = Document::load(path)?;
-                if let Some(pw) = password {
-                    src.authenticate(pw)?;
-                }
-                // Insérer les pages d'un document protégé dans un autre,
-                // c'est en extraire le contenu : un document à ouverture
-                // libre qui interdit la copie ne se recopie pas ainsi dans
-                // un fichier sans permissions. Son propriétaire, lui, le peut.
-                let restricted = src.security().is_some_and(|h| {
-                    !h.is_owner()
-                        && !acrux_document::protect::Permissions::from_p(h.permissions()).copy
-                });
-                if restricted {
-                    return Err(acrux_core::Error::Unsupported(
-                        "les permissions de ce document interdisent d'en extraire les pages".into(),
-                    ));
-                }
+                let src = open_source(path, password.as_deref())?;
                 let indices: Vec<usize> = if pages.is_empty() {
                     (0..collect_pages(&src)?.len()).collect()
                 } else {
                     pages.clone()
                 };
                 acrux_features::pages::insert_pages_from(doc, &src, &indices, *at)
+            }
+            EditOp::InsertBlank { at, media, rotate } => {
+                acrux_features::pages::insert_blank_page(doc, *at, *media, *rotate)
+            }
+            EditOp::Replace {
+                path,
+                password,
+                pairs,
+            } => {
+                let src = open_source(path, password.as_deref())?;
+                acrux_features::pages::replace_pages(doc, &src, pairs)
             }
             EditOp::Reorder { order } => acrux_features::pages::reorder_pages(doc, order),
             EditOp::Attach {
@@ -519,6 +537,27 @@ impl EditOp {
             }
         }
     }
+}
+
+/// Ouvre le fichier dont on prend des pages (insérer, remplacer).
+///
+/// En prendre les pages, c'est en extraire le contenu : un document à
+/// ouverture libre qui interdit la copie ne se recopie pas ainsi dans un
+/// fichier sans permissions. Son propriétaire, lui, le peut.
+fn open_source(path: &std::path::Path, password: Option<&[u8]>) -> acrux_core::Result<Document> {
+    let src = Document::load(path)?;
+    if let Some(pw) = password {
+        src.authenticate(pw)?;
+    }
+    let restricted = src.security().is_some_and(|h| {
+        !h.is_owner() && !acrux_document::protect::Permissions::from_p(h.permissions()).copy
+    });
+    if restricted {
+        return Err(acrux_core::Error::Unsupported(
+            "les permissions de ce document interdisent d'en extraire les pages".into(),
+        ));
+    }
+    Ok(src)
 }
 
 /// Page `index` du document, telle qu'il est maintenant.
@@ -641,6 +680,89 @@ fn run_export(
     }
 }
 
+/// Chemin libre pour `name` dans `dir` : le nom tel quel s'il n'est pas
+/// pris, sinon « nom (2).pdf », « nom (3).pdf »… Un fractionnement
+/// n'écrase **jamais** un fichier en silence.
+fn free_path(dir: &std::path::Path, name: &str) -> PathBuf {
+    let first = dir.join(name);
+    if !first.exists() {
+        return first;
+    }
+    let (stem, ext) = name.rsplit_once('.').unwrap_or((name, "pdf"));
+    (2..10_000)
+        .map(|n| dir.join(format!("{stem} ({n}).{ext}")))
+        .find(|p| !p.exists())
+        .unwrap_or(first)
+}
+
+/// Fractionne le document et rend le compte rendu à afficher : combien de
+/// fichiers, où, et ce qui mérite d'être dit (une page plus grosse que la
+/// taille maximale, des fichiers écrits en clair).
+pub(crate) fn run_split(
+    doc: &Document,
+    dir: &std::path::Path,
+    stem: &str,
+    plan: &SplitPlan,
+) -> acrux_core::Result<String> {
+    use crate::ui::lang::{tr, trf};
+    let options = acrux_document::SaveOptions::default();
+    let planned = plan_parts(doc, plan, &options)?;
+    let total = planned.parts.len();
+    std::fs::create_dir_all(dir)
+        .map_err(|e| acrux_core::Error::Io(format!("{}: {e}", dir.display())))?;
+    let mut written = 0usize;
+    write_parts(doc, &planned.parts, &options, &mut |index, part, bytes| {
+        let name = part_file_name(stem, index, total, part.title.as_deref());
+        let target = free_path(dir, &name);
+        std::fs::write(&target, bytes)
+            .map_err(|e| acrux_core::Error::Io(format!("{}: {e}", target.display())))?;
+        written += 1;
+        Ok(())
+    })?;
+    let mut notice = trf(
+        "{} fichier(s) écrit(s) dans {}",
+        &[&written.to_string(), &dir.display().to_string()],
+    );
+    if !planned.warnings.is_empty() {
+        notice.push_str(&trf(
+            " — {} partie(s) dépassent la taille maximale (une page seule plus grosse)",
+            &[&planned.warnings.len().to_string()],
+        ));
+    }
+    if doc.is_encrypted() {
+        notice.push_str(tr(" — fichiers non protégés"));
+    }
+    Ok(notice)
+}
+
+/// Fait les travaux longs demandés au fil — conversions, fractionnements —
+/// et envoie un avis par travail, suivi d'un réveil de la fenêtre. Ce
+/// réveil part de ce fil, jamais du traitement d'un réveil : il n'y en a
+/// qu'un par travail. Rend faux quand la fenêtre n'écoute plus.
+fn run_jobs(
+    doc: &Document,
+    exports: Vec<(PathBuf, ExportFormat)>,
+    splits: Vec<(PathBuf, String, SplitPlan)>,
+    note_tx: &Sender<String>,
+    waker: &dyn Waker,
+) -> bool {
+    let exported = exports.into_iter().map(|(path, format)| {
+        run_export(doc, &path, format).unwrap_or_else(|e| format!("export impossible : {e}"))
+    });
+    let split = splits.into_iter().map(|(dir, stem, plan)| {
+        run_split(doc, &dir, &stem, &plan).unwrap_or_else(|e| {
+            crate::ui::lang::trf("fractionnement impossible : {}", &[&e.to_string()])
+        })
+    });
+    for notice in exported.chain(split) {
+        if note_tx.send(notice).is_err() {
+            return false;
+        }
+        waker.wake();
+    }
+    true
+}
+
 /// Message envoyé au fil de rendu.
 enum WorkerMessage {
     /// Rendre une page.
@@ -665,6 +787,16 @@ enum WorkerMessage {
         path: PathBuf,
         /// Format demandé.
         format: ExportFormat,
+    },
+    /// Fractionner le document en plusieurs fichiers : le document du fil,
+    /// qui a rejoué les modifications, est fractionné tel qu'il s'affiche.
+    Split {
+        /// Dossier de sortie.
+        dir: PathBuf,
+        /// Début du nom des fichiers (`rapport` → `rapport-01.pdf`…).
+        stem: String,
+        /// Découpage.
+        plan: SplitPlan,
     },
 }
 
@@ -740,10 +872,12 @@ impl RenderWorker {
                     let mut batch = Vec::new();
                     let mut keep: Option<Vec<u32>> = None;
                     let mut exports = Vec::new();
+                    let mut splits = Vec::new();
                     let mut sort_in = |m: WorkerMessage, batch: &mut Vec<RenderRequest>| match m {
                         WorkerMessage::Render(r) => batch.push(r),
                         WorkerMessage::Keep(k) => keep = Some(k),
                         WorkerMessage::Export { path, format } => exports.push((path, format)),
+                        WorkerMessage::Split { dir, stem, plan } => splits.push((dir, stem, plan)),
                         WorkerMessage::SetLayers(map) => {
                             // Les rendus demandés avant sont périmés.
                             batch.clear();
@@ -770,15 +904,8 @@ impl RenderWorker {
                     if let Some(k) = &keep {
                         batch.retain(|r| k.contains(&r.scale_key));
                     }
-                    for (path, format) in exports {
-                        let notice = match run_export(&doc, &path, format) {
-                            Ok(message) => message,
-                            Err(e) => format!("export impossible : {e}"),
-                        };
-                        if note_tx.send(notice).is_err() {
-                            return;
-                        }
-                        waker.wake();
+                    if !run_jobs(&doc, exports, splits, &note_tx, waker.as_ref()) {
+                        return;
                     }
                     for r in batch {
                         let Some(page) = pages.get(r.page) else {
@@ -847,6 +974,13 @@ impl RenderWorker {
     /// rendu ; le compte rendu arrive par [`RenderWorker::take_notice`].
     pub fn export(&self, path: PathBuf, format: ExportFormat) {
         let _ = self.requests.send(WorkerMessage::Export { path, format });
+    }
+
+    /// Demande le fractionnement du document dans `dir`. Les fichiers sont
+    /// écrits par le fil de rendu ; le compte rendu arrive par
+    /// [`RenderWorker::take_notice`].
+    pub fn split(&self, dir: PathBuf, stem: String, plan: SplitPlan) {
+        let _ = self.requests.send(WorkerMessage::Split { dir, stem, plan });
     }
 
     /// Message du fil à afficher à l'utilisateur, s'il y en a un.
@@ -1077,6 +1211,23 @@ mod tests {
         }
     }
 
+    /// Une page vierge, un remplacement : c'est assembler le document.
+    #[test]
+    fn les_pages_vierges_et_remplacees_demandent_l_assemblage() {
+        let blank = EditOp::InsertBlank {
+            at: 0,
+            media: acrux_core::Rect::new(0.0, 0.0, 595.0, 842.0),
+            rotate: 0,
+        };
+        let replace = EditOp::Replace {
+            path: PathBuf::from("x.pdf"),
+            password: None,
+            pairs: vec![(0, 0)],
+        };
+        assert_eq!(blank.required_right(), Right::Assemble);
+        assert_eq!(replace.required_right(), Right::Assemble);
+    }
+
     #[test]
     fn rights_follow_the_permissions() {
         let all = Permissions::all();
@@ -1283,6 +1434,42 @@ mod tests {
             "{refused:?}"
         );
         assert!(allowed.is_ok(), "{allowed:?}");
+    }
+
+    /// Fractionner écrit un fichier par partie, et n'écrase jamais : un
+    /// second fractionnement au même endroit prend « (2) ».
+    #[test]
+    #[allow(clippy::unwrap_used)] // tests
+    fn fractionner_n_ecrase_rien() {
+        use acrux_features::create::{new_document, PageSetup};
+        let doc = new_document(&PageSetup {
+            pages: 3,
+            ..PageSetup::default()
+        })
+        .unwrap();
+        let dir = std::env::temp_dir().join(format!("acrux-split-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let first = run_split(&doc, &dir, "essai", &SplitPlan::EveryN(1)).unwrap();
+        let second = run_split(&doc, &dir, "essai", &SplitPlan::EveryN(2)).unwrap();
+        let mut names: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(first.starts_with('3'), "{first}");
+        assert!(second.starts_with('2'), "{second}");
+        assert_eq!(
+            names,
+            [
+                "essai-1 (2).pdf",
+                "essai-1.pdf",
+                "essai-2 (2).pdf",
+                "essai-2.pdf",
+                "essai-3.pdf"
+            ]
+        );
     }
 
     #[test]

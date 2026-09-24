@@ -14,6 +14,7 @@ Key 0x73          # F4 : panneau latéral
 Key 0x72 -Shift   # Maj+F3 : occurrence précédente (-Shift tient Maj le temps de la touche)
 Key 0x75          # F6 : zone suivante
 Click 300 85      # clic en coordonnées client
+Click 150 400 -Ctrl   # Ctrl+clic (ajoute une vignette à la sélection) ; -Shift : Maj+clic (une plage)
 Hover 300 85      # survol seul, sans clic (état survolé, position d'une note)
 Typing "bonjour"  # saisie de texte
 Chord "h"         # raccourci Ctrl+H (Chord "p" -Shift : Ctrl+Maj+P)
@@ -79,6 +80,11 @@ Release 420 380                                    # …puis la forme est posée
 Les coordonnées se donnent **comme on les lit sur la capture** : le harnais calcule l'échelle
 entre le tampon dessiné et les coordonnées des messages de souris (la fenêtre n'étant jamais
 montrée, les deux diffèrent quand l'écran n'est pas à 100 %).
+
+`Click -Ctrl` et `Click -Shift` postent `WM_KEYDOWN` de Ctrl ou de Maj avant le clic, puis
+`WM_KEYUP` après : la fenêtre invisible retient ces touches (`GetKeyState` ne voit pas le vrai
+clavier) et les rend au clic, avec `MK_CONTROL` ou `MK_SHIFT` dans `wParam` comme la vraie souris.
+C'est ainsi qu'on essaie la sélection multiple des vignettes (Ctrl+clic, Maj+clic).
 
 Le clic droit, le clic du milieu et le menu contextuel au clavier ont les leurs :
 

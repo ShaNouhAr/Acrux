@@ -23,8 +23,22 @@ pub(super) enum Then {
     Quit,
     /// Appliquer les biffures.
     ApplyRedactions,
-    /// Supprimer une page.
-    DeletePage(usize),
+    /// Supprimer des pages.
+    DeletePages(Vec<usize>),
+    /// Remplacer des pages par celles d'un autre fichier.
+    ReplacePages {
+        /// Fichier source.
+        path: std::path::PathBuf,
+        /// Son mot de passe, pris à l'onglet qui l'a ouvert.
+        password: Option<Vec<u8>>,
+        /// Paires (page remplacée, page source).
+        pairs: Vec<(usize, usize)>,
+    },
+    /// Extraire plusieurs pages : le rang du bouton dit comment.
+    Extract(Vec<usize>),
+    /// Fractionner : le rang du bouton dit comment ; vrai si « par
+    /// signets » est proposé (les rangs en dépendent).
+    Split(bool),
     /// Télécharger et lancer l'installateur (adresse, version).
     InstallUpdate(String, String),
     /// Document déjà protégé : changer sa protection, ou la retirer.
@@ -271,7 +285,7 @@ impl Viewer {
                 .map_or("?", |b| b.label.as_str())
         ));
         if asking.kind == Kind::Choice {
-            match asking.then {
+            match &asking.then {
                 Then::Protection => match index {
                     0 => self.protect_change(),
                     1 => self.remove_protection(),
@@ -279,6 +293,14 @@ impl Viewer {
                 },
                 Then::OwnerPassword if index == 0 => {
                     self.ask_owner_password(super::OwnerThen::Unlock);
+                }
+                Then::Extract(pages) => self.extract_choice(pages, index, window),
+                Then::Split(with_bookmarks) => {
+                    if let Some(&kind) =
+                        super::organize::SplitKind::choices(*with_bookmarks).get(index)
+                    {
+                        self.split_choice(kind, window);
+                    }
                 }
                 _ => {}
             }
@@ -300,7 +322,11 @@ impl Viewer {
         }
         match asking.then.clone() {
             // Rien à faire : un message, ou un choix déjà appliqué.
-            Then::Nothing | Then::Protection | Then::OwnerPassword => {}
+            Then::Nothing
+            | Then::Protection
+            | Then::OwnerPassword
+            | Then::Extract(_)
+            | Then::Split(_) => {}
             Then::CloseTab => {
                 let active = self.active_tab;
                 self.close_tab_now(active);
@@ -313,9 +339,12 @@ impl Viewer {
                 self.apply_edit(EditOp::ApplyRedactions);
                 log_line("biffures appliquées");
             }
-            Then::DeletePage(page) => {
-                self.apply_edit(EditOp::Delete { pages: vec![page] });
-            }
+            Then::DeletePages(pages) => self.delete_pages_now(pages),
+            Then::ReplacePages {
+                path,
+                password,
+                pairs,
+            } => self.replace_pages_now(path, password, pairs),
             Then::DeleteComment(page, index) => self.remove_annot(page, index),
             Then::InstallUpdate(url, version) => self.install_update_now(&url, &version),
             Then::ClearRecent => self.clear_recent(),

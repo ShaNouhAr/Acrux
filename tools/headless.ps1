@@ -115,12 +115,34 @@ function Char($c) {
 
 function Typing($text) { foreach ($c in $text.ToCharArray()) { Char $c } }
 
-function Click($x, $y) {
+# -Ctrl et -Shift tiennent Ctrl ou Maj enfoncee le temps du clic (Ctrl+clic et
+# Maj+clic des vignettes) : WM_KEYDOWN du modificateur, que la fenetre invisible
+# retient, puis le clic (MK_CONTROL 8, MK_SHIFT 4 dans wParam, comme la vraie
+# souris), puis WM_KEYUP.
+function Click($x, $y, [switch]$Ctrl, [switch]$Shift) {
+    $buttons = 1
+    if ($Ctrl) {
+        [W.HL]::PostMessage($script:Hwnd, 0x0100, [IntPtr]0x11, [IntPtr]1) | Out-Null
+        $buttons = $buttons -bor 8
+    }
+    if ($Shift) {
+        [W.HL]::PostMessage($script:Hwnd, 0x0100, [IntPtr]0x10, [IntPtr]1) | Out-Null
+        $buttons = $buttons -bor 4
+    }
+    if ($Ctrl -or $Shift) { Start-Sleep -Milliseconds 60 }
     [W.HL]::PostMessage($script:Hwnd, 0x0200, [IntPtr]0, (LParam $x $y)) | Out-Null
     Start-Sleep -Milliseconds 100
-    [W.HL]::PostMessage($script:Hwnd, 0x0201, [IntPtr]1, (LParam $x $y)) | Out-Null
+    [W.HL]::PostMessage($script:Hwnd, 0x0201, [IntPtr]$buttons, (LParam $x $y)) | Out-Null
     Start-Sleep -Milliseconds 100
     [W.HL]::PostMessage($script:Hwnd, 0x0202, [IntPtr]0, (LParam $x $y)) | Out-Null
+    if ($Shift) {
+        Start-Sleep -Milliseconds 60
+        [W.HL]::PostMessage($script:Hwnd, 0x0101, [IntPtr]0x10, $script:KeyUp) | Out-Null
+    }
+    if ($Ctrl) {
+        Start-Sleep -Milliseconds 60
+        [W.HL]::PostMessage($script:Hwnd, 0x0101, [IntPtr]0x11, $script:KeyUp) | Out-Null
+    }
     Start-Sleep -Milliseconds 500
 }
 

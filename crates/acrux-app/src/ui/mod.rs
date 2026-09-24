@@ -22,7 +22,7 @@
 //! | `input`   | champ de saisie sur une ligne, avec sélection (Ctrl+A, Maj+flèches) |
 //! | `icons`   | icônes vectorielles rasterisées à la demande          |
 //! | `toolbar` | barre d'outils (boutons, champ de page, zoom, annuler / rétablir, bascules) |
-//! | `panel`   | panneau latéral (vignettes, signets, commentaires triés, filtrés, cherchés, avec leurs réponses et statuts) |
+//! | `panel`   | panneau latéral (vignettes et leur sélection multiple, signets, commentaires triés, filtrés, cherchés, avec leurs réponses et statuts) |
 //! | `prefs`   | réglages persistants et modes d'affichage             |
 //! | `settings` | fiche « Paramètres » : langue, apparence, mises à jour |
 //! | `protect` | fenêtre « Protéger par mot de passe » : deux mots de passe, permissions |

@@ -14,6 +14,17 @@
 //! Chaque commentaire montre sa case « coché » et son statut, qu'un clic
 //! change ; le tri et les filtres sont calculés par une fonction pure,
 //! [`comment_order`], que les épreuves exercent seule.
+//!
+//! # Les vignettes : sélectionner, glisser un bloc
+//!
+//! Comme dans l'Explorateur et dans l'organiseur d'Acrobat : un clic mène à
+//! la page ; `Ctrl+clic` ajoute ou retire une page de la sélection,
+//! `Maj+clic` sélectionne la plage depuis l'ancre, `Ctrl+A` sélectionne
+//! tout. La sélection ([`PageSelection`]) vit dans le document ouvert, pas
+//! ici : le panneau la reçoit pour la dessiner (cadre et voile d'accent) et
+//! rend des [`PanelAction`] qui disent quoi en faire. Glisser une page d'une
+//! sélection de plusieurs pages emporte **tout le bloc**, qui laisse ses
+//! emplacements vides pendant le geste.
 
 // Coordonnées d'écran entières.
 #![allow(
@@ -24,15 +35,15 @@
     clippy::many_single_char_names
 )]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 
 use acrux_graphics::Bitmap;
 
-use crate::platform::{Frame, Key};
+use crate::platform::{Frame, Key, Modifiers};
 use crate::ui::input::{InputAction, TextInput};
 use crate::ui::lang::{tr, trf};
-use crate::ui::paint::round_rect;
+use crate::ui::paint::{round_rect, round_rect_alpha};
 use crate::ui::palette::fold_char;
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
@@ -52,14 +63,150 @@ pub enum PanelTab {
     Attachments,
 }
 
+/// Ce que fait un clic sur une vignette de la sélection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectMode {
+    /// Clic simple : aller à la page ; la sélection explicite est levée.
+    Only,
+    /// `Ctrl+clic` : ajouter la page à la sélection, ou l'en retirer.
+    Toggle,
+    /// `Maj+clic` : la plage depuis l'ancre.
+    Extend,
+}
+
+/// Pages sélectionnées dans les vignettes, et l'ancre des plages.
+///
+/// Tant que l'ensemble est vide, la sélection est **implicite** : c'est la
+/// page courante, celle que montre le cadre d'accent — un clic sur une
+/// vignette ne fait que mener à la page, comme avant. `Ctrl+clic`,
+/// `Maj+clic` et `Ctrl+A` la rendent explicite : ce qui est alors sous le
+/// voile d'accent est exactement ce sur quoi agiront pivoter, supprimer,
+/// dupliquer, extraire ou glisser. Les indices se bornent au nombre de
+/// pages après chaque modification ([`PageSelection::clamp`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PageSelection {
+    set: BTreeSet<usize>,
+    anchor: Option<usize>,
+}
+
+impl PageSelection {
+    /// Plus de sélection explicite, plus d'ancre.
+    pub fn clear(&mut self) {
+        self.set.clear();
+        self.anchor = None;
+    }
+
+    /// Un clic simple : pas de sélection explicite, l'ancre sur `page`
+    /// (d'où partira un `Maj+clic`).
+    pub fn focus(&mut self, page: usize) {
+        self.set.clear();
+        self.anchor = Some(page);
+    }
+
+    /// La seule page `page`, explicitement (le clic droit sur une vignette
+    /// qui n'était pas sélectionnée, comme dans l'Explorateur).
+    pub fn only(&mut self, page: usize) {
+        self.set.clear();
+        self.set.insert(page);
+        self.anchor = Some(page);
+    }
+
+    /// Ajoute `page` à la sélection, ou l'en retire. Une sélection encore
+    /// implicite devient explicite d'abord : `current`, la page courante,
+    /// en fait partie, comme l'élément actif de l'Explorateur.
+    pub fn toggle(&mut self, page: usize, current: usize) {
+        if self.set.is_empty() && page != current {
+            self.set.insert(current);
+        }
+        if !self.set.remove(&page) {
+            self.set.insert(page);
+        }
+        self.anchor = Some(page);
+    }
+
+    /// La plage de l'ancre (la page courante s'il n'y en a pas) à `page`,
+    /// dans un sens ou dans l'autre ; l'ancre ne bouge pas.
+    pub fn extend_to(&mut self, page: usize, current: usize) {
+        let anchor = *self.anchor.get_or_insert(current);
+        self.set = (anchor.min(page)..=anchor.max(page)).collect();
+    }
+
+    /// Toutes les pages.
+    pub fn all(&mut self, count: usize) {
+        self.set = (0..count).collect();
+        if self.anchor.is_none_or(|a| a >= count) {
+            self.anchor = (count > 0).then_some(0);
+        }
+    }
+
+    /// Vrai si `page` est sélectionnée explicitement.
+    #[must_use]
+    pub fn contains(&self, page: usize) -> bool {
+        self.set.contains(&page)
+    }
+
+    /// Nombre de pages sélectionnées explicitement.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.set.len()
+    }
+
+    /// Vrai sans sélection explicite.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.set.is_empty()
+    }
+
+    /// Les pages sélectionnées, dans l'ordre du document.
+    #[must_use]
+    pub fn sorted(&self) -> Vec<usize> {
+        self.set.iter().copied().collect()
+    }
+
+    /// Retire les pages qui n'existent plus (après une suppression).
+    pub fn clamp(&mut self, count: usize) {
+        self.set.retain(|&p| p < count);
+        if self.anchor.is_some_and(|a| a >= count) {
+            self.anchor = count.checked_sub(1);
+        }
+    }
+
+    /// Suit une modification du document : chaque page sélectionnée va où
+    /// `place` la mène (`None` : elle a disparu), et rien ne reste au-delà
+    /// de `count` pages. Une page supprimée sort de la sélection au lieu de
+    /// laisser son indice à la page qui prend sa place.
+    pub fn remap(&mut self, place: impl Fn(usize) -> Option<usize>, count: usize) {
+        self.set = self
+            .set
+            .iter()
+            .filter_map(|&p| place(p))
+            .filter(|&p| p < count)
+            .collect();
+        self.anchor = self.anchor.and_then(&place).filter(|&a| a < count);
+    }
+
+    /// Sélectionne le bloc `start..start + len` : les pages déplacées,
+    /// dupliquées ou insérées, là où elles sont maintenant.
+    pub fn set_block(&mut self, start: usize, len: usize) {
+        self.set = (start..start + len).collect();
+        self.anchor = Some(start);
+    }
+}
+
 /// Ce que le panneau demande au visualiseur.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PanelAction {
     /// Rien.
     #[default]
     None,
-    /// Aller à une page (0 = première).
-    GoToPage(usize),
+    /// Une vignette cliquée (0 = première page) : aller à la page, ou
+    /// changer la sélection, selon le mode.
+    SelectPage {
+        /// Page cliquée.
+        page: usize,
+        /// Clic simple, `Ctrl+clic` ou `Maj+clic`.
+        mode: SelectMode,
+    },
     /// Suivre le signet d'identifiant donné.
     Follow(usize),
     /// Aller au commentaire d'indice donné dans la liste fournie.
@@ -70,13 +217,15 @@ pub enum PanelAction {
     SaveAttachment(usize),
     /// Joindre un fichier au document (bouton « Ajouter »).
     AddAttachment,
-    /// Déplacer une page : `from` vient se placer à l'indice `to` dans le
-    /// document réordonné.
-    MovePage {
-        /// Page déplacée.
+    /// Une vignette glissée puis lâchée : la page `from` (et avec elle le
+    /// bloc sélectionné qui la contient) va à la position `at`, comptée dans
+    /// l'ordre d'origine, de 0 (avant la première page) au nombre de pages
+    /// (après la dernière). Voir `pages::move_block`.
+    DropPages {
+        /// Page saisie.
         from: usize,
-        /// Nouvelle position.
-        to: usize,
+        /// Position d'insertion.
+        at: usize,
     },
     /// Cocher ou décocher le commentaire d'indice donné dans la liste
     /// fournie.
@@ -321,6 +470,8 @@ pub struct PanelContent<'a> {
     pub layers: &'a [(u32, String, bool)],
     /// Pièces jointes du document.
     pub attachments: &'a [AttachmentRow],
+    /// Pages sélectionnées dans les vignettes.
+    pub selected: &'a PageSelection,
 }
 
 /// Taille de fichier en unités lisibles (base 1024, comme l'explorateur).
@@ -389,6 +540,10 @@ pub struct Panel {
     /// Page sur laquelle le bouton a été enfoncé, tant qu'on ne sait pas
     /// encore si c'est un clic ou un glisser.
     press: Option<(usize, i32, i32)>,
+    /// L'appui est tombé sur une page d'une sélection de plusieurs pages :
+    /// il ne réduit la sélection à cette page qu'au relâchement sans
+    /// glisser, sans quoi on ne pourrait pas glisser le bloc.
+    press_in_selection: bool,
     /// Glisser en cours : page déplacée et position d'insertion visée.
     drag: Option<(usize, usize)>,
     /// Ordre, filtres et recherche de la liste des commentaires.
@@ -419,6 +574,7 @@ impl Panel {
             view_height: 0,
             visible_pages: Vec::new(),
             press: None,
+            press_in_selection: false,
             drag: None,
             comments: CommentView::default(),
             comment_rows: Vec::new(),
@@ -560,13 +716,25 @@ impl Panel {
                     let x = ((w - 1) - tw as i32) / 2;
                     if y + cell_h >= 0 && y <= view_h {
                         self.visible_pages.push(page);
-                        // Ombre, cadre (accent pour la page courante), bitmap ou blanc.
+                        // Ombre, cadre (accent pour la page courante et les
+                        // pages sélectionnées), bitmap ou blanc.
                         let current = page == content.current;
+                        let selected = content.selected.contains(page);
                         let hovered = self.hover == Some(Hit::Page(page))
                             || self.focus == Some(Hit::Page(page));
-                        let moving = self.drag.is_some_and(|(from, _)| from == page);
-                        if current || hovered {
-                            let c = if current { t.accent } else { t.text_dim };
+                        // Un bloc glissé laisse tous ses emplacements vides.
+                        let moving = self.drag.is_some_and(|(from, _)| {
+                            from == page
+                                || (content.selected.len() >= 2
+                                    && content.selected.contains(from)
+                                    && selected)
+                        });
+                        if current || hovered || selected {
+                            let c = if current || selected {
+                                t.accent
+                            } else {
+                                t.text_dim
+                            };
                             body.fill_rect(
                                 x - 3,
                                 y - 3,
@@ -594,6 +762,13 @@ impl Panel {
                             _ => body.fill_rect(
                                 x, y, tw as i32, th as i32, t.hover.0, t.hover.1, t.hover.2,
                             ),
+                        }
+                        // Le voile d'accent : ce qui est sélectionné se voit
+                        // d'un coup d'œil, même sur une page blanche.
+                        if selected && !moving {
+                            round_rect_alpha(
+                                &mut body, x, y, tw as i32, th as i32, 0.0, t.accent, 0.22,
+                            );
                         }
                         // Trait d'insertion à l'endroit où la page tomberait.
                         if let Some((_, to)) = self.drag {
@@ -624,7 +799,11 @@ impl Panel {
                         let lw = text.measure(size, &label);
                         let baseline =
                             (y + th as i32) as f32 + label_h as f32 * 0.5 + text.ascent(size) / 2.0;
-                        let color = if current { t.text } else { t.text_dim };
+                        let color = if current || selected {
+                            t.text
+                        } else {
+                            t.text_dim
+                        };
                         text.draw(
                             &mut body,
                             ((w - 1) as f32 - lw) / 2.0,
@@ -1331,6 +1510,14 @@ impl Panel {
         }
     }
 
+    /// Met le focus clavier sur la vignette d'une page : « Organiser les
+    /// pages » ouvre le panneau là où l'on est.
+    pub fn focus_page(&mut self, page: usize) {
+        if self.tab == PanelTab::Thumbnails {
+            self.focus = Some(Hit::Page(page));
+        }
+    }
+
     /// Vignette sous un point du panneau, s'il y en a une : c'est ce que
     /// vise un clic droit, qui ouvre le menu de la page.
     #[must_use]
@@ -1386,6 +1573,7 @@ impl Panel {
     pub fn mouse_move(&mut self, x: i32, y: i32, dragging: bool) -> bool {
         if !dragging {
             self.press = None;
+            self.press_in_selection = false;
             self.drag = None;
         } else if let Some((page, px, py)) = self.press {
             if self.drag.is_none() && ((x - px).abs() > 4 || (y - py).abs() > 4) {
@@ -1435,18 +1623,26 @@ impl Panel {
         best.map(|(_, i)| i)
     }
 
-    /// Bouton relâché : termine un glisser éventuel.
+    /// Bouton relâché : termine un glisser éventuel. Un appui sur une page
+    /// d'une sélection de plusieurs pages, relâché sans glisser, devient un
+    /// clic simple sur cette page.
+    ///
+    /// La position rendue est brute : déposer un bloc à sa propre place
+    /// rend l'ordre d'origine (`pages::move_block`), et le visualiseur ne
+    /// fait alors rien.
     pub fn mouse_up(&mut self) -> PanelAction {
-        self.press = None;
-        let Some((from, to)) = self.drag.take() else {
-            return PanelAction::None;
-        };
-        // Déposer juste avant ou juste après soi-même ne change rien.
-        if to == from || to == from + 1 {
-            return PanelAction::None;
+        let press = self.press.take();
+        let in_selection = std::mem::take(&mut self.press_in_selection);
+        match self.drag.take() {
+            Some((from, at)) => PanelAction::DropPages { from, at },
+            None => match press {
+                Some((page, _, _)) if in_selection => PanelAction::SelectPage {
+                    page,
+                    mode: SelectMode::Only,
+                },
+                _ => PanelAction::None,
+            },
         }
-        let to = if to > from { to - 1 } else { to };
-        PanelAction::MovePage { from, to }
     }
 
     /// Vrai si un glisser de page est en cours.
@@ -1455,10 +1651,37 @@ impl Panel {
         self.drag.is_some()
     }
 
-    /// Clic gauche.
-    pub fn mouse_down(&mut self, x: i32, y: i32, content: &PanelContent<'_>) -> PanelAction {
-        if let Some(Hit::Page(p)) = self.hit_at(x, y) {
-            self.press = Some((p, x, y));
+    /// Clic gauche, avec les modificateurs du clavier : `Ctrl` ajoute ou
+    /// retire la vignette de la sélection, `Maj` sélectionne la plage.
+    pub fn mouse_down(
+        &mut self,
+        x: i32,
+        y: i32,
+        m: Modifiers,
+        content: &PanelContent<'_>,
+    ) -> PanelAction {
+        self.press = None;
+        self.press_in_selection = false;
+        if let Some(Hit::Page(page)) = self.hit_at(x, y) {
+            self.comments.searching = false;
+            if m.ctrl {
+                return PanelAction::SelectPage {
+                    page,
+                    mode: SelectMode::Toggle,
+                };
+            }
+            if m.shift {
+                return PanelAction::SelectPage {
+                    page,
+                    mode: SelectMode::Extend,
+                };
+            }
+            // Seul un appui sans modificateur peut devenir un glisser.
+            self.press = Some((page, x, y));
+            if content.selected.len() >= 2 && content.selected.contains(page) {
+                self.press_in_selection = true;
+                return PanelAction::None;
+            }
         }
         let hit = self.hit_at(x, y);
         // Un clic ailleurs que dans le champ de recherche lui rend le
@@ -1533,7 +1756,10 @@ impl Panel {
                 }
                 PanelAction::None
             }
-            Hit::Page(p) => PanelAction::GoToPage(p),
+            Hit::Page(page) => PanelAction::SelectPage {
+                page,
+                mode: SelectMode::Only,
+            },
             Hit::Row(id, on_toggle) => {
                 let has_children = content.outline.iter().any(|r| r.id == id && r.has_children);
                 if on_toggle && has_children {
@@ -1711,6 +1937,17 @@ mod tests {
         ]
     }
 
+    fn plain() -> Modifiers {
+        Modifiers::default()
+    }
+
+    fn only(page: usize) -> PanelAction {
+        PanelAction::SelectPage {
+            page,
+            mode: SelectMode::Only,
+        }
+    }
+
     #[test]
     fn dragging_a_thumbnail_moves_the_page() {
         let mut p = Panel::new();
@@ -1720,6 +1957,7 @@ mod tests {
             ((0, 200, 200, 100), Hit::Page(2)),
         ];
         let bitmaps = HashMap::new();
+        let none = PageSelection::default();
         let content = PanelContent {
             page_count: 3,
             current: 0,
@@ -1730,25 +1968,129 @@ mod tests {
             comments: &[],
             layers: &[],
             attachments: &[],
+            selected: &none,
         };
-        // Un clic simple reste un clic.
-        assert_eq!(p.mouse_down(50, 50, &content), PanelAction::GoToPage(0));
+        // Un clic simple reste un clic : il mène à la page.
+        assert_eq!(p.mouse_down(50, 50, plain(), &content), only(0));
         assert_eq!(p.mouse_up(), PanelAction::None);
         // Un déplacement au-delà du seuil devient un glisser.
-        assert_eq!(p.mouse_down(50, 50, &content), PanelAction::GoToPage(0));
-        // Déposé entre les vignettes 1 et 2 : la page 0 se glisse au milieu.
+        assert_eq!(p.mouse_down(50, 50, plain(), &content), only(0));
+        // Déposé entre les vignettes 1 et 2 : position brute 2.
         p.mouse_move(52, 250, true);
         assert!(p.dragging());
-        assert_eq!(p.mouse_up(), PanelAction::MovePage { from: 0, to: 1 });
-        // Déposé sous la dernière vignette : la page 0 passe en dernier.
-        assert_eq!(p.mouse_down(50, 50, &content), PanelAction::GoToPage(0));
+        assert_eq!(p.mouse_up(), PanelAction::DropPages { from: 0, at: 2 });
+        // Déposé sous la dernière vignette : après la dernière page.
+        assert_eq!(p.mouse_down(50, 50, plain(), &content), only(0));
         p.mouse_move(52, 295, true);
-        assert_eq!(p.mouse_up(), PanelAction::MovePage { from: 0, to: 2 });
+        assert_eq!(p.mouse_up(), PanelAction::DropPages { from: 0, at: 3 });
         assert!(!p.dragging());
-        // Déposer à sa propre place ne déclenche rien.
-        assert_eq!(p.mouse_down(50, 50, &content), PanelAction::GoToPage(0));
+        // Déposé à sa propre place : la position est rendue telle quelle,
+        // c'est `move_block` qui y voit l'ordre d'origine.
+        assert_eq!(p.mouse_down(50, 50, plain(), &content), only(0));
         p.mouse_move(52, 60, true);
+        assert_eq!(p.mouse_up(), PanelAction::DropPages { from: 0, at: 1 });
+    }
+
+    /// Ctrl+clic et Maj+clic changent la sélection sans commencer de
+    /// glisser ; un appui sur une page d'un bloc sélectionné ne le réduit
+    /// qu'au relâchement, et un glisser l'emporte tout entier.
+    #[test]
+    fn modifiers_select_and_a_block_can_be_dragged() {
+        let mut p = Panel::new();
+        p.hits = (0..4)
+            .map(|i| ((0, i * 100, 200, 100), Hit::Page(i as usize)))
+            .collect();
+        let bitmaps = HashMap::new();
+        let mut selection = PageSelection::default();
+        selection.toggle(1, 0);
+        let content = PanelContent {
+            page_count: 4,
+            current: 0,
+            thumb_sizes: &[(10, 10); 4],
+            bitmaps: &bitmaps,
+            thumb_key: 1,
+            outline: &[],
+            comments: &[],
+            layers: &[],
+            attachments: &[],
+            selected: &selection,
+        };
+        let ctrl = Modifiers {
+            ctrl: true,
+            ..Modifiers::default()
+        };
+        let shift = Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(
+            p.mouse_down(50, 250, ctrl, &content),
+            PanelAction::SelectPage {
+                page: 2,
+                mode: SelectMode::Toggle
+            }
+        );
+        p.mouse_move(52, 390, true);
+        assert!(!p.dragging(), "un Ctrl+clic ne glisse pas");
         assert_eq!(p.mouse_up(), PanelAction::None);
+        assert_eq!(
+            p.mouse_down(50, 350, shift, &content),
+            PanelAction::SelectPage {
+                page: 3,
+                mode: SelectMode::Extend
+            }
+        );
+        assert_eq!(p.mouse_up(), PanelAction::None);
+        // Pages 0 et 1 sélectionnées : l'appui sur la 1 attend.
+        assert_eq!(p.mouse_down(50, 150, plain(), &content), PanelAction::None);
+        assert_eq!(p.mouse_up(), only(1), "relâché sans glisser : un clic");
+        assert_eq!(p.mouse_down(50, 150, plain(), &content), PanelAction::None);
+        p.mouse_move(50, 395, true);
+        assert_eq!(p.mouse_up(), PanelAction::DropPages { from: 1, at: 4 });
+        // Une page hors de la sélection : un clic ordinaire.
+        assert_eq!(p.mouse_down(50, 250, plain(), &content), only(2));
+    }
+
+    #[test]
+    fn the_selection_follows_explorer_rules() {
+        let mut s = PageSelection::default();
+        assert!(s.is_empty());
+        // Ctrl+clic depuis la page courante 2 : elle entre avec la page 5.
+        s.toggle(5, 2);
+        assert_eq!(s.sorted(), [2, 5]);
+        // Maj+clic : la plage depuis l'ancre (la dernière page cliquée),
+        // dans les deux sens, l'ancre ne bougeant pas.
+        s.extend_to(8, 0);
+        assert_eq!(s.sorted(), [5, 6, 7, 8]);
+        s.extend_to(3, 0);
+        assert_eq!(s.sorted(), [3, 4, 5]);
+        // Un second Ctrl+clic retire la page.
+        s.toggle(4, 2);
+        assert_eq!(s.sorted(), [3, 5]);
+        // Sans ancre, la plage part de la page courante.
+        let mut fresh = PageSelection::default();
+        fresh.extend_to(1, 3);
+        assert_eq!(fresh.sorted(), [1, 2, 3]);
+        s.all(4);
+        assert_eq!(s.sorted(), [0, 1, 2, 3]);
+        assert_eq!(s.len(), 4);
+        s.clamp(2);
+        assert_eq!(s.sorted(), [0, 1], "après une suppression");
+        s.set_block(3, 2);
+        assert_eq!(s.sorted(), [3, 4]);
+        // Une suppression de la page 3 : la 4 devient la 3.
+        s.remap(|p| (p != 3).then(|| if p > 3 { p - 1 } else { p }), 9);
+        assert_eq!(s.sorted(), [3]);
+        s.set_block(3, 2);
+        assert!(s.contains(4) && !s.contains(2));
+        s.only(7);
+        assert_eq!(s.sorted(), [7]);
+        s.focus(1);
+        assert!(s.is_empty(), "un clic simple lève la sélection");
+        s.extend_to(3, 0);
+        assert_eq!(s.sorted(), [1, 2, 3], "depuis la page du clic");
+        s.clear();
+        assert!(s.is_empty());
     }
 
     /// Cinq onglets tiennent dans la largeur du panneau : chaque libellé
@@ -1798,6 +2140,7 @@ mod tests {
         let mut p = Panel::new();
         p.tab = PanelTab::Attachments;
         let bitmaps = HashMap::new();
+        let none = PageSelection::default();
         let rows = vec![
             AttachmentRow {
                 name: "a.txt".into(),
@@ -1822,22 +2165,26 @@ mod tests {
             comments: &[],
             layers: &[],
             attachments: &rows,
+            selected: &none,
         };
         p.hits.push(((0, 40, 200, 40), Hit::Attachment(0)));
         p.hits.push(((0, 80, 200, 40), Hit::Attachment(1)));
         p.hits.push(((0, 120, 200, 40), Hit::Attachment(9)));
         p.hits.push(((0, 0, 200, 30), Hit::AddAttachment));
         assert_eq!(
-            p.mouse_down(10, 50, &content),
+            p.mouse_down(10, 50, plain(), &content),
             PanelAction::SaveAttachment(0)
         );
         assert_eq!(
-            p.mouse_down(10, 90, &content),
+            p.mouse_down(10, 90, plain(), &content),
             PanelAction::SaveAttachment(1)
         );
         // Indice hors liste (panneau repeint entre-temps) : rien ne se passe.
-        assert_eq!(p.mouse_down(10, 130, &content), PanelAction::None);
-        assert_eq!(p.mouse_down(10, 10, &content), PanelAction::AddAttachment);
+        assert_eq!(p.mouse_down(10, 130, plain(), &content), PanelAction::None);
+        assert_eq!(
+            p.mouse_down(10, 10, plain(), &content),
+            PanelAction::AddAttachment
+        );
     }
 
     #[test]
@@ -1860,6 +2207,7 @@ mod tests {
         p.tab = PanelTab::Bookmarks;
         let r = rows();
         let bitmaps = HashMap::new();
+        let none = PageSelection::default();
         let content = PanelContent {
             page_count: 2,
             current: 0,
@@ -1870,18 +2218,22 @@ mod tests {
             comments: &[],
             layers: &[],
             attachments: &[],
+            selected: &none,
         };
         p.hits.push(((0, 40, 200, 24), Hit::Row(0, false)));
         p.hits.push(((8, 40, 18, 24), Hit::Row(0, true)));
-        assert_eq!(p.mouse_down(100, 50, &content), PanelAction::Follow(0));
-        assert_eq!(p.mouse_down(12, 50, &content), PanelAction::None);
+        assert_eq!(
+            p.mouse_down(100, 50, plain(), &content),
+            PanelAction::Follow(0)
+        );
+        assert_eq!(p.mouse_down(12, 50, plain(), &content), PanelAction::None);
         assert!(p.expanded.contains(&0));
         p.hits
             .push(((0, 0, 100, 30), Hit::Tab(PanelTab::Thumbnails)));
-        assert_eq!(p.mouse_down(10, 10, &content), PanelAction::None);
+        assert_eq!(p.mouse_down(10, 10, plain(), &content), PanelAction::None);
         assert_eq!(p.tab, PanelTab::Thumbnails);
         p.hits.push(((0, 40, 200, 160), Hit::Page(1)));
-        assert_eq!(p.mouse_down(50, 100, &content), PanelAction::GoToPage(1));
+        assert_eq!(p.mouse_down(50, 100, plain(), &content), only(1));
         assert!(p.mouse_move(50, 100, false));
         assert!(!p.mouse_move(51, 101, false));
         assert!(p.mouse_leave());
@@ -1970,6 +2322,7 @@ mod tests {
         p.tab = PanelTab::Comments;
         let rows = comments();
         let bitmaps = HashMap::new();
+        let none = PageSelection::default();
         let content = PanelContent {
             page_count: 3,
             current: 0,
@@ -1980,6 +2333,7 @@ mod tests {
             comments: &rows,
             layers: &[],
             attachments: &[],
+            selected: &none,
         };
         p.hits = vec![
             ((0, 100, 200, 60), Hit::Comment(2)),
@@ -1989,22 +2343,25 @@ mod tests {
             ((10, 40, 180, 28), Hit::CommentSearch),
             ((10, 72, 88, 24), Hit::CommentSortButton),
         ];
-        assert_eq!(p.mouse_down(50, 130, &content), PanelAction::GoToComment(2));
         assert_eq!(
-            p.mouse_down(175, 110, &content),
+            p.mouse_down(50, 130, plain(), &content),
+            PanelAction::GoToComment(2)
+        );
+        assert_eq!(
+            p.mouse_down(175, 110, plain(), &content),
             PanelAction::ToggleMarked(2)
         );
         assert_eq!(
-            p.mouse_down(130, 130, &content),
+            p.mouse_down(130, 130, plain(), &content),
             PanelAction::CommentMenu(CommentMenu::Status(2), (120, 125, 50, 16))
         );
         assert_eq!(
-            p.mouse_down(20, 80, &content),
+            p.mouse_down(20, 80, plain(), &content),
             PanelAction::CommentMenu(CommentMenu::Sort, (10, 72, 88, 24))
         );
         // Le champ de recherche prend le clavier ; un autre clic le lui
         // reprend.
-        assert_eq!(p.mouse_down(20, 50, &content), PanelAction::None);
+        assert_eq!(p.mouse_down(20, 50, plain(), &content), PanelAction::None);
         assert!(p.comment_search_focused());
         p.comment_search_char('b');
         assert!(p.comment_search_key(Key::Backspace, false));
@@ -2012,8 +2369,11 @@ mod tests {
         p.comment_search_char('x');
         assert!(p.comment_search_key(Key::Escape, false));
         assert!(!p.comment_search_focused());
-        assert_eq!(p.mouse_down(20, 50, &content), PanelAction::None);
-        assert_eq!(p.mouse_down(50, 130, &content), PanelAction::GoToComment(2));
+        assert_eq!(p.mouse_down(20, 50, plain(), &content), PanelAction::None);
+        assert_eq!(
+            p.mouse_down(50, 130, plain(), &content),
+            PanelAction::GoToComment(2)
+        );
         assert!(!p.comment_search_focused());
     }
 

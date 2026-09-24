@@ -132,7 +132,10 @@ fn step(from: &mut Vec<Spot>, to: &mut Vec<Spot>, here: Spot) -> Option<Spot> {
 pub(super) fn moves_pages(op: &EditOp) -> bool {
     matches!(
         op,
-        EditOp::Delete { .. } | EditOp::Insert { .. } | EditOp::Reorder { .. }
+        EditOp::Delete { .. }
+            | EditOp::Insert { .. }
+            | EditOp::InsertBlank { .. }
+            | EditOp::Reorder { .. }
     )
 }
 
@@ -154,7 +157,9 @@ pub(super) fn page_after(op: &EditOp, page: usize, inserted: usize) -> Option<us
         // `order[i]` est la page d'origine de la page `i` : une page
         // dupliquée y figure deux fois, et l'on garde sa première place.
         EditOp::Reorder { order } => order.iter().position(|&o| o == page),
-        EditOp::Insert { at, .. } => Some(if page < *at { page } else { page + inserted }),
+        EditOp::Insert { at, .. } | EditOp::InsertBlank { at, .. } => {
+            Some(if page < *at { page } else { page + inserted })
+        }
         _ => Some(page),
     }
 }
@@ -184,7 +189,7 @@ pub(super) fn page_before(op: &EditOp, page: usize, inserted: usize) -> Option<u
         }
         // Une copie revient à la page dont elle est la copie.
         EditOp::Reorder { order } => order.get(page).copied(),
-        EditOp::Insert { at, .. } => {
+        EditOp::Insert { at, .. } | EditOp::InsertBlank { at, .. } => {
             if page < *at {
                 Some(page)
             } else if page >= at + inserted {

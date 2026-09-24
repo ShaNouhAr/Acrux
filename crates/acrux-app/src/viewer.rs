@@ -64,7 +64,8 @@ use crate::ui::objects::{self as objects_ui, Handle, ViewRect};
 use crate::ui::paint::{round_rect, round_rect_alpha, round_rect_outline, shadow};
 use crate::ui::palette::{Command, Palette, PaletteDown};
 use crate::ui::panel::{
-    AttachmentRow, CommentRow, OutlineRow, Panel, PanelAction, PanelContent, PanelTab, ReplyRow,
+    AttachmentRow, CommentRow, OutlineRow, PageSelection, Panel, PanelAction, PanelContent,
+    PanelTab, ReplyRow,
 };
 use crate::ui::prefs::{Fit, Prefs, ViewMode};
 use crate::ui::settings::{SettingsAction, SettingsSheet, SettingsState, UpdateLine};
@@ -86,6 +87,7 @@ mod draw;
 mod editmode;
 mod formfill;
 mod history;
+mod organize;
 mod protect;
 mod search;
 mod stamps;
@@ -738,6 +740,11 @@ struct Loaded {
     /// Vue de l'onglet quand il est passé à l'arrière-plan : y revenir la
     /// retrouve, au lieu de repartir de la première page.
     resume: Option<Spot>,
+    /// Vignettes sélectionnées (Ctrl+clic, Maj+clic, Ctrl+A) : propres à
+    /// l'onglet, suivies à chaque modification, perdues à l'annulation (le
+    /// document est rechargé, d'anciens indices ne désigneraient plus les
+    /// mêmes pages).
+    page_selection: PageSelection,
 }
 
 impl Loaded {
@@ -854,6 +861,10 @@ enum PromptKind {
         start: usize,
         end: usize,
     },
+    /// Nombre de pages par fichier d'un fractionnement.
+    SplitEvery,
+    /// Taille maximale des fichiers d'un fractionnement.
+    SplitSize,
 }
 
 /// Un média ouvert et sa place dans le document.
@@ -1055,6 +1066,9 @@ pub struct Viewer {
     prompt: Option<Prompt>,
     /// Dernière position de la souris dans la vue (pour poser une note).
     last_mouse: Option<(i32, i32)>,
+    /// Le pointeur est au-dessus du panneau latéral : Ctrl+A y sélectionne
+    /// toutes les vignettes, comme dans Acrobat, plutôt que le texte.
+    pointer_in_panel: bool,
     /// Documents ouverts qui ne sont pas à l'écran, dans l'ordre des onglets ;
     /// le document actif (`loaded`) occupe la position `active_tab`.
     others: Vec<Loaded>,
@@ -1332,6 +1346,7 @@ impl Viewer {
             last_click: None,
             prompt: None,
             last_mouse: None,
+            pointer_in_panel: false,
             others: Vec::new(),
             active_tab: 0,
             tabs: Tabs::new(),
@@ -2482,6 +2497,18 @@ impl Viewer {
                 self.prompt = None;
                 self.set_annot_text(page, index, value);
             }
+            PromptKind::SplitEvery => {
+                let error = self.split_every_entered(&value, window);
+                if let Some(p) = &mut self.prompt {
+                    p.error = error;
+                }
+            }
+            PromptKind::SplitSize => {
+                let error = self.split_size_entered(&value, window);
+                if let Some(p) = &mut self.prompt {
+                    p.error = error;
+                }
+            }
             PromptKind::Note { page, x, y } => {
                 let (page, x, y) = (*page, *x, *y);
                 self.prompt = None;
@@ -3023,78 +3050,27 @@ impl Viewer {
         window.request_redraw();
     }
 
-    /// Insère, avant la page courante, toutes les pages d'un autre PDF.
+    /// Insère, avant la page courante (ou la première des vignettes
+    /// sélectionnées), toutes les pages d'un autre PDF.
     fn insert_pages(&mut self, window: &mut dyn WindowHandle) {
         // Le droit se vérifie avant de faire choisir un fichier pour rien.
         if self.loaded.is_none() || !self.require_right(crate::render_worker::Right::Assemble) {
             return;
         }
+        let at = self.target_pages().first().copied().unwrap_or(0);
         let Some(path) = window.open_file_dialog() else {
             return;
         };
-        let at = self.current_page();
+        // Un fichier protégé déjà ouvert dans un onglet prête son mot de
+        // passe.
+        let password = self.password_of_open(&path);
         if self.apply_edit(EditOp::Insert {
             path,
-            password: None,
+            password,
             pages: Vec::new(),
             at,
         }) {
             self.set_notice(format!("pages insérées avant la page {}", at + 1));
-        }
-    }
-
-    /// Duplique la page courante juste après elle. Un index répété dans
-    /// l'ordre des pages suffit : `reorder_pages` en fait une copie indirecte
-    /// distincte, ce qui marche aussi sur un document déjà modifié.
-    fn duplicate_current(&mut self) {
-        let Some(l) = &self.loaded else { return };
-        let count = l.pages.len();
-        let page = self.target_page();
-        let mut order: Vec<usize> = (0..count).collect();
-        if page >= count {
-            return;
-        }
-        order.insert(page + 1, page);
-        if self.apply_edit(EditOp::Reorder { order }) {
-            self.set_notice(format!("page {} dupliquée", page + 1));
-        }
-    }
-
-    /// Écrit la page courante dans un nouveau fichier.
-    fn extract_current(&mut self, window: &mut dyn WindowHandle) {
-        // La page extraite est écrite en clair, sans les permissions du
-        // document : c'est en extraire le contenu, que la permission de copie
-        // refuse (Acrobat lie de même l'extraction de pages à la copie).
-        if self.loaded.is_some() && !self.rights().copy {
-            self.refuse(
-                lang::tr("Extraction interdite"),
-                lang::tr("Les permissions de ce document interdisent d'en extraire le contenu. Le mot de passe des permissions lève cette restriction."),
-            );
-            return;
-        }
-        let Some(l) = &self.loaded else { return };
-        let page = self.target_page();
-        let stem = l.path.file_stem().map_or_else(
-            || "document".to_string(),
-            |s| s.to_string_lossy().into_owned(),
-        );
-        let Some(target) = window.save_file_dialog(&format!("{stem}-p{}.pdf", page + 1)) else {
-            return;
-        };
-        let Some(l) = &self.loaded else { return };
-        let result = acrux_features::pages::extract_pages(&l.doc, &[page])
-            .and_then(|d| d.save_full())
-            .and_then(|bytes| {
-                std::fs::write(&target, bytes)
-                    .map_err(|e| acrux_core::Error::Corrupt(format!("écriture : {e}")))
-            });
-        match result {
-            Ok(()) => self.set_notice(format!(
-                "page {} écrite dans {}",
-                page + 1,
-                target.display()
-            )),
-            Err(e) => self.alert("Extraction impossible", &format!("{e}")),
         }
     }
 
@@ -3584,6 +3560,7 @@ impl Viewer {
             view_rotation: 0,
             nav: NavHistory::default(),
             resume: None,
+            page_selection: PageSelection::default(),
         });
         if let Some(l) = &mut self.loaded {
             l.set_fields(fields);
@@ -4122,6 +4099,7 @@ impl Viewer {
             comments: &l.comments,
             layers: &l.layers,
             attachments: &l.attachments,
+            selected: &l.page_selection,
         };
         self.panel.paint(frame, text, &theme, dpi, &content);
         if let Some(worker) = &mut l.worker {
@@ -4199,6 +4177,7 @@ impl Viewer {
             comments: &l.comments,
             layers: &l.layers,
             attachments: &l.attachments,
+            selected: &l.page_selection,
         };
         f(&mut self.panel, &content)
     }
@@ -4239,7 +4218,43 @@ impl Viewer {
 
     /// Touches reçues quand le panneau tient le focus clavier.
     fn panel_key(&mut self, key: Key, m: Modifiers, window: &mut dyn WindowHandle) {
+        let thumbs = self.panel.tab == PanelTab::Thumbnails;
         match key {
+            // Maj+flèche étend la sélection des vignettes depuis l'ancre,
+            // comme dans l'Explorateur.
+            Key::Down | Key::Up if m.shift && thumbs => {
+                let before = self.panel.focused_page();
+                let forward = key == Key::Down;
+                if self.with_panel_content(|p, c| p.focus_step(forward, c)) {
+                    let current = before.unwrap_or_else(|| self.current_page());
+                    if let (Some(page), Some(l)) = (self.panel.focused_page(), &mut self.loaded) {
+                        l.page_selection.extend_to(page, current);
+                    }
+                } else {
+                    // Au bout de la liste, le focus reste où il était.
+                    self.with_panel_content(|p, c| p.focus_edge(!forward, c));
+                }
+            }
+            // Ctrl+Espace ajoute ou retire la vignette qui a le focus.
+            Key::Space if m.ctrl && thumbs => {
+                let current = self.current_page();
+                if let (Some(page), Some(l)) = (self.panel.focused_page(), &mut self.loaded) {
+                    l.page_selection.toggle(page, current);
+                }
+            }
+            Key::Delete if thumbs => self.delete_targets(),
+            // Échap lève d'abord la sélection, puis rend le focus.
+            Key::Escape
+                if thumbs
+                    && self
+                        .loaded
+                        .as_ref()
+                        .is_some_and(|l| !l.page_selection.is_empty()) =>
+            {
+                if let Some(l) = &mut self.loaded {
+                    l.page_selection.clear();
+                }
+            }
             Key::Down | Key::Tab if !m.shift => {
                 if !self.with_panel_content(|p, c| p.focus_step(true, c)) {
                     self.region = Region::Document;
@@ -4305,20 +4320,8 @@ impl Viewer {
     fn panel_action(&mut self, action: PanelAction, window: &mut dyn WindowHandle) {
         match action {
             PanelAction::None => {}
-            PanelAction::GoToPage(p) => self.navigate(|v| v.scroll_to_page(p)),
-            PanelAction::MovePage { from, to } => {
-                let count = self.loaded.as_ref().map_or(0, |l| l.pages.len());
-                if from >= count || to >= count {
-                    return;
-                }
-                // L'ordre complet décrit le document réordonné : on retire la
-                // page déplacée puis on la réinsère à sa nouvelle place.
-                let mut order: Vec<usize> = (0..count).collect();
-                let page = order.remove(from);
-                order.insert(to, page);
-                self.apply_edit(EditOp::Reorder { order });
-                self.scroll_to_page(to);
-            }
+            PanelAction::SelectPage { page, mode } => self.select_page(page, mode),
+            PanelAction::DropPages { from, at } => self.drop_pages(from, at),
             PanelAction::ToggleLayer(number) => self.toggle_layer(number, window),
             PanelAction::SaveAttachment(index) => self.save_attachment(index, window),
             PanelAction::AddAttachment => self.add_attachment(window),
@@ -4428,12 +4431,18 @@ impl Viewer {
             Command::Replace => self.open_replace(),
             Command::Copy => self.copy_selection(window),
             Command::SelectAll => self.select_all(),
-            Command::RotateRight => self.rotate_current(90),
-            Command::RotateLeft => self.rotate_current(-90),
-            Command::DeletePage => self.delete_current(),
+            Command::RotateRight => self.rotate_targets(90),
+            Command::RotateLeft => self.rotate_targets(-90),
+            Command::DeletePage => self.delete_targets(),
             Command::InsertPages => self.insert_pages(window),
-            Command::DuplicatePage => self.duplicate_current(),
-            Command::ExtractPage => self.extract_current(window),
+            Command::DuplicatePage => self.duplicate_targets(),
+            Command::ExtractPage => self.extract_targets(window),
+            Command::InsertBlankBefore => self.insert_blank(false),
+            Command::InsertBlankAfter => self.insert_blank(true),
+            Command::ReplacePages => self.replace_pages_command(window),
+            Command::SplitDocument => self.split_document(),
+            Command::SelectAllPages => self.select_all_pages(),
+            Command::OrganizePages => self.organize_pages(),
             Command::Undo => self.undo_any(window),
             Command::Redo => self.redo_any(window),
             Command::EditText => self.start_text_edit(window),
@@ -4557,6 +4566,8 @@ impl Viewer {
             EditOp::Rotate { .. }
                 | EditOp::Delete { .. }
                 | EditOp::Insert { .. }
+                | EditOp::InsertBlank { .. }
+                | EditOp::Replace { .. }
                 | EditOp::Reorder { .. }
         );
         let key_scale = (self.scale() * 1000.0).round() as u32;
@@ -4587,6 +4598,11 @@ impl Viewer {
         let inserted = l.pages.len().saturating_sub(before);
         if let Some(op) = l.history.last() {
             l.nav.remap(|p| history::page_after(op, p, inserted));
+            // La sélection des vignettes suit ses pages : une page supprimée
+            // en sort, au lieu de léguer son indice à sa voisine.
+            let count = l.pages.len();
+            l.page_selection
+                .remap(|p| history::page_after(op, p, inserted), count);
         }
         l.page_index = PageIndex::new(&l.pages);
         let stand_ins: HashMap<(usize, u32), Bitmap> = if keeps_pages {
@@ -4824,43 +4840,6 @@ impl Viewer {
         self.replay(ops, redo, window);
     }
 
-    /// Pivote la page courante, ou celle d'un clic droit.
-    fn rotate_current(&mut self, degrees: i32) {
-        if self.loaded.is_none() {
-            return;
-        }
-        let page = self.target_page();
-        self.apply_edit(EditOp::Rotate {
-            pages: vec![page],
-            degrees,
-        });
-    }
-
-    /// Supprime la page courante, ou celle d'un clic droit, après
-    /// confirmation. La page est retenue dans la question : la réponse, qui
-    /// arrive plus tard, supprime bien celle qui était visée.
-    fn delete_current(&mut self) {
-        let Some(l) = &self.loaded else { return };
-        if l.pages.len() <= 1 {
-            self.alert(
-                "Suppression impossible",
-                "Un document doit garder au moins une page.",
-            );
-            return;
-        }
-        // Le droit se vérifie avant de faire confirmer pour rien.
-        if !self.require_right(crate::render_worker::Right::Assemble) {
-            return;
-        }
-        let page = self.target_page();
-        self.confirm(
-            &format!("Supprimer la page {} ?", page + 1),
-            "La page sera retirée du document. Ctrl+Z la rétablit ; Ctrl+S enregistre.",
-            "Supprimer",
-            Then::DeletePage(page),
-        );
-    }
-
     /// Enregistre (`save_as` : demande un nouveau chemin et réécrit tout).
     fn save(&mut self, save_as: bool, window: &mut dyn WindowHandle) -> bool {
         // Ce qui est tapé mais pas encore écrit doit l'être avant le fichier.
@@ -5003,7 +4982,7 @@ impl Viewer {
             ToolAction::ToggleTools => self.run_command(Command::ToggleTools, window),
             ToolAction::Undo => self.undo_any(window),
             ToolAction::Redo => self.redo_any(window),
-            ToolAction::RotatePage => self.rotate_current(90),
+            ToolAction::RotatePage => self.rotate_targets(90),
             ToolAction::Save => {
                 self.save(false, window);
             }
@@ -7876,6 +7855,20 @@ impl Viewer {
                     p.char(c);
                 }
             }
+            // Ctrl+A dans le panneau des vignettes — qu'il tienne le clavier
+            // ou que le pointeur soit dessus, comme dans Acrobat — sélectionne
+            // toutes les pages, pas tout le texte du document.
+            Event::Char(c, m)
+                if m.ctrl
+                    && !m.shift
+                    && matches!(c, 'a' | 'A' | '\u{1}')
+                    && self.loaded.is_some()
+                    && self.thumbs_shown()
+                    && (self.region == Region::Panel || self.pointer_in_panel) =>
+            {
+                self.select_all_pages();
+                window.request_redraw();
+            }
             // Les touches de disposition valent partout : sinon la zone qui
             // tient le focus les avalerait et on ne pourrait plus en sortir.
             Event::Key(key, m) if is_global_key(key, m) => self.key(key, m, window),
@@ -7884,6 +7877,13 @@ impl Viewer {
             }
             Event::Key(key, m) if self.region == Region::Panel => {
                 self.panel_key(key, m, window);
+            }
+            // Les vignettes au clavier : R et Maj+R pivotent la sélection,
+            // même quand le panneau tient le clavier.
+            Event::Char(c @ ('r' | 'R'), m)
+                if self.region == Region::Panel && self.thumbs_shown() && !m.ctrl =>
+            {
+                self.rotate_targets(if c == 'r' { 90 } else { -90 });
             }
             // Une zone autre que le document mange les caractères : sinon la
             // barre d'espace ferait défiler la page sous le bouton visé.
@@ -8006,8 +8006,8 @@ impl Viewer {
                         'f' | 'F' => self.set_fit(Fit::Width),
                         '1' => self.set_zoom(1.0),
                         't' | 'T' => self.toggle_theme(window),
-                        'r' => self.rotate_current(90),
-                        'R' => self.rotate_current(-90),
+                        'r' => self.rotate_targets(90),
+                        'R' => self.rotate_targets(-90),
                         ' ' => self.activate_focused_field(window),
                         'e' | 'E' => self.start_text_edit(window),
                         'h' => self.markup_selection(MarkupKind::Highlight),
@@ -8180,8 +8180,9 @@ impl Viewer {
                                     comments: &l.comments,
                                     layers: &l.layers,
                                     attachments: &l.attachments,
+                                    selected: &l.page_selection,
                                 };
-                                self.panel.mouse_down(x, y - top, &content)
+                                self.panel.mouse_down(x, y - top, modifiers, &content)
                             }
                             None => PanelAction::None,
                         };
@@ -8371,12 +8372,10 @@ impl Viewer {
                 self.three_d_mouse_up();
                 self.edit_mouse_up();
                 self.field_mouse_up();
-                if self.panel.dragging() {
-                    let action = self.panel.mouse_up();
-                    self.panel_action(action, window);
-                } else {
-                    let _ = self.panel.mouse_up();
-                }
+                // Un glisser de vignettes se dépose, un appui sur un bloc
+                // sélectionné relâché sans glisser devient un clic simple.
+                let action = self.panel.mouse_up();
+                self.panel_action(action, window);
                 self.drag_last = None;
                 let was_selecting = self.sel_dragging;
                 self.sel_dragging = false;
@@ -8444,6 +8443,7 @@ impl Viewer {
                     && !in_sign_panel
                     && x < self.view_left() as i32
                     && y >= self.view_top() as i32;
+                self.pointer_in_panel = in_panel;
                 if in_panel {
                     hover_changed |= self
                         .panel
@@ -8821,7 +8821,7 @@ impl Viewer {
                 self.enter_focused_field(window);
             }
             Key::Enter => self.activate_focused_field(window),
-            Key::Delete if m.ctrl => self.delete_current(),
+            Key::Delete if m.ctrl => self.delete_targets(),
             Key::Down => self.glide_by(70.0),
             Key::Up => self.glide_by(-70.0),
             Key::Right => self.scroll_x += 60.0,

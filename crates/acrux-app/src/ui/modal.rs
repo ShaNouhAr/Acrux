@@ -308,6 +308,13 @@ impl ButtonRow {
         self.layout_with_widths(&widths, right, y, h, (BUTTON_GAP * dpi) as i32)
     }
 
+    /// Largeur de la rangée entière, écarts compris.
+    pub fn natural_width(&self, text: &mut TextRenderer, size: f32, dpi: f32) -> i32 {
+        let widths = self.widths(text, size, dpi);
+        let gap = (BUTTON_GAP * dpi) as i32;
+        widths.iter().sum::<i32>() + gap * (widths.len() as i32 - 1).max(0)
+    }
+
     /// Place les boutons alignés à gauche à partir de `left`. Rend l'abscisse
     /// qui suit le dernier.
     pub fn layout_left(

@@ -81,18 +81,6 @@ impl Viewer {
         self.command_target = Target::Current;
     }
 
-    /// Page visée par la commande en cours : celle du clic droit, sinon la
-    /// page courante.
-    pub(super) fn target_page(&self) -> usize {
-        match self.command_target {
-            Target::Page(page) => {
-                let count = self.loaded.as_ref().map_or(0, |l| l.pages.len());
-                page.min(count.saturating_sub(1))
-            }
-            _ => self.current_page(),
-        }
-    }
-
     /// Onglet visé par la commande en cours : celui du clic droit, sinon
     /// l'onglet actif.
     pub(super) fn target_tab(&self) -> usize {
@@ -321,7 +309,8 @@ impl Viewer {
                 return None;
             }
             let page = self.panel.page_at(x, y - top)?;
-            return Some((self.thumb_menu(x, y, page), "vignette", None));
+            self.select_for_menu(page);
+            return Some((self.thumb_menu(x, y), "vignette", None));
         }
         let (vx, vy) = (x - left, y - top);
         if self.showing_home() {
@@ -376,7 +365,8 @@ impl Viewer {
                 return false;
             };
             let (rx, ry, rw, rh) = self.panel.page_rect(page).unwrap_or((0, 0, left, 0));
-            let mut menu = self.thumb_menu(rx + rw / 2, top + ry + rh / 2, page);
+            self.select_for_menu(page);
+            let mut menu = self.thumb_menu(rx + rw / 2, top + ry + rh / 2);
             menu.select_first();
             return self.show_menu(menu, "vignette (clavier)", None, window);
         }
@@ -609,42 +599,100 @@ impl Viewer {
             )
     }
 
-    /// Le menu d'une vignette : la page qu'elle montre, et non la page
-    /// courante. Le clic droit ne change pas la page affichée. Pas de
-    /// raccourci affiché : ceux du clavier visent la page courante, qui
-    /// peut être une autre.
-    fn thumb_menu(&self, x: i32, y: i32, page: usize) -> Menu<Action> {
+    /// Le clic droit sur une vignette hors de la sélection en fait la
+    /// sélection seule, comme dans l'Explorateur : le menu vise ce qui est
+    /// sous le voile d'accent, rien d'autre.
+    fn select_for_menu(&mut self, page: usize) {
+        if let Some(l) = &mut self.loaded {
+            if !l.page_selection.contains(page) {
+                l.page_selection.only(page);
+            }
+        }
+    }
+
+    /// Le menu d'une vignette : les pages sélectionnées (voir
+    /// `select_for_menu`), et non la page courante. Le clic droit ne change
+    /// pas la page affichée. Chaque élément lance la commande de la palette,
+    /// qui vise la sélection ; pas de raccourci affiché, ceux du clavier
+    /// n'agissant sur la sélection que panneau ouvert.
+    fn thumb_menu(&self, x: i32, y: i32) -> Menu<Action> {
         let count = self.loaded.as_ref().map_or(0, |l| l.pages.len());
-        let here = Target::Page(page);
+        let chosen = self.target_pages().len();
+        let rights = self.rights();
+        let now = Target::Current;
         Menu::new(x, y)
             .item(
                 Some(Icon::Rotate),
-                tr("Pivoter"),
+                tr("Pivoter à droite"),
                 "",
-                (Command::RotateRight, here),
-                true,
+                (Command::RotateRight, now),
+                rights.assemble,
+            )
+            .item(
+                None,
+                tr("Pivoter à gauche"),
+                "",
+                (Command::RotateLeft, now),
+                rights.assemble,
             )
             .item(
                 Some(Icon::PageDuplicate),
                 tr("Dupliquer"),
                 "",
-                (Command::DuplicatePage, here),
-                true,
+                (Command::DuplicatePage, now),
+                rights.assemble,
+            )
+            .separator()
+            .item(
+                Some(Icon::PageInsert),
+                tr("Insérer une page vierge avant"),
+                "",
+                (Command::InsertBlankBefore, now),
+                rights.assemble,
+            )
+            .item(
+                None,
+                tr("Insérer une page vierge après"),
+                "",
+                (Command::InsertBlankAfter, now),
+                rights.assemble,
+            )
+            .item(
+                Some(Icon::Open),
+                tr("Insérer des pages…"),
+                "",
+                (Command::InsertPages, now),
+                rights.assemble,
+            )
+            .item(
+                Some(Icon::Replace),
+                tr("Remplacer…"),
+                "",
+                (Command::ReplacePages, now),
+                rights.assemble,
             )
             .item(
                 Some(Icon::PageExtract),
                 tr("Extraire…"),
                 "",
-                (Command::ExtractPage, here),
-                true,
+                (Command::ExtractPage, now),
+                rights.copy,
             )
             .separator()
             .item(
                 Some(Icon::PageDelete),
                 tr("Supprimer"),
                 "",
-                (Command::DeletePage, here),
-                count > 1,
+                (Command::DeletePage, now),
+                chosen < count && rights.assemble,
+            )
+            .separator()
+            .item(
+                None,
+                tr("Tout sélectionner"),
+                "",
+                (Command::SelectAllPages, now),
+                true,
             )
     }
 

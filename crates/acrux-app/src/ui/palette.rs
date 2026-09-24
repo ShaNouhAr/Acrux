@@ -119,18 +119,32 @@ pub enum Command {
     Copy,
     /// Tout sélectionner.
     SelectAll,
-    /// Pivoter la page à droite.
+    /// Pivoter les pages visées (la sélection des vignettes, sinon la page
+    /// courante) à droite.
     RotateRight,
-    /// Pivoter la page à gauche.
+    /// Pivoter les pages visées à gauche.
     RotateLeft,
-    /// Supprimer la page.
+    /// Supprimer les pages visées.
     DeletePage,
     /// Insérer les pages d'un autre fichier avant la page courante.
     InsertPages,
-    /// Dupliquer la page courante.
+    /// Dupliquer les pages visées.
     DuplicatePage,
-    /// Enregistrer la page courante dans un nouveau fichier.
+    /// Enregistrer les pages visées dans un nouveau fichier, ou un fichier
+    /// par page.
     ExtractPage,
+    /// Insérer une page vierge avant la page visée.
+    InsertBlankBefore,
+    /// Insérer une page vierge après la page visée.
+    InsertBlankAfter,
+    /// Remplacer les pages visées par celles d'un autre fichier.
+    ReplacePages,
+    /// Fractionner le document en plusieurs fichiers.
+    SplitDocument,
+    /// Sélectionner toutes les vignettes.
+    SelectAllPages,
+    /// Ouvrir le panneau des vignettes et lui donner le clavier.
+    OrganizePages,
     /// Annuler.
     Undo,
     /// Rétablir.
@@ -309,6 +323,12 @@ impl Command {
             Command::InsertPages => "insert-pages",
             Command::DuplicatePage => "duplicate-page",
             Command::ExtractPage => "extract-page",
+            Command::InsertBlankBefore => "insert-blank-before",
+            Command::InsertBlankAfter => "insert-blank-after",
+            Command::ReplacePages => "replace-pages",
+            Command::SplitDocument => "split-document",
+            Command::SelectAllPages => "select-all-pages",
+            Command::OrganizePages => "organize-pages",
             Command::Undo => "undo",
             Command::Redo => "redo",
             Command::EditText => "edit-text",
@@ -962,14 +982,21 @@ const ENTRIES: &[Entry] = &[
         needs_document: true,
     },
     Entry {
-        label: "Pivoter la page à droite",
+        label: "Organiser les pages",
+        shortcut: "",
+        keywords: "vignettes miniatures reorganiser ordre deplacer selectionner panneau",
+        command: Command::OrganizePages,
+        needs_document: true,
+    },
+    Entry {
+        label: "Pivoter les pages à droite",
         shortcut: "R",
         keywords: "rotation tourner orientation horaire pivotement",
         command: Command::RotateRight,
         needs_document: true,
     },
     Entry {
-        label: "Pivoter la page à gauche",
+        label: "Pivoter les pages à gauche",
         shortcut: "Maj+R",
         keywords: "rotation tourner orientation antihoraire pivotement",
         command: Command::RotateLeft,
@@ -998,22 +1025,59 @@ const ENTRIES: &[Entry] = &[
         command: Command::InsertPages,
         needs_document: true,
     },
+    // « Après » d'abord : c'est l'insertion la plus courante, et celle que
+    // propose la colonne d'outils.
     Entry {
-        label: "Dupliquer la page",
+        label: "Insérer une page vierge après",
+        shortcut: "",
+        keywords: "blanche vide nouvelle ajouter",
+        command: Command::InsertBlankAfter,
+        needs_document: true,
+    },
+    Entry {
+        label: "Insérer une page vierge avant",
+        shortcut: "",
+        keywords: "blanche vide nouvelle ajouter",
+        command: Command::InsertBlankBefore,
+        needs_document: true,
+    },
+    Entry {
+        label: "Remplacer des pages…",
+        shortcut: "",
+        keywords: "substituer echanger nouvelle version remplacement",
+        command: Command::ReplacePages,
+        needs_document: true,
+    },
+    Entry {
+        label: "Dupliquer les pages",
         shortcut: "",
         keywords: "copier doubler repeter",
         command: Command::DuplicatePage,
         needs_document: true,
     },
     Entry {
-        label: "Extraire la page dans un fichier",
+        label: "Extraire les pages dans un fichier",
         shortcut: "",
         keywords: "exporter isoler separer decouper",
         command: Command::ExtractPage,
         needs_document: true,
     },
     Entry {
-        label: "Supprimer la page",
+        label: "Fractionner le document…",
+        shortcut: "",
+        keywords: "diviser decouper separer scinder split partager morceaux",
+        command: Command::SplitDocument,
+        needs_document: true,
+    },
+    Entry {
+        label: "Sélectionner toutes les pages",
+        shortcut: "",
+        keywords: "tout vignettes selection miniatures",
+        command: Command::SelectAllPages,
+        needs_document: true,
+    },
+    Entry {
+        label: "Supprimer les pages",
         shortcut: "Ctrl+Suppr",
         keywords: "effacer retirer enlever suppression",
         command: Command::DeletePage,
@@ -2340,7 +2404,39 @@ mod tests {
         // bien des commandes (« accueil maison récents ») : seules restent
         // celles dont le libellé, à l'écran, dit pourquoi.
         let p = typed(palette(), "enrs");
-        assert_eq!(commands(&p), [Command::Save, Command::SaveAs]);
+        let list = commands(&p);
+        assert_eq!(list.get(..2), Some(&[Command::Save, Command::SaveAs][..]));
+        for command in list {
+            assert!(
+                !marks_of(&p, command).is_empty(),
+                "{command:?} : rien à l'écran ne dit pourquoi"
+            );
+        }
+    }
+
+    #[test]
+    fn les_pages_s_organisent_depuis_la_palette() {
+        assert_eq!(top("fractionner"), Some(Command::SplitDocument));
+        assert_eq!(top("diviser"), Some(Command::SplitDocument));
+        assert_eq!(top("page vierge"), Some(Command::InsertBlankAfter));
+        assert_eq!(top("vierge avant"), Some(Command::InsertBlankBefore));
+        assert_eq!(top("remplacer des pages"), Some(Command::ReplacePages));
+        assert_eq!(top("organiser"), Some(Command::OrganizePages));
+        assert_eq!(top("toutes les pages"), Some(Command::SelectAllPages));
+        let without = Palette::with_lang(false, &[], false);
+        for command in [
+            Command::InsertBlankAfter,
+            Command::InsertBlankBefore,
+            Command::ReplacePages,
+            Command::SplitDocument,
+            Command::SelectAllPages,
+            Command::OrganizePages,
+        ] {
+            assert!(
+                !commands(&without).contains(&command),
+                "{command:?} demande un document"
+            );
+        }
     }
 
     #[test]

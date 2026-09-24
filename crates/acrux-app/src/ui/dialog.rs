@@ -207,9 +207,12 @@ impl Dialog {
         veil(frame, progress);
         let (fw, fh) = (frame.width as i32, frame.height as i32);
         let s = |v: f32| (v * dpi) as i32;
-        let width = modal::card_width(fw, modal::CARD_WIDTH, dpi);
         let pad = s(modal::PAD);
         let size = theme.font_size * dpi;
+        // Un choix à quatre ou cinq réponses (« Fractionner le document »)
+        // élargit la carte plutôt que de faire déborder ses boutons.
+        let row = self.row.natural_width(text, size, dpi) + 2 * pad;
+        let width = modal::card_width(fw, modal::CARD_WIDTH, dpi).max(row.min(fw - s(40.0)));
         let title_size = modal::title_size(theme, dpi);
         let icon = s(36.0);
         // Le message, coupé à la largeur disponible.
