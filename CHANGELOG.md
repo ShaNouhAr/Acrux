@@ -17,7 +17,9 @@ c'est la section correspondante de ce fichier qui devient la page de version.
   chaque bouton dit son nom au survol. Recliquer l'outil ramène à la
   sélection sans fermer la barre ; un outil choisi alors que du texte est
   sélectionné s'applique tout de suite. Échap éteint l'outil, un second
-  Échap ferme la barre, comme « Terminer ».
+  Échap ferme la barre, comme « Terminer » — après une sélection, un champ
+  ou une barre qui a le focus, et jamais quand elle est cachée : en plein
+  écran, Échap fermait la barre invisible au lieu d'en sortir.
 - **Souligner, barrer, souligner d'un trait ondulé** la sélection : `U`
   souligne (`Maj+U` en y joignant un commentaire), et le clic droit sur une
   sélection propose les quatre balisages ; tous sont dans la palette.
@@ -37,7 +39,10 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 - **Le panneau des commentaires** nomme soulignements, textes barrés,
   insertions et remplacements, dans la langue de l'interface ; un
   remplacement n'y apparaît qu'une fois. Cliquer un commentaire mène au
-  passage commenté, et non plus en haut de sa page.
+  passage commenté, et non plus en haut de sa page. Un balisage posé sans
+  commentaire y montre le texte qu'il désigne, et non plus « (sans texte) » :
+  comme Acrobat, Acrux recopie le passage dans la note de l'annotation, que
+  les autres lecteurs affichent aussi.
 - Chaque annotation posée par Acrux porte un **identifiant unique** (`/NM`)
   et sa **date de création** : les autres lecteurs, Acrobat compris, peuvent
   y répondre et la suivre. L'identifiant ne change ni d'une copie à l'autre

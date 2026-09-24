@@ -182,6 +182,14 @@ type Tip = (String, (i32, i32, i32, i32), std::time::Instant);
 /// quand on traverse la barre, assez court pour répondre à une hésitation.
 const TIP_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
 
+/// Un passage sur une ligne : les blancs, retours à la ligne compris,
+/// ramenés à une seule espace. C'est la forme sous laquelle un balisage
+/// garde le texte qu'il désigne — la mise en lignes de la page n'a plus de
+/// sens dans une note.
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Commentaires du document : les annotations qui portent un texte ou une
 /// intention de relecture. Les liens et les champs de formulaire n'en sont
 /// pas — ils ont déjà leur place ailleurs dans l'interface.
@@ -690,9 +698,16 @@ enum PromptKind {
     Markup {
         kind: MarkupKind,
         zones: Vec<(usize, Rect)>,
+        /// Texte balisé, page par page (voir `add_markup`).
+        excerpts: Vec<(usize, String)>,
     },
-    /// Texte proposé à la place d'un passage de `page`, une zone par ligne.
-    Replace { page: usize, quads: Vec<Rect> },
+    /// Texte proposé à la place d'un passage de `page`, une zone par ligne ;
+    /// `passage` est le texte remplacé.
+    Replace {
+        page: usize,
+        quads: Vec<Rect>,
+        passage: String,
+    },
     /// Texte à insérer sur `page`, en `x`, dans la ligne `line` (espace page).
     Insert { page: usize, x: f64, line: Rect },
     /// Texte à répartir dans un peigne de cases (IBAN, BIC, date) de `page`.
@@ -2190,15 +2205,23 @@ impl Viewer {
                     prompt.input.clear();
                 }
             }
-            PromptKind::Markup { kind, zones } => {
-                let (kind, zones) = (*kind, zones.clone());
+            PromptKind::Markup {
+                kind,
+                zones,
+                excerpts,
+            } => {
+                let (kind, zones, excerpts) = (*kind, zones.clone(), excerpts.clone());
                 self.prompt = None;
-                self.add_markup(kind, &zones, Some(&value));
+                self.add_markup(kind, &zones, &excerpts, Some(&value));
             }
-            PromptKind::Replace { page, quads } => {
-                let (page, quads) = (*page, quads.clone());
+            PromptKind::Replace {
+                page,
+                quads,
+                passage,
+            } => {
+                let (page, quads, passage) = (*page, quads.clone(), passage.clone());
                 self.prompt = None;
-                self.add_replace(page, quads, &value);
+                self.add_replace(page, quads, &passage, &value);
             }
             PromptKind::Insert { page, x, line } => {
                 let (page, x, line) = (*page, *x, *line);
@@ -2356,12 +2379,49 @@ impl Viewer {
         zones
     }
 
+    /// Texte sélectionné, page par page, les blancs et les retours à la
+    /// ligne ramenés à une espace : ce que recopie un balisage sans
+    /// commentaire (voir `add_markup`).
+    fn selection_excerpts(&mut self) -> Vec<(usize, String)> {
+        let Some(sel) = self.selection.filter(|s| !s.is_empty()) else {
+            return Vec::new();
+        };
+        let Some(l) = &mut self.loaded else {
+            return Vec::new();
+        };
+        let (s, e) = sel.ordered();
+        let mut out = Vec::new();
+        for page in s.page..=e.page.min(l.pages.len().saturating_sub(1)) {
+            let text = &l.text(page).1;
+            if let Some((a, b)) = sel.range_on_page(page, text.len()) {
+                let excerpt = one_line(&text.text(a, b));
+                if !excerpt.is_empty() {
+                    out.push((page, excerpt));
+                }
+            }
+        }
+        out
+    }
+
     /// Pose un balisage sur des zones : **une** annotation par page, une
     /// zone par ligne, et une seule modification pour tout le geste. Un
     /// passage de dix lignes est un seul commentaire dans le panneau, et se
     /// défait d'un seul Ctrl+Z. Le commentaire, s'il y en a un, va à la
     /// première page du passage : c'est là que le lecteur commence.
-    fn add_markup(&mut self, kind: MarkupKind, zones: &[(usize, Rect)], comment: Option<&str>) {
+    ///
+    /// Sans commentaire, l'annotation reçoit le texte balisé (`excerpts`),
+    /// comme dans Acrobat (« copier le texte sélectionné dans les notes des
+    /// surlignages, soulignements et barrés », actif par défaut) : le
+    /// panneau des commentaires et les autres lecteurs montrent alors *ce
+    /// qui* est souligné ou barré, au lieu d'une ligne « (sans texte) » par
+    /// annotation.
+    fn add_markup(
+        &mut self,
+        kind: MarkupKind,
+        zones: &[(usize, Rect)],
+        excerpts: &[(usize, String)],
+        comment: Option<&str>,
+    ) {
         let mut pages: Vec<(usize, Vec<Rect>)> = Vec::new();
         for &(page, rect) in zones {
             match pages.iter_mut().find(|(p, _)| *p == page) {
@@ -2382,7 +2442,13 @@ impl Viewer {
                     kind,
                     quads,
                     color: kind.default_color(),
-                    contents: if i == 0 { comment.clone() } else { None },
+                    contents: match &comment {
+                        Some(c) if i == 0 => Some(c.clone()),
+                        _ => excerpts
+                            .iter()
+                            .find(|(p, _)| *p == page)
+                            .map(|(_, t)| t.clone()),
+                    },
                 },
                 // Chaque annotation a son identifiant, tiré ici et non à
                 // l'application (voir `AnnotItem`).
@@ -2421,11 +2487,23 @@ impl Viewer {
             MarkupKind::StrikeOut => "Barrer et commenter",
             MarkupKind::Squiggly => "Souligner d'un trait ondulé et commenter",
         };
+        // Avant la saisie, comme pour « Remplacer » : sur un document qui
+        // interdit de commenter, le refus arrivait après la frappe, et le
+        // commentaire tapé était perdu.
+        if !self.require_right(crate::render_worker::Right::Annotate) {
+            window.request_redraw();
+            return;
+        }
+        let excerpts = self.selection_excerpts();
         self.prompt = Some(Prompt::new(
             lang::tr(title),
             lang::tr("Commentaire :").into(),
             TextInput::new(lang::tr("Votre remarque")),
-            PromptKind::Markup { kind, zones },
+            PromptKind::Markup {
+                kind,
+                zones,
+                excerpts,
+            },
         ));
         window.request_redraw();
     }
@@ -2438,7 +2516,8 @@ impl Viewer {
             self.set_notice(lang::tr("sélectionnez d'abord du texte").into());
             return;
         }
-        self.add_markup(kind, &zones, None);
+        let excerpts = self.selection_excerpts();
+        self.add_markup(kind, &zones, &excerpts, None);
     }
 
     /// Ouvre l'invite « Remplacer le texte » pour la sélection.
@@ -2475,14 +2554,19 @@ impl Viewer {
             lang::tr("Remplacer le texte"),
             label,
             TextInput::new(lang::tr("Nouveau texte")),
-            PromptKind::Replace { page, quads },
+            PromptKind::Replace {
+                page,
+                quads,
+                passage: one_line(&current),
+            },
         ));
     }
 
     /// Pose un remplacement : le passage barré et, au bout, le texte
     /// proposé. Sans texte, c'est un simple barré — « supprimer ce
-    /// passage », en langage de relecture.
-    fn add_replace(&mut self, page: usize, quads: Vec<Rect>, text: &str) {
+    /// passage », en langage de relecture —, qui porte le passage comme
+    /// tout balisage sans commentaire (voir `add_markup`).
+    fn add_replace(&mut self, page: usize, quads: Vec<Rect>, passage: &str, text: &str) {
         let strike = MarkupKind::StrikeOut.default_color();
         let (what, annotation) = if text.trim().is_empty() {
             (
@@ -2491,7 +2575,7 @@ impl Viewer {
                     kind: MarkupKind::StrikeOut,
                     quads,
                     color: strike,
-                    contents: None,
+                    contents: Some(passage.to_string()).filter(|p| !p.is_empty()),
                 },
             )
         } else {
@@ -3447,6 +3531,36 @@ impl Viewer {
     fn close_annot_tools(&mut self) {
         self.annot_tool = None;
         self.comment_bar = false;
+    }
+
+    /// Échap pour les outils de commentaire ; vrai si la touche a servi.
+    ///
+    /// Un outil allumé s'éteint d'abord, la barre des commentaires restant
+    /// ouverte. La barre seule ne se ferme qu'en dernier : Échap annule
+    /// toujours ce qui est le plus proche. Cachée (plein écran, lecture),
+    /// elle ne prend pas la touche — elle fermait une barre invisible au
+    /// lieu de quitter le plein écran. Une sélection, un champ qui a le
+    /// focus, un média qui joue ou le focus dans une barre passent avant
+    /// elle : ouverte depuis longtemps, on l'a oubliée, et c'est eux qu'on
+    /// voit.
+    fn escape_comment_tools(&mut self) -> bool {
+        if self.annot_tool.is_some() {
+            self.annot_tool = None;
+            if !self.comment_bar {
+                self.close_annot_tools();
+            }
+            return true;
+        }
+        let first = self.selection.is_some_and(|s| !s.is_empty())
+            || self.focus_field.is_some()
+            || self.media.is_some()
+            || self.region != Region::Document;
+        if self.comment_bar && self.mode_bar_height() > 0 && !first {
+            self.close_annot_tools();
+            log_line("barre des commentaires : fermée");
+            return true;
+        }
+        false
     }
 
     /// Applique l'outil courant à la sélection, s'il y en a une.
@@ -7334,17 +7448,12 @@ impl Viewer {
             }
             // Échap éteint l'outil de commentaire d'abord, puis ferme la
             // barre des commentaires : on revient à la sélection avant de
-            // quitter la relecture.
+            // quitter la relecture (voir `escape_comment_tools`).
             Event::Key(Key::Escape, _)
-                if (self.annot_tool.is_some() || self.comment_bar)
-                    && self.prompt.is_none()
-                    && self.palette.is_none() =>
+                if self.prompt.is_none()
+                    && self.palette.is_none()
+                    && self.escape_comment_tools() =>
             {
-                if self.annot_tool.is_some() && self.comment_bar {
-                    self.annot_tool = None;
-                } else {
-                    self.close_annot_tools();
-                }
                 window.request_redraw();
             }
             Event::Key(key, m)
@@ -8452,6 +8561,17 @@ mod tests {
         // Le barré groupé est sauté : l'insertion vient juste après lui.
         assert_eq!(rows[1].index, 2);
         assert!(rows.iter().all(|r| r.name.is_some()));
+    }
+
+    /// Le passage recopié dans un balisage tient sur une ligne, sans blancs
+    /// en trop : les retours à la ligne de la page n'y ont plus de sens.
+    #[test]
+    fn one_line_flattens_the_passage() {
+        assert_eq!(
+            one_line("  Ce document\na été\t généré \r\n par Edge "),
+            "Ce document a été généré par Edge"
+        );
+        assert_eq!(one_line(" \n "), "");
     }
 
     /// Chaque outil de la barre des commentaires a son nom, sa consigne,
