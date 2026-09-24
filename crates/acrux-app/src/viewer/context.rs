@@ -294,7 +294,7 @@ impl Viewer {
 
     /// Le menu qui convient au point `(x, y)` de la fenêtre, son nom (pour
     /// le journal) et le point correspondant dans la vue.
-    fn menu_at(&self, x: i32, y: i32) -> Option<Opened> {
+    fn menu_at(&mut self, x: i32, y: i32) -> Option<Opened> {
         let top = self.view_top() as i32;
         let left = self.view_left() as i32;
         if !self.fullscreen && !self.reading {
@@ -331,6 +331,14 @@ impl Viewer {
         // Les modes qui ont leurs propres gestes sur la page gardent la main.
         if !self.page_menu_allowed() || self.media_at(vx, vy).is_some() {
             return None;
+        }
+        // Sur un commentaire, son menu : il est sélectionné d'abord, comme
+        // dans Acrobat, pour qu'on voie ce que le menu vise.
+        if self.annot_mode() {
+            if let Some((page, index)) = self.annot_at(vx, vy) {
+                self.select_annot(page, index);
+                return Some((self.annot_menu(x, y), "commentaire", Some((vx, vy))));
+            }
         }
         let (page, _) = self.page_at(vx, vy)?;
         Some((self.page_menu(x, y, page), "page", Some((vx, vy))))
@@ -387,6 +395,17 @@ impl Viewer {
         }
         if !self.page_menu_allowed() {
             return false;
+        }
+        // Un commentaire sélectionné : son menu, posé sur lui.
+        let selected = self
+            .annot_sel
+            .as_ref()
+            .and_then(|s| self.page_rect_to_view(s.page, s.rect));
+        if let Some(r) = selected.filter(|_| self.annot_mode()) {
+            let (mx, my) = ((r.x + r.w / 2.0) as i32, (r.y + r.h / 2.0) as i32);
+            let mut menu = self.annot_menu(mx + left, my + top);
+            menu.select_first();
+            return self.show_menu(menu, "commentaire (clavier)", Some((mx, my)), window);
         }
         let (vx, vy) = pointer.unwrap_or((vw / 2, vh / 3));
         let Some((page, _)) = self.page_at(vx, vy) else {

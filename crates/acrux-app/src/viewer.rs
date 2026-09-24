@@ -20,7 +20,7 @@
     clippy::manual_midpoint
 )]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -28,8 +28,12 @@ use std::time::{Duration, Instant};
 
 use acrux_core::{Matrix, Point, Rect};
 use acrux_document::{collect_pages, Document, Page};
+use acrux_features::annotations::review::{
+    comment_threads, CommentEntry, ReviewState, StateChange,
+};
 use acrux_features::annotations::{
-    list_annotations, AnnotMeta, MarkupKind, NewAnnotation, CARET_COLOR,
+    list_annotations, readable_date, AnnotMeta, AnnotationInfo, MarkupKind, NewAnnotation,
+    CARET_COLOR,
 };
 use acrux_features::attach::{list_attachments, read_attachment};
 use acrux_features::forms::{list_fields, Field, FieldType};
@@ -60,7 +64,7 @@ use crate::ui::objects::{self as objects_ui, Handle, ViewRect};
 use crate::ui::paint::{round_rect, round_rect_alpha, round_rect_outline, shadow};
 use crate::ui::palette::{Command, Palette, PaletteDown};
 use crate::ui::panel::{
-    AttachmentRow, CommentRow, OutlineRow, Panel, PanelAction, PanelContent, PanelTab,
+    AttachmentRow, CommentRow, OutlineRow, Panel, PanelAction, PanelContent, PanelTab, ReplyRow,
 };
 use crate::ui::prefs::{Fit, Prefs, ViewMode};
 use crate::ui::settings::{SettingsAction, SettingsSheet, SettingsState, UpdateLine};
@@ -75,6 +79,7 @@ use crate::ui::video::{self as video_ui, Box2, Hit as VideoHit};
 use acrux_features::edit_objects::{self, Edit as ObjectEdit, PageObject};
 use acrux_features::fillsign::ink::{InkPoint, Nib, Pen, Stroke, Weight};
 
+mod comments;
 mod context;
 mod dialogs;
 mod draw;
@@ -192,64 +197,75 @@ fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Commentaires du document : les annotations qui portent un texte ou une
-/// intention de relecture. Les liens et les champs de formulaire n'en sont
-/// pas — ils ont déjà leur place ailleurs dans l'interface.
+/// Libellé français d'un commentaire, d'après son type et son intention.
+/// `None` pour ce qui n'est pas un commentaire à montrer.
+fn comment_kind(c: &CommentEntry) -> Option<&'static str> {
+    Some(match c.subtype.as_str() {
+        "Text" => "Note",
+        "Highlight" => "Surlignage",
+        "Underline" => "Soulignement",
+        "StrikeOut" => "Texte barré",
+        "Squiggly" => "Soulignement ondulé",
+        "Caret" if c.grouped => "Remplacement",
+        "Caret" => "Insertion",
+        "Square" => "Rectangle",
+        "Circle" => "Ellipse",
+        "Line" if c.intent.as_deref() == Some("LineArrow") => "Flèche",
+        "Line" => "Ligne",
+        "Polygon" | "PolyLine" => "Trait",
+        "Ink" => "Dessin",
+        "FreeText" if c.intent.as_deref() == Some("FreeTextCallout") => "Légende",
+        "FreeText" => "Zone de texte",
+        "Stamp" => "Tampon",
+        "FileAttachment" => "Pièce jointe",
+        "Redact" => "Biffure",
+        _ => return None,
+    })
+}
+
+/// Commentaires du document, en fils (`review::comment_threads`) : chacun
+/// avec ses réponses, son statut et sa case. Les liens et les champs de
+/// formulaire n'en sont pas — ils ont déjà leur place ailleurs dans
+/// l'interface.
 ///
 /// Un remplacement est un groupe de deux annotations (un signe d'insertion
 /// et le texte barré qui le suit, §12.5.6.2) : il ne fait qu'**une** ligne,
 /// celle du signe, qui porte le texte proposé. Le type est une clé
 /// française, traduite au dessin : changer de langue se voit tout de suite.
 fn collect_comments(doc: &Document, pages: &[Page]) -> Vec<CommentRow> {
-    let mut out = Vec::new();
-    for (index, page) in pages.iter().enumerate() {
-        let Ok(list) = list_annotations(doc, page) else {
-            continue;
-        };
-        // Les membres principaux des groupes de cette page : un signe
-        // d'insertion qui en est un propose de remplacer, pas d'ajouter.
-        let primaries: HashSet<acrux_document::ObjectRef> = list
-            .iter()
-            .filter(|a| a.is_group_member())
-            .filter_map(|a| a.in_reply_to)
-            .collect();
-        for a in list {
-            if a.is_group_member() {
-                continue;
-            }
-            let kind = match a.subtype.as_str() {
-                "Text" => "Note",
-                "Highlight" => "Surlignage",
-                "Underline" => "Soulignement",
-                "StrikeOut" => "Texte barré",
-                "Squiggly" => "Soulignement ondulé",
-                "Caret" if a.reference.is_some_and(|r| primaries.contains(&r)) => "Remplacement",
-                "Caret" => "Insertion",
-                "Square" => "Rectangle",
-                "Circle" => "Ellipse",
-                "Line" if a.intent.as_deref() == Some("LineArrow") => "Flèche",
-                "Line" => "Ligne",
-                "Polygon" | "PolyLine" => "Trait",
-                "Ink" => "Dessin",
-                "FreeText" if a.intent.as_deref() == Some("FreeTextCallout") => "Légende",
-                "FreeText" => "Zone de texte",
-                "Stamp" => "Tampon",
-                "FileAttachment" => "Pièce jointe",
-                "Redact" => "Biffure",
-                _ => continue,
-            };
-            out.push(CommentRow {
-                page: index,
+    let date = |raw: &Option<String>| raw.as_deref().map(readable_date).unwrap_or_default();
+    comment_threads(doc, pages)
+        .into_iter()
+        .filter_map(|c| {
+            let kind = comment_kind(&c)?;
+            Some(CommentRow {
+                page: c.page,
                 kind,
-                author: a.author.clone(),
-                contents: a.contents.clone().unwrap_or_default(),
-                rect: a.rect,
-                index: a.index,
-                name: a.name.clone(),
-            });
-        }
-    }
-    out
+                author: c.author.clone(),
+                contents: c.contents.clone(),
+                rect: c.rect,
+                index: c.index,
+                name: c.name.clone(),
+                date: date(&c.modified),
+                date_raw: c.modified.clone().unwrap_or_default(),
+                color: c.color.map(draw::preview_rgb),
+                replies: c
+                    .replies
+                    .iter()
+                    .map(|r| ReplyRow {
+                        page: r.page,
+                        index: r.index,
+                        author: r.author.clone(),
+                        date: date(&r.modified),
+                        contents: r.contents.clone(),
+                        depth: r.depth,
+                    })
+                    .collect(),
+                status: c.review.as_ref().map(|(state, _)| state.label()),
+                marked: c.marked,
+            })
+        })
+        .collect()
 }
 
 /// Pièces jointes du document, mises en forme pour le panneau.
@@ -646,6 +662,10 @@ struct Loaded {
     texts: HashMap<usize, (PageText, SelectableText)>,
     /// Liens par page, calculés à la demande.
     links: HashMap<usize, Vec<Link>>,
+    /// Annotations par page, lues à la demande et oubliées à chaque
+    /// modification : le survol et le clic les consultent sans relire le
+    /// document à chaque mouvement de la souris.
+    annots: HashMap<usize, Vec<AnnotationInfo>>,
     /// Table objet page → indice, pour résoudre les destinations.
     page_index: PageIndex,
     /// Signets aplatis pour le panneau.
@@ -755,6 +775,17 @@ impl Loaded {
         })
     }
 
+    /// Annotations d'une page (lues au premier appel).
+    fn annots(&mut self, page: usize) -> &[AnnotationInfo] {
+        let (doc, pages) = (&self.doc, &self.pages);
+        self.annots.entry(page).or_insert_with(|| {
+            pages
+                .get(page)
+                .and_then(|p| list_annotations(doc, p).ok())
+                .unwrap_or_default()
+        })
+    }
+
     /// Texte structuré et sélectionnable d'une page (extrait au premier appel).
     fn text(&mut self, page: usize) -> &(PageText, SelectableText) {
         let (doc, pages) = (&self.doc, &self.pages);
@@ -785,6 +816,8 @@ enum PromptKind {
     OwnerPassword { then: OwnerThen },
     /// Texte d'une note à poser sur `page` au point `(x, y)` (espace page).
     Note { page: usize, x: f64, y: f64 },
+    /// Nouveau texte de l'annotation de rang `index` sur `page`.
+    AnnotText { page: usize, index: usize },
     /// Commentaire à joindre à un balisage déjà découpé en zones.
     Markup {
         kind: MarkupKind,
@@ -1182,6 +1215,23 @@ pub struct Viewer {
     thumb_key: u32,
     /// Menu du clic droit, quand il est ouvert.
     context_menu: Option<ContextMenu>,
+    /// Annotation sélectionnée sur la page (voir `viewer/comments.rs`).
+    annot_sel: Option<comments::AnnotSel>,
+    /// Bulle d'un commentaire, ouverte.
+    bubble: Option<crate::ui::bubble::NoteBubble>,
+    /// Barre de propriétés de l'annotation sélectionnée.
+    annot_bar: crate::ui::annotbar::AnnotBar,
+    /// Balisage sous le dernier clic : le relâchement, sans glisser, le
+    /// sélectionne (page, rang).
+    annot_press: Option<(usize, usize)>,
+    /// Annotation modifiée, montrée le temps que sa page revienne du fil de
+    /// rendu.
+    annot_ghost: Option<comments::AnnotGhost>,
+    /// Liste déroulée du panneau des commentaires.
+    comment_menu: Option<comments::CommentMenuOpen>,
+    /// Le nuancier ou la liste déroulée (`draw_popup`) règle l'annotation
+    /// sélectionnée, pas l'outil de dessin.
+    popup_for_annot: bool,
     /// Ce que vise la commande en cours : la page, l'onglet ou le document
     /// récent sur lequel on a fait un clic droit. `Target::Current` hors
     /// d'un menu (voir `run_on`).
@@ -1327,6 +1377,13 @@ impl Viewer {
             thumb_key: 0,
             context_menu: None,
             command_target: Target::Current,
+            annot_sel: None,
+            bubble: None,
+            annot_bar: crate::ui::annotbar::AnnotBar::default(),
+            annot_press: None,
+            annot_ghost: None,
+            comment_menu: None,
+            popup_for_annot: false,
         }
     }
 
@@ -2193,6 +2250,21 @@ impl Viewer {
                 ]);
             }
         }
+        // Répondre, statuer, supprimer : sans commentaire sélectionné, rien à
+        // viser.
+        if self.annot_sel.is_none() {
+            idle.extend([
+                Command::DeleteComment,
+                Command::ReplyComment,
+                Command::EditCommentText,
+                Command::CommentAccepted,
+                Command::CommentRejected,
+                Command::CommentCancelled,
+                Command::CommentCompleted,
+                Command::CommentNoStatus,
+                Command::ToggleCommentMark,
+            ]);
+        }
         self.palette = Some(Palette::new(self.loaded.is_some(), &recent).without(&idle));
     }
 
@@ -2390,6 +2462,11 @@ impl Viewer {
             PromptKind::OwnerPassword { then } => {
                 let then = *then;
                 self.owner_password_entered(&value, then, window);
+            }
+            PromptKind::AnnotText { page, index } => {
+                let (page, index) = (*page, *index);
+                self.prompt = None;
+                self.set_annot_text(page, index, value);
             }
             PromptKind::Note { page, x, y } => {
                 let (page, x, y) = (*page, *x, *y);
@@ -3253,8 +3330,12 @@ impl Viewer {
         if self.draft_typing() {
             return false;
         }
+        let bubble = self.bubble_typing() && self.palette.is_none();
+        let panel_search = self.panel_open && self.panel.comment_search_focused();
         let has_field = self.palette.is_some()
             || self.edit_menu_open()
+            || bubble
+            || panel_search
             || (self.search.is_some() && !self.editing_text());
         if !has_field {
             return false;
@@ -3266,6 +3347,10 @@ impl Viewer {
         // recherche restée ouverte dessous.
         if let Some(p) = &mut self.palette {
             p.paste(&text);
+        } else if bubble {
+            self.bubble_paste(&text);
+        } else if panel_search {
+            self.panel.comment_search_paste(&text);
         } else if self.edit_menu_open() {
             // La recherche d'une police, le code d'une couleur : caractère
             // par caractère, comme une frappe.
@@ -3510,6 +3595,7 @@ impl Viewer {
             worker,
             texts: HashMap::new(),
             links: HashMap::new(),
+            annots: HashMap::new(),
             page_index,
             outline_rows,
             outline_actions,
@@ -4255,27 +4341,9 @@ impl Viewer {
             PanelAction::ToggleLayer(number) => self.toggle_layer(number, window),
             PanelAction::SaveAttachment(index) => self.save_attachment(index, window),
             PanelAction::AddAttachment => self.add_attachment(window),
-            PanelAction::GoToComment(index) => {
-                let target = self
-                    .loaded
-                    .as_ref()
-                    .and_then(|l| l.comments.get(index))
-                    .map(|c| (c.page, c.rect, c.index, c.name.clone()));
-                if let Some((page, rect, at, name)) = target {
-                    log_line(&format!(
-                        "panneau : commentaire #{} de la page {} ({})",
-                        at + 1,
-                        page + 1,
-                        name.as_deref().unwrap_or("sans identifiant")
-                    ));
-                    // Au passage commenté, pas en haut de sa page : sur une
-                    // page longue, on ne le trouverait pas.
-                    self.navigate(|v| {
-                        v.scroll_to_page(page);
-                        v.reveal_page_rect(page, rect);
-                    });
-                }
-            }
+            PanelAction::GoToComment(index) => self.go_to_comment(index),
+            PanelAction::ToggleMarked(index) => self.toggle_comment_mark(index),
+            PanelAction::CommentMenu(kind, rect) => self.open_comment_menu(kind, rect),
             PanelAction::Follow(id) => {
                 let act = self
                     .loaded
@@ -4439,6 +4507,29 @@ impl Viewer {
             }
             Command::ResetForm => self.ask_reset_form(),
             Command::FlattenForm => self.ask_flatten_form(),
+            Command::DeleteComment => self.delete_selected_annot(),
+            Command::ReplyComment => {
+                if let Some((page, index)) = self.annot_sel.as_ref().map(|s| (s.page, s.index)) {
+                    self.open_bubble(page, index, true);
+                }
+            }
+            Command::EditCommentText => self.edit_annot_text(),
+            Command::CommentAccepted => {
+                self.selected_comment_state(Some(StateChange::Review(ReviewState::Accepted)));
+            }
+            Command::CommentRejected => {
+                self.selected_comment_state(Some(StateChange::Review(ReviewState::Rejected)));
+            }
+            Command::CommentCancelled => {
+                self.selected_comment_state(Some(StateChange::Review(ReviewState::Cancelled)));
+            }
+            Command::CommentCompleted => {
+                self.selected_comment_state(Some(StateChange::Review(ReviewState::Completed)));
+            }
+            Command::CommentNoStatus => {
+                self.selected_comment_state(Some(StateChange::Review(ReviewState::None)));
+            }
+            Command::ToggleCommentMark => self.selected_comment_state(None),
         }
     }
 
@@ -4467,6 +4558,18 @@ impl Viewer {
         } else {
             None
         };
+        // Les pages gardent leur place et leur taille : leurs images, avant,
+        // restent à l'écran le temps que le fil de rendu les refasse, au lieu
+        // d'une page blanche « Rendu en cours… » à chaque petite
+        // modification (un commentaire déplacé, un statut, une réponse).
+        let keeps_pages = !matches!(
+            op,
+            EditOp::Rotate { .. }
+                | EditOp::Delete { .. }
+                | EditOp::Insert { .. }
+                | EditOp::Reorder { .. }
+        );
+        let key_scale = (self.scale() * 1000.0).round() as u32;
         let Some(l) = &mut self.loaded else {
             return false;
         };
@@ -4496,9 +4599,27 @@ impl Viewer {
             l.nav.remap(|p| history::page_after(op, p, inserted));
         }
         l.page_index = PageIndex::new(&l.pages);
+        let stand_ins: HashMap<(usize, u32), Bitmap> = if keeps_pages {
+            // L'image à jour de chaque page, sinon celle qui l'attendait déjà
+            // (deux modifications coup sur coup : la page n'est pas encore
+            // revenue de la première).
+            let mut kept: HashMap<(usize, u32), Bitmap> = HashMap::new();
+            for ((p, s), b) in l.cache.drain() {
+                if s == key_scale {
+                    kept.insert((p, key_scale + 1), b);
+                } else if s == key_scale + 1 {
+                    kept.entry((p, s)).or_insert(b);
+                }
+            }
+            kept
+        } else {
+            HashMap::new()
+        };
         l.cache.clear();
+        l.cache.extend(stand_ins);
         l.texts.clear();
         l.links.clear();
+        l.annots.clear();
         l.boxes.clear();
         l.set_fields(list_fields(&l.doc).unwrap_or_default());
         l.comments = collect_comments(&l.doc, &l.pages);
@@ -4521,6 +4642,7 @@ impl Viewer {
         if let Some(s) = keep {
             self.restore_spot(s);
         }
+        self.refresh_annot_selection();
         self.clamp_scroll();
         true
     }
@@ -4529,6 +4651,9 @@ impl Viewer {
     /// base de l'annulation : les modifications ne sont pas inversées une à
     /// une (elles ne sont pas toutes inversibles), le document est rechargé
     /// puis l'historique conservé est réappliqué.
+    // Recharger, rejouer, puis rendre à la vue tout ce qui n'est pas le
+    // document (position, panneau, sélection, champ) : une seule suite.
+    #[allow(clippy::too_many_lines)]
     fn replay(&mut self, ops: Vec<EditOp>, redo: Vec<EditOp>, window: &mut dyn WindowHandle) {
         // La saisie en cours désigne un état du document qui va disparaître :
         // elle se referme, le mode reste ouvert.
@@ -4550,6 +4675,9 @@ impl Viewer {
         let form_bar_closed = l.form_bar_closed;
         let (scroll_x, scroll_y, anchor) = (self.scroll_x, self.scroll_y, self.anchor);
         let panel_tab = self.panel.tab;
+        let comment_view = self.panel.comments.clone();
+        self.annot_ghost = None;
+        self.comment_menu = None;
         let doc = match Document::load(&path) {
             Ok(d) => d,
             Err(e) => {
@@ -4644,6 +4772,9 @@ impl Viewer {
             self.scroll_y = scroll_y;
         }
         self.panel.tab = panel_tab;
+        self.panel.comments = comment_view;
+        // La sélection retrouve son annotation, si elle existe encore.
+        self.refresh_annot_selection();
         // Le focus revient au champ qui l'avait.
         self.focus_field = focused.and_then(|(name, wi)| {
             let fields = &self.loaded.as_ref()?.fields;
@@ -5474,6 +5605,11 @@ impl Viewer {
         self.draft = None;
         self.draft_ghost = None;
         self.draw_popup = None;
+        // Une annotation sélectionnée, une bulle : celles de l'ancien
+        // document.
+        self.drop_annot_selection();
+        self.annot_ghost = None;
+        self.comment_menu = None;
         self.panel = Panel::new();
         self.title_dirty = true;
     }
@@ -7203,6 +7339,9 @@ impl Viewer {
             if live == Some(r.page) {
                 continue;
             }
+            // L'image d'avant la modification, gardée en attendant (voir
+            // `apply_edit`), n'a plus rien à remplacer.
+            l.cache.remove(&(r.page, r.scale_key + 1));
             l.cache.insert((r.page, r.scale_key), r.bitmap);
             any = true;
         }
@@ -7400,6 +7539,9 @@ impl Viewer {
             self.apply_frame_theme(window);
         }
         log_event(&event);
+        // Un mode qui a ses propres gestes s'est ouvert (objets, remplir et
+        // signer, un outil) : la sélection d'annotation lui laisse la place.
+        self.sanitize_annot_selection();
         // Windows envoie la barre d'espace deux fois : en touche, qui presse
         // le bouton d'une carte, puis en caractère. Ce caractère n'a plus de
         // destinataire — la carte est souvent fermée — et irait au document,
@@ -7430,6 +7572,7 @@ impl Viewer {
             || self.modal_event(&event, window)
             || self.zoom_menu_event(&event, window)
             || self.draw_popup_event(&event, window)
+            || self.comment_menu_event(&event, window)
             || self.context_menu_event(&event, window)
             || self.field_menu_event(&event, window)
         {
@@ -7484,6 +7627,9 @@ impl Viewer {
                     // Une palette ou un sélecteur ouvert a pris la molette :
                     // rien ne défile derrière lui.
                     window.request_redraw();
+                } else if self.bubble_wheel(x, y, delta) {
+                    // La bulle d'un commentaire a pris la molette : son fil
+                    // défile, pas la page.
                 } else if self.three_d_wheel(x, y, f64::from(delta), window) {
                     // Le modèle 3D a pris la molette : on s'approche de lui,
                     // la page ne défile pas.
@@ -7540,6 +7686,33 @@ impl Viewer {
                     && !is_global_key(key, m)
                     && self.field_key(key, m, window) => {}
             Event::Char(c, m) if self.field_typing() && self.field_char(c, m, window) => {}
+            // La réponse qu'on tape dans la bulle d'un commentaire, puis la
+            // recherche du panneau des commentaires : le clavier va à eux,
+            // les raccourcis d'une lettre y sont des lettres.
+            Event::Key(key, m)
+                if self.bubble_typing() && !is_global_key(key, m) && self.bubble_key(key, m) =>
+            {
+                window.request_redraw();
+            }
+            Event::Char(c, m) if self.bubble_typing() && !m.ctrl => {
+                self.bubble_char(c);
+                window.request_redraw();
+            }
+            Event::Key(key, m)
+                if self.panel_open
+                    && self.panel.comment_search_focused()
+                    && !is_global_key(key, m)
+                    && !m.ctrl =>
+            {
+                self.panel.comment_search_key(key, m.shift);
+                window.request_redraw();
+            }
+            Event::Char(c, m)
+                if self.panel_open && self.panel.comment_search_focused() && !m.ctrl =>
+            {
+                self.panel.comment_search_char(c);
+                window.request_redraw();
+            }
             // Ctrl+V dans un champ de saisie — la recherche, la police ou le
             // code d'une couleur — y colle le presse-papiers ; celui d'une
             // invite (le texte d'un peigne, une note, un mot de passe) passe
@@ -7606,6 +7779,16 @@ impl Viewer {
                 window.request_redraw();
             }
             Event::Char(c, m) if self.draft_has_keys() && self.draft_char(c, m, window) => {
+                window.request_redraw();
+            }
+            // Une annotation sélectionnée : Suppr, Échap, Entrée, les flèches.
+            Event::Key(key, m)
+                if self.annot_sel.is_some()
+                    && self.prompt.is_none()
+                    && self.palette.is_none()
+                    && self.region == Region::Document
+                    && self.annot_key(key, m) =>
+            {
                 window.request_redraw();
             }
             Event::Key(Key::Escape, _)
@@ -7819,6 +8002,11 @@ impl Viewer {
             } => {
                 // Un clic fait taire l'info-bulle : on agit, on ne lit plus.
                 self.tip = None;
+                // Hors du panneau, la recherche des commentaires rend le
+                // clavier.
+                if !(self.panel_open && x < self.view_left() as i32) {
+                    self.panel.blur_comment_search();
+                }
                 if self.capture.is_some() {
                     let action = self
                         .capture
@@ -7981,7 +8169,11 @@ impl Viewer {
                     if self.prompt.is_none() && self.showing_home() {
                         self.click_recent(x, y, window);
                     } else if self.prompt.is_none() && x >= 0 && y < self.view_height() as i32 {
-                        if self.edit_on() {
+                        if self.annot_overlay_mouse_down(x, y) {
+                            // La barre de propriétés ou la bulle d'un
+                            // commentaire, qui flottent au-dessus de la page.
+                            window.request_redraw();
+                        } else if self.edit_on() {
                             self.edit_mouse_down(x, y, clicks, modifiers.shift, window);
                         } else if self.annot_tool == Some(AnnotTool::Note) {
                             self.last_mouse = Some((x, y));
@@ -8010,6 +8202,12 @@ impl Viewer {
                             window.request_redraw();
                         } else if self.place_sign(x, y, window) {
                             // L'outil a posé quelque chose : ni sélection, ni lien.
+                        } else if self.annot_mouse_down(x, y, clicks) {
+                            // Une annotation est sélectionnée, et peut-être
+                            // saisie : elle passe devant le lien ou le champ
+                            // qu'elle recouvre, comme dans Acrobat.
+                            self.focus_field = None;
+                            window.request_redraw();
                         } else if let Some((fi, wi, pt)) = self.widget_at(x, y) {
                             self.click_widget(fi, wi, (x, y), pt, clicks, modifiers, window);
                         } else if let Some(link) = self.link_at(x, y) {
@@ -8111,6 +8309,10 @@ impl Viewer {
                 self.placed_mouse_up();
                 window.request_redraw();
             }
+            Event::MouseUp { .. } if self.annot_sel.as_ref().is_some_and(|s| s.drag.is_some()) => {
+                self.annot_mouse_up();
+                window.request_redraw();
+            }
             Event::MouseUp { .. } if self.inking.is_some() => {
                 self.ink_finish();
                 window.request_redraw();
@@ -8148,6 +8350,7 @@ impl Viewer {
                 if was_selecting {
                     self.apply_annot_tool();
                 }
+                self.annot_markup_release();
             }
             Event::MouseMove { x, y, dragging, .. } if self.three_d_mouse_move(x, y, window) => {
                 let _ = dragging;
@@ -8162,7 +8365,12 @@ impl Viewer {
                 let (vx, vy) = (x - self.view_left() as i32, y - self.view_top() as i32);
                 self.field_drag(vx, vy);
             }
-            Event::MouseMove { x, y, dragging, .. } => {
+            Event::MouseMove {
+                x,
+                y,
+                dragging,
+                shift,
+            } => {
                 let bar = Toolbar::height(&self.theme, self.dpi_scale as f32);
                 let mut hover_changed = self.toolbar.mouse_move(x, y);
                 if let Some(mode) = &mut self.edit {
@@ -8249,6 +8457,14 @@ impl Viewer {
                     window.request_redraw();
                     return;
                 }
+                if dragging && self.annot_sel.as_ref().is_some_and(|s| s.drag.is_some()) {
+                    self.annot_mouse_move(x, y, shift);
+                    window.request_redraw();
+                    return;
+                }
+                if !dragging && (self.annot_sel.is_some() || self.bubble.is_some()) {
+                    hover_changed |= self.annot_hover(x, y);
+                }
                 if self.sel_dragging && dragging {
                     if let Some((pos, _)) = self.text_pos_at(x, y) {
                         if let Some(sel) = &mut self.selection {
@@ -8295,6 +8511,11 @@ impl Viewer {
                             Some(AnnotTool::Highlight) => Cursor::Highlight,
                             _ => Cursor::IBeam,
                         }
+                    } else if let Some(cursor) = in_view.then(|| self.annot_cursor(x, y)).flatten()
+                    {
+                        // La main qui déplace une annotation, la flèche
+                        // double d'une poignée.
+                        cursor
                     } else if in_view && self.model_at(x, y).is_some() {
                         // Un modèle 3D se prend en main : la main dit qu'il y
                         // a quelque chose à saisir.
@@ -8404,6 +8625,10 @@ impl Viewer {
     /// Peint toute la fenêtre.
     fn paint_all(&mut self, frame: &mut Frame<'_>) {
         self.collect_results();
+        // Un mode qui a ses propres gestes vient peut-être de s'ouvrir, par
+        // l'événement même qui fait peindre : la sélection d'annotation ne
+        // se dessine pas par-dessus lui.
+        self.sanitize_annot_selection();
         self.poll_updates();
         // Avant de peindre : ce que trouve la recherche, et le défilement
         // vers sa première occurrence, se voient dans cette image-ci.
@@ -8434,6 +8659,8 @@ impl Viewer {
             self.paint_selection(&mut view);
             self.paint_edit(&mut view);
             self.paint_objects(&mut view);
+            self.paint_annot_ghost(&mut view);
+            self.paint_annot_sel(&mut view);
             self.paint_inking(&mut view);
             self.paint_draft(&mut view);
             self.paint_sign_ghost(&mut view);
@@ -8443,6 +8670,7 @@ impl Viewer {
             self.paint_media(&mut view);
             self.paint_field_focus(&mut view);
             self.paint_search(&mut view);
+            self.paint_annot_overlays(&mut view);
         }
         if self.sign_panel_open() && left > 0 && vh > 0 {
             let mut side = frame.sub(0, top, left as u32, vh);
@@ -8481,6 +8709,7 @@ impl Viewer {
         self.paint_tip(frame);
         self.paint_zoom_menu(frame);
         self.paint_draw_popup(frame);
+        self.paint_comment_menu(frame);
         self.paint_field_menu(frame);
         self.paint_capture(frame);
         self.paint_protect(frame);

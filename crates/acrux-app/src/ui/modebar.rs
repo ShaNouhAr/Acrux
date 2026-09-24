@@ -346,12 +346,7 @@ impl ModeBar {
         // chevron.
         let widths: Vec<i32> = settings
             .iter()
-            .map(|setting| match setting {
-                Setting::Color { .. } => s(46.0),
-                Setting::Choice(label) => {
-                    (text.measure(size, label).ceil() as i32 + s(36.0)).max(s(58.0))
-                }
-            })
+            .map(|setting| setting_width(text, theme, dpi, setting))
             .collect();
         let mut left = pad;
         // Le titre cède sa place aux réglages et à la consigne d'un outil
@@ -453,34 +448,7 @@ impl ModeBar {
                 } else {
                     theme.bar
                 };
-                round_rect(frame, r.0, r.1, r.2, r.3, 7.0 * dpi, face);
-                let chip = s(18.0);
-                let (cx, cy) = (left + s(7.0), top + (ctl - chip) / 2);
-                match setting {
-                    Setting::Color { color, swatch } => {
-                        paint_swatch(frame, text, theme, dpi, (cx, cy, chip), (*color, *swatch));
-                    }
-                    Setting::Choice(label) => {
-                        text.draw(
-                            frame,
-                            (left + s(10.0)) as f32,
-                            baseline,
-                            size,
-                            label,
-                            theme.text,
-                        );
-                    }
-                }
-                let chevron = s(12.0);
-                icons::draw(
-                    frame,
-                    raster,
-                    Icon::ChevronDown,
-                    left + w - chevron - s(6.0),
-                    top + (ctl - chevron) / 2,
-                    chevron as f32,
-                    theme.text_dim,
-                );
+                paint_setting(frame, text, raster, theme, dpi, r, setting, face);
                 self.settings.push(r);
                 left += w + gap;
             }
@@ -497,6 +465,71 @@ impl ModeBar {
             (done_x - s(14.0) - hx).max(0) as f32,
         );
     }
+}
+
+/// Largeur d'un réglage : une pastille, ou sa valeur et le chevron. La
+/// barre des commentaires et la barre de propriétés d'une annotation
+/// sélectionnée (`annotbar`) en ont la même allure.
+pub(crate) fn setting_width(
+    text: &mut TextRenderer,
+    theme: &Theme,
+    dpi: f32,
+    setting: &Setting,
+) -> i32 {
+    let s = |v: f32| (v * dpi).round() as i32;
+    match setting {
+        Setting::Color { .. } => s(46.0),
+        Setting::Choice(label) => {
+            (text.measure(theme.font_size * dpi, label).ceil() as i32 + s(36.0)).max(s(58.0))
+        }
+    }
+}
+
+/// Dessine un réglage dans `r` : son fond (`face`), sa pastille ou sa
+/// valeur, et le chevron qui dit qu'il se déroule.
+#[allow(clippy::too_many_arguments)] // un bouton, son contenu, son allure
+pub(crate) fn paint_setting(
+    frame: &mut Frame<'_>,
+    text: &mut TextRenderer,
+    raster: &mut Rasterizer,
+    theme: &Theme,
+    dpi: f32,
+    r: Rect,
+    setting: &Setting,
+    face: (u8, u8, u8),
+) {
+    let s = |v: f32| (v * dpi).round() as i32;
+    let size = theme.font_size * dpi;
+    let (left, top, w, ctl) = r;
+    let baseline = (top + ctl / 2) as f32 + text.ascent(size) / 2.0;
+    round_rect(frame, r.0, r.1, r.2, r.3, 7.0 * dpi, face);
+    let chip = s(18.0);
+    let (cx, cy) = (left + s(7.0), top + (ctl - chip) / 2);
+    match setting {
+        Setting::Color { color, swatch } => {
+            paint_swatch(frame, text, theme, dpi, (cx, cy, chip), (*color, *swatch));
+        }
+        Setting::Choice(label) => {
+            text.draw(
+                frame,
+                (left + s(10.0)) as f32,
+                baseline,
+                size,
+                label,
+                theme.text,
+            );
+        }
+    }
+    let chevron = s(12.0);
+    icons::draw(
+        frame,
+        raster,
+        Icon::ChevronDown,
+        left + w - chevron - s(6.0),
+        top + (ctl - chevron) / 2,
+        chevron as f32,
+        theme.text_dim,
+    );
 }
 
 /// Dessine une pastille de couleur dans le carré `(x, y, côté)` : un anneau

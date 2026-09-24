@@ -9,7 +9,8 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::JoinHandle;
 
 use acrux_document::{collect_pages, Document};
-use acrux_features::annotations::{add_annotation_with, AnnotMeta, NewAnnotation};
+use acrux_features::annotations::review::StateChange;
+use acrux_features::annotations::{add_annotation_with, AnnotChanges, AnnotMeta, NewAnnotation};
 use acrux_features::edit_text::{apply_edits, TextEdit, TextRange};
 use acrux_features::export::{
     export_docx, export_html, export_markdown, export_pages_jpeg, export_pages_png,
@@ -178,6 +179,46 @@ pub enum EditOp {
     /// Aplatir le formulaire : les champs deviennent du contenu fixe des
     /// pages et le formulaire disparaît (`forms::flatten_fields`).
     FlattenForm,
+    /// Modifier une annotation existante : la déplacer, la redimensionner,
+    /// changer ses couleurs, son opacité, son trait ou son texte.
+    AnnotSet {
+        /// Indice de page.
+        page: usize,
+        /// Rang de l'annotation dans `/Annots`.
+        index: usize,
+        /// Ce qui change, date comprise (tirée quand on décide).
+        changes: AnnotChanges,
+    },
+    /// Supprimer une annotation, avec ses réponses, ses états et sa
+    /// fenêtre.
+    AnnotRemove {
+        /// Indice de page.
+        page: usize,
+        /// Rang de l'annotation dans `/Annots`.
+        index: usize,
+    },
+    /// Répondre à un commentaire.
+    AnnotReply {
+        /// Indice de page.
+        page: usize,
+        /// Rang du commentaire dans `/Annots`.
+        index: usize,
+        /// Texte de la réponse.
+        text: String,
+        /// Auteur, identifiant et date de la réponse, tirés une fois.
+        meta: AnnotMeta,
+    },
+    /// Donner un statut à un commentaire, ou cocher sa case.
+    AnnotState {
+        /// Indice de page.
+        page: usize,
+        /// Rang du commentaire dans `/Annots`.
+        index: usize,
+        /// Statut ou case.
+        change: StateChange,
+        /// Auteur, identifiant et date de l'état, tirés une fois.
+        meta: AnnotMeta,
+    },
 }
 
 /// Une annotation à poser, avec son identité.
@@ -252,7 +293,11 @@ impl EditOp {
             EditOp::Annotate { .. }
             | EditOp::Mark { .. }
             | EditOp::FillSign { .. }
-            | EditOp::PlacedRect { .. } => Right::Annotate,
+            | EditOp::PlacedRect { .. }
+            | EditOp::AnnotSet { .. }
+            | EditOp::AnnotRemove { .. }
+            | EditOp::AnnotReply { .. }
+            | EditOp::AnnotState { .. } => Right::Annotate,
             EditOp::SetField { .. } | EditOp::ResetForm => Right::FillForms,
             EditOp::EditText { .. }
             | EditOp::ReplaceAll { .. }
@@ -377,6 +422,45 @@ impl EditOp {
             EditOp::PlacedRect { page, index, rect } => {
                 acrux_features::fillsign::set_rect(doc, *page, *index, *rect)
             }
+            EditOp::AnnotSet {
+                page,
+                index,
+                changes,
+            } => acrux_features::annotations::set_annotation_properties(
+                doc,
+                &page_of(doc, *page)?,
+                *index,
+                changes,
+            ),
+            EditOp::AnnotRemove { page, index } => {
+                acrux_features::annotations::remove_annotation(doc, &page_of(doc, *page)?, *index)
+            }
+            EditOp::AnnotReply {
+                page,
+                index,
+                text,
+                meta,
+            } => acrux_features::annotations::review::add_reply(
+                doc,
+                &page_of(doc, *page)?,
+                *index,
+                text,
+                meta,
+            )
+            .map(|_| ()),
+            EditOp::AnnotState {
+                page,
+                index,
+                change,
+                meta,
+            } => acrux_features::annotations::review::set_state(
+                doc,
+                &page_of(doc, *page)?,
+                *index,
+                *change,
+                meta,
+            )
+            .map(|_| ()),
             EditOp::Paragraph {
                 page,
                 frame,
@@ -394,6 +478,14 @@ impl EditOp {
             }
         }
     }
+}
+
+/// Page `index` du document, telle qu'il est maintenant.
+fn page_of(doc: &Document, index: usize) -> acrux_core::Result<acrux_document::Page> {
+    collect_pages(doc)?
+        .into_iter()
+        .nth(index)
+        .ok_or_else(|| acrux_core::Error::Corrupt(format!("page {} absente", index + 1)))
 }
 
 /// Format d'export, déduit de l'extension choisie par l'utilisateur.
@@ -1008,6 +1100,94 @@ mod tests {
         assert_eq!(na.len(), 3, "{na:?}");
         assert_eq!(na, nb, "mêmes identifiants sur les deux copies");
         assert!(na.iter().all(Option::is_some));
+    }
+
+    /// Les modifications d'un commentaire — déplacer, répondre, statuer,
+    /// supprimer — appliquées à deux copies d'un même document donnent le
+    /// même document : c'est ce qui rend l'annulation par rejeu juste. Et
+    /// chacune exige le droit de commenter.
+    #[test]
+    #[allow(clippy::unwrap_used)] // tests
+    fn les_modifications_de_commentaires_se_rejouent_a_l_identique() {
+        use acrux_features::annotations::review::{comment_threads, ReviewState, StateChange};
+        use acrux_features::annotations::{list_annotations, ShapeStyle};
+        use acrux_features::create::{new_document, PageSetup};
+        let bytes = new_document(&PageSetup::default())
+            .unwrap()
+            .save_full()
+            .unwrap();
+        let meta = |who: &str, date: &str| AnnotMeta {
+            author: Some(who.into()),
+            name: Some(format!("{who}-{date}")),
+            date: Some(date.into()),
+        };
+        let square = |x: f64, id: &str| AnnotItem {
+            page: 0,
+            annotation: NewAnnotation::Square {
+                rect: acrux_core::Rect::new(x, 600.0, x + 80.0, 680.0),
+                style: ShapeStyle::default(),
+                contents: Some("À revoir".into()),
+            },
+            meta: meta(id, "D:20240101000000Z"),
+        };
+        let ops = [
+            EditOp::Annotate {
+                items: vec![square(50.0, "a"), square(300.0, "b")],
+            },
+            EditOp::AnnotSet {
+                page: 0,
+                index: 0,
+                changes: AnnotChanges {
+                    rect: Some(acrux_core::Rect::new(60.0, 500.0, 180.0, 560.0)),
+                    color: Some([0.0, 0.0, 1.0]),
+                    date: Some("D:20240102000000Z".into()),
+                    ..AnnotChanges::default()
+                },
+            },
+            EditOp::AnnotReply {
+                page: 0,
+                index: 0,
+                text: "D'accord".into(),
+                meta: meta("Bruno", "D:20240103000000Z"),
+            },
+            EditOp::AnnotState {
+                page: 0,
+                index: 0,
+                change: StateChange::Review(ReviewState::Accepted),
+                meta: meta("Alice", "D:20240104000000Z"),
+            },
+            EditOp::AnnotRemove { page: 0, index: 1 },
+        ];
+        for op in &ops[1..] {
+            assert_eq!(op.required_right(), Right::Annotate, "{op:?}");
+        }
+        let run = || {
+            let doc = Document::from_bytes(bytes.clone()).unwrap();
+            for op in &ops {
+                op.apply(&doc).unwrap();
+            }
+            doc
+        };
+        let (a, b) = (run(), run());
+        let summary = |doc: &Document| {
+            let pages = collect_pages(doc).unwrap();
+            let list: Vec<String> = list_annotations(doc, &pages[0])
+                .unwrap()
+                .iter()
+                .map(|x| format!("{} {:?} {:?} {:?}", x.subtype, x.rect, x.modified, x.color))
+                .collect();
+            (list, format!("{:?}", comment_threads(doc, &pages)))
+        };
+        assert_eq!(summary(&a), summary(&b));
+        let pages = collect_pages(&a).unwrap();
+        let threads = comment_threads(&a, &pages);
+        assert_eq!(threads.len(), 1, "le second carré est supprimé");
+        assert_eq!(threads[0].replies.len(), 1);
+        assert_eq!(
+            threads[0].review.as_ref().map(|r| r.0),
+            Some(ReviewState::Accepted)
+        );
+        assert_eq!(threads[0].color, Some([0.0, 0.0, 1.0]));
     }
 
     /// Effacer puis aplatir le formulaire du corpus, lu en mémoire : les

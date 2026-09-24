@@ -1,8 +1,19 @@
 //! Panneau latéral de navigation : onglet « Vignettes » (une miniature par
-//! page, la page courante encadrée) et onglet « Signets » (arbre dépliable).
+//! page, la page courante encadrée), onglet « Signets » (arbre dépliable),
+//! onglet « Notes » (les commentaires, leurs réponses et leurs statuts),
+//! calques et pièces jointes.
 //! Le panneau ne connaît pas le document : il reçoit les tailles et
-//! bitmaps des vignettes et la liste aplatie des signets, et renvoie des
-//! [`PanelAction`].
+//! bitmaps des vignettes, la liste aplatie des signets et celle des
+//! commentaires, et renvoie des [`PanelAction`].
+//!
+//! # Les commentaires
+//!
+//! Comme le volet « Commentaires » d'Acrobat, la liste se trie (page,
+//! auteur, date, type), se filtre (par type, par auteur) et se cherche
+//! (texte, auteur, réponses, sans tenir compte de la casse ni des accents).
+//! Chaque commentaire montre sa case « coché » et son statut, qu'un clic
+//! change ; le tri et les filtres sont calculés par une fonction pure,
+//! [`comment_order`], que les épreuves exercent seule.
 
 // Coordonnées d'écran entières.
 #![allow(
@@ -18,9 +29,11 @@ use std::fmt::Write as _;
 
 use acrux_graphics::Bitmap;
 
-use crate::platform::Frame;
+use crate::platform::{Frame, Key};
+use crate::ui::input::{InputAction, TextInput};
 use crate::ui::lang::{tr, trf};
 use crate::ui::paint::round_rect;
+use crate::ui::palette::fold_char;
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
 
@@ -65,6 +78,12 @@ pub enum PanelAction {
         /// Nouvelle position.
         to: usize,
     },
+    /// Cocher ou décocher le commentaire d'indice donné dans la liste
+    /// fournie.
+    ToggleMarked(usize),
+    /// Dérouler une liste du panneau des commentaires, sous ce rectangle
+    /// (coordonnées du panneau).
+    CommentMenu(CommentMenu, (i32, i32, i32, i32)),
 }
 
 /// Signet aplati (ordre d'affichage).
@@ -78,6 +97,23 @@ pub struct OutlineRow {
     pub title: String,
     /// Possède des enfants.
     pub has_children: bool,
+}
+
+/// Réponse, dans le fil d'un commentaire.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplyRow {
+    /// Page de la réponse.
+    pub page: usize,
+    /// Rang de la réponse dans `/Annots`.
+    pub index: usize,
+    /// Auteur.
+    pub author: Option<String>,
+    /// Date lisible.
+    pub date: String,
+    /// Texte.
+    pub contents: String,
+    /// 1 pour une réponse au commentaire, 2 pour la réponse à une réponse…
+    pub depth: usize,
 }
 
 /// Commentaire affiché dans le panneau (une annotation porteuse de texte).
@@ -101,6 +137,155 @@ pub struct CommentRow {
     /// `index`, c'est ce qui la désigne sans ambiguïté — pour y répondre ou
     /// lui donner un statut.
     pub name: Option<String>,
+    /// Date lisible (« 2024-03-12 10:30 »), vide si le fichier n'en dit
+    /// rien.
+    pub date: String,
+    /// Date brute (`D:…`) : elle se trie comme du texte.
+    pub date_raw: String,
+    /// Couleur de l'annotation, pour sa pastille.
+    pub color: Option<(u8, u8, u8)>,
+    /// Réponses, dans l'ordre du fil.
+    pub replies: Vec<ReplyRow>,
+    /// Statut de relecture, en clé française (« Accepté »…).
+    pub status: Option<&'static str>,
+    /// Case « coché ».
+    pub marked: bool,
+}
+
+/// Ordre de la liste des commentaires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CommentSort {
+    /// Par page, puis dans l'ordre de la page.
+    #[default]
+    Page,
+    /// Par auteur.
+    Author,
+    /// Du plus récent au plus ancien.
+    Date,
+    /// Par type.
+    Kind,
+}
+
+impl CommentSort {
+    /// Tous, dans l'ordre du menu.
+    pub const ALL: [CommentSort; 4] = [
+        CommentSort::Page,
+        CommentSort::Author,
+        CommentSort::Date,
+        CommentSort::Kind,
+    ];
+
+    /// Libellé français.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            CommentSort::Page => "Page",
+            CommentSort::Author => "Auteur",
+            CommentSort::Date => "Date",
+            CommentSort::Kind => "Type",
+        }
+    }
+}
+
+/// Ce que montre la liste des commentaires : son ordre, ses filtres, sa
+/// recherche. Il survit à l'annulation d'une modification : le document est
+/// rechargé, la liste qu'on regardait ne change pas.
+#[derive(Debug, Clone, Default)]
+pub struct CommentView {
+    /// Ordre.
+    pub sort: CommentSort,
+    /// Types masqués, en clés françaises.
+    pub hidden: Vec<&'static str>,
+    /// Seul auteur montré, s'il y en a un.
+    pub author: Option<String>,
+    /// Recherche dans les textes, les auteurs et les réponses.
+    pub search: TextInput,
+    /// Le champ de recherche a le clavier.
+    pub searching: bool,
+}
+
+impl CommentView {
+    /// Nombre de filtres en cours (types masqués, auteur) : le bouton
+    /// « Filtrer » l'affiche.
+    #[must_use]
+    pub fn filters(&self) -> usize {
+        usize::from(!self.hidden.is_empty()) + usize::from(self.author.is_some())
+    }
+}
+
+/// Liste déroulante demandée par le panneau des commentaires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommentMenu {
+    /// L'ordre.
+    Sort,
+    /// Les filtres : types et auteurs.
+    Filter,
+    /// Le statut du commentaire d'indice donné dans la liste fournie.
+    Status(usize),
+}
+
+/// Un texte plié : minuscules, sans accents, comme la palette le compare.
+fn folded(text: &str) -> String {
+    text.chars().map(fold_char).collect()
+}
+
+/// Ordre d'affichage des commentaires : ceux qui passent les filtres et la
+/// recherche, triés. Le tri est stable, départagé par la page puis le rang
+/// dans la page : deux listes identiques s'affichent toujours pareil.
+///
+/// La recherche ne tient pas compte de la casse ni des accents, et regarde
+/// aussi les réponses : une discussion se retrouve par ce qu'on y a dit.
+#[must_use]
+pub fn comment_order(rows: &[CommentRow], view: &CommentView) -> Vec<usize> {
+    let query = folded(view.search.value.trim());
+    let found = |r: &CommentRow| {
+        query.is_empty()
+            || folded(&r.contents).contains(&query)
+            || r.author
+                .as_deref()
+                .is_some_and(|a| folded(a).contains(&query))
+            || folded(tr(r.kind)).contains(&query)
+            || r.replies.iter().any(|reply| {
+                folded(&reply.contents).contains(&query)
+                    || reply
+                        .author
+                        .as_deref()
+                        .is_some_and(|a| folded(a).contains(&query))
+            })
+    };
+    let mut out: Vec<usize> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| {
+            !view.hidden.contains(&r.kind)
+                && view
+                    .author
+                    .as_deref()
+                    .is_none_or(|a| r.author.as_deref() == Some(a))
+                && found(r)
+        })
+        .map(|(i, _)| i)
+        .collect();
+    let place = |i: usize| (rows[i].page, rows[i].index);
+    match view.sort {
+        CommentSort::Page => out.sort_by_key(|&i| place(i)),
+        CommentSort::Author => out.sort_by(|&a, &b| {
+            let who = |i: usize| folded(rows[i].author.as_deref().unwrap_or_default());
+            who(a).cmp(&who(b)).then(place(a).cmp(&place(b)))
+        }),
+        CommentSort::Date => out.sort_by(|&a, &b| {
+            rows[b]
+                .date_raw
+                .cmp(&rows[a].date_raw)
+                .then(place(a).cmp(&place(b)))
+        }),
+        CommentSort::Kind => out.sort_by(|&a, &b| {
+            folded(tr(rows[a].kind))
+                .cmp(&folded(tr(rows[b].kind)))
+                .then(place(a).cmp(&place(b)))
+        }),
+    }
+    out
 }
 
 /// Pièce jointe affichée dans le panneau.
@@ -168,6 +353,16 @@ enum Hit {
     Attachment(usize),
     /// Bouton « Ajouter un fichier ».
     AddAttachment,
+    /// Case « coché » d'un commentaire (indice dans la liste fournie).
+    CommentCheck(usize),
+    /// Statut d'un commentaire (indice dans la liste fournie).
+    CommentStatus(usize),
+    /// Champ de recherche des commentaires.
+    CommentSearch,
+    /// Bouton « Trier ».
+    CommentSortButton,
+    /// Bouton « Filtrer ».
+    CommentFilterButton,
 }
 
 /// Panneau latéral.
@@ -196,6 +391,11 @@ pub struct Panel {
     press: Option<(usize, i32, i32)>,
     /// Glisser en cours : page déplacée et position d'insertion visée.
     drag: Option<(usize, usize)>,
+    /// Ordre, filtres et recherche de la liste des commentaires.
+    pub comments: CommentView,
+    /// Commentaires affichés au dernier dessin, dans l'ordre : le clavier
+    /// les parcourt ainsi.
+    comment_rows: Vec<usize>,
 }
 
 impl Default for Panel {
@@ -220,6 +420,8 @@ impl Panel {
             visible_pages: Vec::new(),
             press: None,
             drag: None,
+            comments: CommentView::default(),
+            comment_rows: Vec::new(),
         }
     }
 
@@ -591,76 +793,7 @@ impl Panel {
                 self.content_height = y + scroll + pad;
             }
             PanelTab::Comments => {
-                let line_h = (text.line_height(size)).round() as i32;
-                let row_h = line_h * 2 + pad;
-                if content.comments.is_empty() {
-                    let baseline = pad as f32 + text.ascent(size);
-                    text.draw_clipped(
-                        &mut body,
-                        pad as f32,
-                        baseline,
-                        size,
-                        tr("Aucun commentaire"),
-                        t.text_dim,
-                        (w - 2 * pad) as f32,
-                    );
-                }
-                let mut y = -scroll;
-                for (index, c) in content.comments.iter().enumerate() {
-                    if y + row_h >= 0 && y <= view_h {
-                        if self.hover == Some(Hit::Comment(index)) {
-                            body.fill_rect(0, y, w - 1, row_h, t.hover.0, t.hover.1, t.hover.2);
-                        }
-                        if self.focus == Some(Hit::Comment(index)) {
-                            ring(&mut body, t, 0, y, w - 1, row_h);
-                        }
-                        // Première ligne : type, auteur et page.
-                        let who = c.author.clone().unwrap_or_default();
-                        let page = (c.page + 1).to_string();
-                        let head = if who.is_empty() {
-                            trf("{} — page {}", &[tr(c.kind), &page])
-                        } else {
-                            trf("{} de {} — page {}", &[tr(c.kind), &who, &page])
-                        };
-                        let base1 = y as f32 + (pad / 2) as f32 + text.ascent(size);
-                        text.draw_clipped(
-                            &mut body,
-                            pad as f32,
-                            base1,
-                            size,
-                            &head,
-                            t.text_dim,
-                            (w - 1 - 2 * pad) as f32,
-                        );
-                        let body_text = if c.contents.trim().is_empty() {
-                            tr("(sans texte)").to_string()
-                        } else {
-                            c.contents.replace('\n', " ")
-                        };
-                        text.draw_clipped(
-                            &mut body,
-                            pad as f32,
-                            base1 + line_h as f32,
-                            size,
-                            &body_text,
-                            t.text,
-                            (w - 1 - 2 * pad) as f32,
-                        );
-                        body.fill_rect(
-                            0,
-                            y + row_h - 1,
-                            w - 1,
-                            1,
-                            t.separator.0,
-                            t.separator.1,
-                            t.separator.2,
-                        );
-                        self.hits
-                            .push(((0, hh + 1 + y, w - 1, row_h), Hit::Comment(index)));
-                    }
-                    y += row_h;
-                }
-                self.content_height = y + scroll + pad;
+                self.paint_comments(&mut body, text, t, dpi, content, hh, view_h);
             }
             PanelTab::Attachments => {
                 let line_h = text.line_height(size).round() as i32;
@@ -780,6 +913,341 @@ impl Panel {
         }
     }
 
+    /// L'onglet des commentaires : un bandeau fixe (recherche, tri, filtre),
+    /// puis les commentaires dans l'ordre choisi, chacun avec sa pastille,
+    /// son type, son auteur, sa page, sa date, son statut, sa case, son
+    /// texte et ses réponses indentées.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // une liste, ligne à ligne
+    fn paint_comments(
+        &mut self,
+        body: &mut Frame<'_>,
+        text: &mut TextRenderer,
+        t: &Theme,
+        dpi: f32,
+        content: &PanelContent<'_>,
+        hh: i32,
+        view_h: i32,
+    ) {
+        let s = |v: f32| (v * dpi).round() as i32;
+        let w = body.width as i32;
+        let size = t.font_size * dpi;
+        let small = size * 0.9;
+        let pad = s(10.0);
+        let line_h = text.line_height(size).round() as i32;
+        let small_h = text.line_height(small).round() as i32;
+        // Le bandeau : la recherche, puis le tri et le filtre.
+        let field_h = s(28.0);
+        let button_h = s(24.0);
+        let header_h = pad / 2 + field_h + s(6.0) + button_h + pad / 2;
+        self.comments.search.placeholder = tr("Rechercher dans les commentaires").to_string();
+        self.comments.search.focused = self.comments.searching;
+        let field = (pad, pad / 2, w - 2 * pad, field_h);
+        self.comments
+            .search
+            .draw(body, text, t, dpi, field.0, field.1, field.2, field.3);
+        // Le bandeau se déclare après les lignes (voir la fin) : une ligne
+        // à demi défilée sous lui ne lui vole pas ses clics.
+        let mut header_hits = vec![(
+            (field.0, hh + 1 + field.1, field.2, field.3),
+            Hit::CommentSearch,
+        )];
+        let by = field.1 + field_h + s(6.0);
+        let bw = (w - 2 * pad - s(6.0)) / 2;
+        let sort_label = trf("Trier : {}", &[tr(self.comments.sort.label())]);
+        let filters = self.comments.filters();
+        let filter_label = if filters == 0 {
+            tr("Filtrer").to_string()
+        } else {
+            trf("Filtrer ({})", &[&filters.to_string()])
+        };
+        for (i, (label, hit)) in [
+            (sort_label, Hit::CommentSortButton),
+            (filter_label, Hit::CommentFilterButton),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let bx = pad + i as i32 * (bw + s(6.0));
+            let hovered = self.hover == Some(hit);
+            let active = hit == Hit::CommentFilterButton && filters > 0;
+            let face = if hovered { t.button_hover } else { t.hover };
+            round_rect(body, bx, by, bw, button_h, 6.0 * dpi, face);
+            let color = if active { t.accent } else { t.text };
+            text.draw_clipped(
+                body,
+                (bx + s(8.0)) as f32,
+                (by + button_h / 2) as f32 + text.ascent(small) / 2.0,
+                small,
+                &label,
+                color,
+                (bw - s(24.0)) as f32,
+            );
+            // Le chevron, en deux traits : la liste se déroule.
+            let (cx, cy) = ((bx + bw - s(12.0)) as f32, (by + button_h / 2) as f32);
+            let r = 3.0 * dpi;
+            crate::ui::paint::line(
+                body,
+                cx - r,
+                cy - r / 2.0,
+                cx,
+                cy + r / 2.0,
+                dpi,
+                t.text_dim,
+            );
+            crate::ui::paint::line(
+                body,
+                cx,
+                cy + r / 2.0,
+                cx + r,
+                cy - r / 2.0,
+                dpi,
+                t.text_dim,
+            );
+            if self.focus == Some(hit) {
+                ring(body, t, bx, by, bw, button_h);
+            }
+            header_hits.push(((bx, hh + 1 + by, bw, button_h), hit));
+        }
+        body.fill_rect(
+            0,
+            header_h - 1,
+            w,
+            1,
+            t.separator.0,
+            t.separator.1,
+            t.separator.2,
+        );
+        let list_h = (view_h - header_h).max(0);
+        let mut list = body.sub(0, header_h, w.max(0) as u32, list_h as u32);
+        let order = comment_order(content.comments, &self.comments);
+        if order.is_empty() {
+            let message = if content.comments.is_empty() {
+                tr("Aucun commentaire")
+            } else {
+                tr("Aucun commentaire ne correspond")
+            };
+            text.draw_clipped(
+                &mut list,
+                pad as f32,
+                pad as f32 + text.ascent(size),
+                size,
+                message,
+                t.text_dim,
+                (w - 2 * pad) as f32,
+            );
+        }
+        let scroll = self.scroll.round() as i32;
+        let box_side = s(14.0);
+        let mut y = -scroll;
+        for &index in &order {
+            let Some(c) = content.comments.get(index) else {
+                continue;
+            };
+            let room = (w - 2 * pad) as f32;
+            let mut measure = |l: &str| text.measure(size, l);
+            let mut lines = if c.contents.trim().is_empty() {
+                vec![tr("(sans texte)").to_string()]
+            } else {
+                crate::ui::bubble::wrap(&c.contents, room, &mut measure)
+            };
+            if lines.len() > 2 {
+                lines.truncate(2);
+                if let Some(last) = lines.last_mut() {
+                    last.push('…');
+                }
+            }
+            let replies_h = if c.replies.is_empty() {
+                0
+            } else {
+                s(4.0) + c.replies.len() as i32 * small_h
+            };
+            let row_h = pad / 2
+                + line_h
+                + small_h
+                + s(4.0)
+                + lines.len() as i32 * line_h
+                + replies_h
+                + pad / 2
+                + s(2.0);
+            if y + row_h >= 0 && y <= list_h {
+                if self.hover == Some(Hit::Comment(index)) {
+                    list.fill_rect(0, y, w, row_h, t.hover.0, t.hover.1, t.hover.2);
+                }
+                if self.focus == Some(Hit::Comment(index)) {
+                    ring(&mut list, t, 0, y, w, row_h);
+                }
+                // Première ligne : pastille, type et auteur ; la page et la
+                // case à droite.
+                let top = y + pad / 2;
+                let base1 = top as f32 + text.ascent(size);
+                let mut x = pad;
+                if let Some(color) = c.color {
+                    let chip = s(9.0);
+                    round_rect(
+                        &mut list,
+                        x,
+                        top + (line_h - chip) / 2,
+                        chip,
+                        chip,
+                        chip as f32 / 2.0,
+                        color,
+                    );
+                    x += chip + s(6.0);
+                }
+                let bx = w - pad - box_side;
+                let by = top + (line_h - box_side) / 2;
+                paint_check(&mut list, t, dpi, (bx, by, box_side), c.marked);
+                self.hits.push((
+                    (
+                        bx - s(4.0),
+                        hh + 1 + header_h + by - s(4.0),
+                        box_side + s(8.0),
+                        box_side + s(8.0),
+                    ),
+                    Hit::CommentCheck(index),
+                ));
+                let page = trf("p. {}", &[&(c.page + 1).to_string()]);
+                let page_w = text.measure(small, &page).ceil() as i32;
+                let page_x = bx - s(8.0) - page_w;
+                text.draw(&mut list, page_x as f32, base1, small, &page, t.text_dim);
+                let head = match &c.author {
+                    Some(who) if !who.is_empty() => format!("{} — {who}", tr(c.kind)),
+                    _ => tr(c.kind).to_string(),
+                };
+                text.draw_clipped(
+                    &mut list,
+                    x as f32,
+                    base1,
+                    size,
+                    &head,
+                    t.text,
+                    (page_x - s(6.0) - x) as f32,
+                );
+                // Deuxième ligne : la date, et le statut (cliquable) à droite.
+                let top2 = top + line_h;
+                let base2 = top2 as f32 + text.ascent(small);
+                let status = c.status.map_or(tr("Statut"), tr);
+                let chip_w = text.measure(small, status).ceil() as i32 + s(14.0);
+                let chip_x = w - pad - chip_w;
+                let chip_y = top2 + s(1.0);
+                let chip_h = small_h;
+                if c.status.is_some() {
+                    round_rect(
+                        &mut list,
+                        chip_x,
+                        chip_y,
+                        chip_w,
+                        chip_h,
+                        chip_h as f32 / 2.0,
+                        t.accent,
+                    );
+                } else {
+                    crate::ui::paint::round_rect_outline(
+                        &mut list,
+                        chip_x,
+                        chip_y,
+                        chip_w,
+                        chip_h,
+                        chip_h as f32 / 2.0,
+                        dpi.max(1.0),
+                        if self.hover == Some(Hit::CommentStatus(index)) {
+                            t.accent
+                        } else {
+                            t.separator
+                        },
+                    );
+                }
+                text.draw(
+                    &mut list,
+                    (chip_x + s(7.0)) as f32,
+                    base2,
+                    small,
+                    status,
+                    if c.status.is_some() {
+                        (255, 255, 255)
+                    } else {
+                        t.text_dim
+                    },
+                );
+                self.hits.push((
+                    (chip_x, hh + 1 + header_h + chip_y, chip_w, chip_h),
+                    Hit::CommentStatus(index),
+                ));
+                text.draw_clipped(
+                    &mut list,
+                    pad as f32,
+                    base2,
+                    small,
+                    &c.date,
+                    t.text_dim,
+                    (chip_x - s(6.0) - pad) as f32,
+                );
+                // Le texte, sur deux lignes au plus.
+                let mut ty = top2 + small_h + s(4.0);
+                for l in &lines {
+                    text.draw_clipped(
+                        &mut list,
+                        pad as f32,
+                        ty as f32 + text.ascent(size),
+                        size,
+                        l,
+                        t.text,
+                        room,
+                    );
+                    ty += line_h;
+                }
+                // Les réponses, en retrait, une ligne chacune.
+                if !c.replies.is_empty() {
+                    ty += s(4.0);
+                    for r in &c.replies {
+                        let indent = pad + s(14.0) * r.depth.min(6) as i32;
+                        let who = r.author.as_deref().unwrap_or("?");
+                        list.fill_rect(
+                            indent - s(7.0),
+                            ty + s(2.0),
+                            s(2.0).max(1),
+                            small_h - s(4.0),
+                            t.accent.0,
+                            t.accent.1,
+                            t.accent.2,
+                        );
+                        let line = format!("{who} : {}", r.contents.replace('\n', " "));
+                        text.draw_clipped(
+                            &mut list,
+                            indent as f32,
+                            ty as f32 + text.ascent(small),
+                            small,
+                            &line,
+                            t.text_dim,
+                            (w - pad - indent) as f32,
+                        );
+                        ty += small_h;
+                    }
+                }
+                list.fill_rect(
+                    0,
+                    y + row_h - 1,
+                    w,
+                    1,
+                    t.separator.0,
+                    t.separator.1,
+                    t.separator.2,
+                );
+                // La ligne entière, déclarée avant la case et le statut :
+                // `hit_at` prend la dernière correspondance, eux gagnent.
+                let at = self.hits.len().saturating_sub(2);
+                self.hits.insert(
+                    at,
+                    ((0, hh + 1 + header_h + y, w, row_h), Hit::Comment(index)),
+                );
+            }
+            y += row_h;
+        }
+        self.hits.extend(header_hits);
+        self.comment_rows = order;
+        self.content_height = y + scroll + header_h + pad;
+    }
+
     /// Cibles atteignables au clavier dans l'onglet courant, dans l'ordre.
     fn focusable(&self, content: &PanelContent<'_>) -> Vec<Hit> {
         match self.tab {
@@ -789,7 +1257,15 @@ impl Panel {
                 .iter()
                 .map(|r| Hit::Row(r.id, false))
                 .collect(),
-            PanelTab::Comments => (0..content.comments.len()).map(Hit::Comment).collect(),
+            PanelTab::Comments => [Hit::CommentSortButton, Hit::CommentFilterButton]
+                .into_iter()
+                .chain(
+                    self.comment_rows
+                        .iter()
+                        .filter(|&&i| i < content.comments.len())
+                        .map(|&i| Hit::Comment(i)),
+                )
+                .collect(),
             PanelTab::Layers => (0..content.layers.len()).map(Hit::Layer).collect(),
             PanelTab::Attachments => std::iter::once(Hit::AddAttachment)
                 .chain((0..content.attachments.len()).map(Hit::Attachment))
@@ -982,10 +1458,65 @@ impl Panel {
         if let Some(Hit::Page(p)) = self.hit_at(x, y) {
             self.press = Some((p, x, y));
         }
-        match self.hit_at(x, y) {
+        let hit = self.hit_at(x, y);
+        // Un clic ailleurs que dans le champ de recherche lui rend le
+        // clavier : les raccourcis du document reprennent.
+        if hit != Some(Hit::CommentSearch) {
+            self.comments.searching = false;
+        }
+        match hit {
             Some(hit) => self.act_on(hit, content),
             None => PanelAction::None,
         }
+    }
+
+    /// Rectangle d'une cible au dernier dessin.
+    fn rect_of(&self, hit: Hit) -> (i32, i32, i32, i32) {
+        self.hits
+            .iter()
+            .rev()
+            .find(|(_, h)| *h == hit)
+            .map_or((0, 0, 0, 0), |(r, _)| *r)
+    }
+
+    /// Vrai si le champ de recherche des commentaires a le clavier.
+    #[must_use]
+    pub fn comment_search_focused(&self) -> bool {
+        self.tab == PanelTab::Comments && self.comments.searching
+    }
+
+    /// Le champ de recherche des commentaires rend le clavier.
+    pub fn blur_comment_search(&mut self) {
+        self.comments.searching = false;
+    }
+
+    /// Touche dans le champ de recherche. Entrée et Échap le quittent ;
+    /// rend vrai si la liste change.
+    pub fn comment_search_key(&mut self, key: Key, shift: bool) -> bool {
+        match self.comments.search.key(key, shift) {
+            InputAction::Changed => {
+                self.scroll = 0.0;
+                true
+            }
+            InputAction::Submit | InputAction::Cancel => {
+                self.comments.searching = false;
+                true
+            }
+            InputAction::None => false,
+        }
+    }
+
+    /// Caractère tapé dans le champ de recherche.
+    pub fn comment_search_char(&mut self, c: char) {
+        if self.comments.search.insert_char(c) == InputAction::Changed {
+            self.scroll = 0.0;
+        }
+    }
+
+    /// Texte collé dans le champ de recherche.
+    pub fn comment_search_paste(&mut self, text: &str) {
+        let _ = self.comments.search.paste(text);
+        self.scroll = 0.0;
     }
 
     /// Ce que déclenche une cible, qu'on l'ait atteinte à la souris ou au
@@ -1013,6 +1544,22 @@ impl Panel {
                 }
             }
             Hit::Comment(index) => PanelAction::GoToComment(index),
+            Hit::CommentCheck(index) if index < content.comments.len() => {
+                PanelAction::ToggleMarked(index)
+            }
+            Hit::CommentStatus(index) if index < content.comments.len() => {
+                PanelAction::CommentMenu(CommentMenu::Status(index), self.rect_of(hit))
+            }
+            Hit::CommentSearch => {
+                self.comments.searching = true;
+                PanelAction::None
+            }
+            Hit::CommentSortButton => {
+                PanelAction::CommentMenu(CommentMenu::Sort, self.rect_of(hit))
+            }
+            Hit::CommentFilterButton => {
+                PanelAction::CommentMenu(CommentMenu::Filter, self.rect_of(hit))
+            }
             Hit::Layer(index) => match content.layers.get(index) {
                 Some((number, _, _)) => PanelAction::ToggleLayer(*number),
                 None => PanelAction::None,
@@ -1021,7 +1568,8 @@ impl Panel {
                 PanelAction::SaveAttachment(index)
             }
             Hit::AddAttachment => PanelAction::AddAttachment,
-            Hit::Attachment(_) => PanelAction::None,
+            // Indice hors de la liste (elle a changé depuis le dessin) : rien.
+            Hit::Attachment(_) | Hit::CommentCheck(_) | Hit::CommentStatus(_) => PanelAction::None,
         }
     }
 
@@ -1060,6 +1608,52 @@ impl Panel {
             y += cell_h;
         }
         self.clamp();
+    }
+}
+
+/// Case à cocher de `côté` pixels en `(x, y)` : cochée, pleine d'accent
+/// avec sa coche blanche ; sinon un cadre.
+fn paint_check(
+    frame: &mut Frame<'_>,
+    t: &Theme,
+    dpi: f32,
+    (x, y, side): (i32, i32, i32),
+    on: bool,
+) {
+    let radius = 3.0 * dpi;
+    if on {
+        round_rect(frame, x, y, side, side, radius, t.accent);
+        let (fx, fy, fs) = (x as f32, y as f32, side as f32);
+        let w = (1.6 * dpi).max(1.0);
+        crate::ui::paint::line(
+            frame,
+            fx + fs * 0.22,
+            fy + fs * 0.52,
+            fx + fs * 0.43,
+            fy + fs * 0.72,
+            w,
+            (255, 255, 255),
+        );
+        crate::ui::paint::line(
+            frame,
+            fx + fs * 0.43,
+            fy + fs * 0.72,
+            fx + fs * 0.78,
+            fy + fs * 0.3,
+            w,
+            (255, 255, 255),
+        );
+    } else {
+        crate::ui::paint::round_rect_outline(
+            frame,
+            x,
+            y,
+            side,
+            side,
+            radius,
+            dpi.max(1.0),
+            t.text_dim,
+        );
     }
 }
 
@@ -1289,6 +1883,136 @@ mod tests {
         assert!(p.mouse_move(50, 100, false));
         assert!(!p.mouse_move(51, 101, false));
         assert!(p.mouse_leave());
+    }
+
+    fn comment(
+        page: usize,
+        index: usize,
+        kind: &'static str,
+        author: &str,
+        date: &str,
+    ) -> CommentRow {
+        CommentRow {
+            page,
+            kind,
+            author: Some(author.to_string()),
+            contents: format!("texte {page}-{index}"),
+            rect: acrux_core::Rect::default(),
+            index,
+            name: None,
+            date: date.to_string(),
+            date_raw: format!("D:{date}"),
+            color: None,
+            replies: Vec::new(),
+            status: None,
+            marked: false,
+        }
+    }
+
+    fn comments() -> Vec<CommentRow> {
+        let mut rows = vec![
+            comment(1, 0, "Note", "Bruno", "20240103"),
+            comment(0, 2, "Ellipse", "Alice", "20240101"),
+            comment(0, 1, "Note", "Élodie", "20240105"),
+            comment(2, 0, "Rectangle", "alice", "20240102"),
+        ];
+        rows[1].replies.push(ReplyRow {
+            page: 0,
+            index: 3,
+            author: Some("Bruno".into()),
+            date: String::new(),
+            contents: "Je corrige ça".into(),
+            depth: 1,
+        });
+        rows
+    }
+
+    /// Tri par page, auteur (sans accents ni casse), date (du plus récent)
+    /// et type ; filtres par type et par auteur ; recherche qui trouve
+    /// aussi ce que disent les réponses.
+    #[test]
+    fn les_commentaires_se_trient_se_filtrent_et_se_cherchent() {
+        let rows = comments();
+        let mut view = CommentView::default();
+        assert_eq!(comment_order(&rows, &view), [2, 1, 0, 3]);
+        view.sort = CommentSort::Author;
+        assert_eq!(comment_order(&rows, &view), [1, 3, 0, 2]);
+        view.sort = CommentSort::Date;
+        assert_eq!(comment_order(&rows, &view), [2, 0, 3, 1]);
+        // Des types dont l'ordre est le même en français et en anglais :
+        // d'autres épreuves changent la langue pendant que celle-ci tourne.
+        view.sort = CommentSort::Kind;
+        assert_eq!(comment_order(&rows, &view), [1, 2, 0, 3]);
+        view.sort = CommentSort::Page;
+        view.hidden.push("Note");
+        assert_eq!(comment_order(&rows, &view), [1, 3]);
+        assert_eq!(view.filters(), 1);
+        view.hidden.clear();
+        view.author = Some("Bruno".into());
+        assert_eq!(comment_order(&rows, &view), [0]);
+        view.author = None;
+        view.search.set_value("CORRIGE");
+        assert_eq!(comment_order(&rows, &view), [1], "trouvé dans une réponse");
+        view.search.set_value("elodie");
+        assert_eq!(comment_order(&rows, &view), [2], "sans accent");
+        view.search.set_value("rien de tel");
+        assert!(comment_order(&rows, &view).is_empty());
+    }
+
+    /// La case d'un commentaire le coche, sa ligne y mène — par l'indice
+    /// dans la liste fournie, même quand l'ordre affiché diffère ; le
+    /// statut et les boutons déroulent leur liste sous eux.
+    #[test]
+    fn les_clics_du_panneau_des_commentaires() {
+        let mut p = Panel::new();
+        p.tab = PanelTab::Comments;
+        let rows = comments();
+        let bitmaps = HashMap::new();
+        let content = PanelContent {
+            page_count: 3,
+            current: 0,
+            thumb_sizes: &[(10, 10); 3],
+            bitmaps: &bitmaps,
+            thumb_key: 1,
+            outline: &[],
+            comments: &rows,
+            layers: &[],
+            attachments: &[],
+        };
+        p.hits = vec![
+            ((0, 100, 200, 60), Hit::Comment(2)),
+            ((170, 105, 20, 20), Hit::CommentCheck(2)),
+            ((120, 125, 50, 16), Hit::CommentStatus(2)),
+            ((0, 160, 200, 60), Hit::Comment(9)),
+            ((10, 40, 180, 28), Hit::CommentSearch),
+            ((10, 72, 88, 24), Hit::CommentSortButton),
+        ];
+        assert_eq!(p.mouse_down(50, 130, &content), PanelAction::GoToComment(2));
+        assert_eq!(
+            p.mouse_down(175, 110, &content),
+            PanelAction::ToggleMarked(2)
+        );
+        assert_eq!(
+            p.mouse_down(130, 130, &content),
+            PanelAction::CommentMenu(CommentMenu::Status(2), (120, 125, 50, 16))
+        );
+        assert_eq!(
+            p.mouse_down(20, 80, &content),
+            PanelAction::CommentMenu(CommentMenu::Sort, (10, 72, 88, 24))
+        );
+        // Le champ de recherche prend le clavier ; un autre clic le lui
+        // reprend.
+        assert_eq!(p.mouse_down(20, 50, &content), PanelAction::None);
+        assert!(p.comment_search_focused());
+        p.comment_search_char('b');
+        assert!(p.comment_search_key(Key::Backspace, false));
+        assert!(p.comments.search.value.is_empty());
+        p.comment_search_char('x');
+        assert!(p.comment_search_key(Key::Escape, false));
+        assert!(!p.comment_search_focused());
+        assert_eq!(p.mouse_down(20, 50, &content), PanelAction::None);
+        assert_eq!(p.mouse_down(50, 130, &content), PanelAction::GoToComment(2));
+        assert!(!p.comment_search_focused());
     }
 
     #[test]

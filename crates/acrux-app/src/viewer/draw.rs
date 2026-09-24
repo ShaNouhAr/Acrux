@@ -290,7 +290,7 @@ impl DrawSetting {
 
     /// Libellé du choix « aucune couleur », pour les couleurs qui peuvent
     /// manquer.
-    fn none_label(self) -> Option<&'static str> {
+    pub(super) fn none_label(self) -> Option<&'static str> {
         match self {
             DrawSetting::Fill => Some("Aucun remplissage"),
             DrawSetting::Border => Some("Aucun cadre"),
@@ -1362,6 +1362,11 @@ impl Viewer {
 
     /// Rang, dans la barre, du réglage dont la liste est déroulée.
     pub(super) fn open_setting(&self) -> Option<usize> {
+        // Un nuancier ouvert depuis la barre d'une annotation n'est pas un
+        // réglage de l'outil.
+        if self.popup_for_annot {
+            return None;
+        }
         let target = self.draw_popup.as_ref()?.target();
         let tool = self.annot_tool?;
         settings_for(tool).iter().position(|s| *s == target)
@@ -1481,6 +1486,7 @@ impl Viewer {
         log_line(&format!("réglage du dessin : {target:?}"));
         self.tip = None;
         self.draw_popup = Some(popup);
+        self.popup_for_annot = false;
     }
 
     /// Applique une couleur choisie ; `persist` l'écrit aussi dans le
@@ -1533,11 +1539,17 @@ impl Viewer {
     /// Un événement pour le nuancier ou la liste d'un réglage, s'il est
     /// ouvert : il prend tout — la souris, le clavier, la molette — comme
     /// la liste du zoom. Vrai s'il l'a pris.
+    ///
+    /// Le même nuancier et les mêmes listes règlent l'outil de dessin ou,
+    /// ouverts depuis sa barre de propriétés, l'annotation sélectionnée
+    /// (`popup_for_annot`).
+    #[allow(clippy::too_many_lines)] // un nuancier et une liste, pour l'outil ou l'annotation
     pub(super) fn draw_popup_event(
         &mut self,
         event: &Event,
         window: &mut dyn WindowHandle,
     ) -> bool {
+        let annot = self.popup_for_annot;
         let Some(popup) = &mut self.draw_popup else {
             return false;
         };
@@ -1548,7 +1560,11 @@ impl Viewer {
                     Event::MouseDown { x, y, .. } => {
                         if picker.none_at(x, y) {
                             self.draw_popup = None;
-                            self.set_draw_color(target, None, true);
+                            if annot {
+                                self.annot_popup_color(target, None);
+                            } else {
+                                self.set_draw_color(target, None, true);
+                            }
                             window.request_redraw();
                             return true;
                         }
@@ -1577,17 +1593,26 @@ impl Viewer {
                     Event::Wake => return false,
                 };
                 match outcome {
+                    // Une annotation ne suit pas le nuancier en direct : ce
+                    // serait une modification du document par pixel glissé.
+                    Outcome::Live(_) if annot => {}
                     Outcome::Live(c) => self.set_draw_color(target, Some(c), false),
                     Outcome::Pick(c) => {
                         remember_color(c);
                         self.draw_popup = None;
-                        self.set_draw_color(target, Some(c), true);
+                        if annot {
+                            self.annot_popup_color(target, Some(c));
+                        } else {
+                            self.set_draw_color(target, Some(c), true);
+                        }
                     }
                     Outcome::Close => {
                         // Refermé sans choix : une couleur suivie en
                         // direct reste, elle est écrite maintenant.
                         self.draw_popup = None;
-                        self.draw_style_changed(true);
+                        if !annot {
+                            self.draw_style_changed(true);
+                        }
                     }
                     Outcome::Stay => {}
                 }
@@ -1628,7 +1653,11 @@ impl Viewer {
                 match outcome {
                     Outcome::Pick(choice) | Outcome::Live(choice) => {
                         self.draw_popup = None;
-                        self.set_draw_choice(target, choice);
+                        if annot {
+                            self.annot_popup_choice(target, choice);
+                        } else {
+                            self.set_draw_choice(target, choice);
+                        }
                     }
                     Outcome::Close => self.draw_popup = None,
                     Outcome::Stay => {}
@@ -1643,6 +1672,14 @@ impl Viewer {
     pub(super) fn paint_draw_popup(&mut self, frame: &mut Frame<'_>) {
         let (theme, dpi) = (self.theme, self.dpi_scale as f32);
         let style = self.draw_style;
+        // Le nuancier d'une annotation entoure la couleur de l'annotation.
+        let annot_color = match (&self.draw_popup, self.popup_for_annot) {
+            (Some(DrawPopup::Colors { target, .. }), true) => {
+                let target = *target;
+                Some(self.annot_current_color(target))
+            }
+            _ => None,
+        };
         let Some(text) = self.text.as_mut() else {
             return;
         };
@@ -1653,6 +1690,7 @@ impl Viewer {
                 anchor,
             }) => {
                 let current = match target {
+                    _ if annot_color.is_some() => annot_color.flatten(),
                     DrawSetting::Stroke => Some(style.stroke),
                     DrawSetting::Fill => style.fill,
                     DrawSetting::TextColor => Some(style.text_color),

@@ -221,6 +221,25 @@ pub enum Command {
     /// touché). Absente de la palette : elle ne vaut que pour un document
     /// visé, depuis le menu d'une carte de l'accueil.
     ForgetRecent,
+    /// Supprimer le commentaire sélectionné, avec ses réponses.
+    DeleteComment,
+    /// Répondre au commentaire sélectionné : sa bulle s'ouvre, le champ de
+    /// réponse prêt.
+    ReplyComment,
+    /// Changer le texte du commentaire sélectionné.
+    EditCommentText,
+    /// Statut « Accepté » pour le commentaire sélectionné.
+    CommentAccepted,
+    /// Statut « Refusé ».
+    CommentRejected,
+    /// Statut « Annulé ».
+    CommentCancelled,
+    /// Statut « Terminé ».
+    CommentCompleted,
+    /// Retirer le statut du commentaire sélectionné.
+    CommentNoStatus,
+    /// Cocher ou décocher le commentaire sélectionné.
+    ToggleCommentMark,
 }
 
 impl Command {
@@ -321,6 +340,15 @@ impl Command {
             Command::CopyPath => "copy-path",
             Command::RevealInFolder => "reveal-in-folder",
             Command::ForgetRecent => "forget-recent",
+            Command::DeleteComment => "delete-comment",
+            Command::ReplyComment => "reply-comment",
+            Command::EditCommentText => "edit-comment-text",
+            Command::CommentAccepted => "comment-accepted",
+            Command::CommentRejected => "comment-rejected",
+            Command::CommentCancelled => "comment-cancelled",
+            Command::CommentCompleted => "comment-completed",
+            Command::CommentNoStatus => "comment-no-status",
+            Command::ToggleCommentMark => "toggle-comment-mark",
         }
     }
 
@@ -373,6 +401,7 @@ fn shortcut_in_lang(shortcut: &'static str, english: bool) -> &'static str {
         "Maj+F4" => "Shift+F4",
         "Maj+M" => "Shift+M",
         "Ctrl+Suppr" => "Ctrl+Del",
+        "Suppr" => "Del",
         "Ctrl+Page préc." => "Ctrl+Page Up",
         "Ctrl+Page suiv." => "Ctrl+Page Down",
         "Origine" => "Home",
@@ -1021,6 +1050,71 @@ const ENTRIES: &[Entry] = &[
         keywords: "version nouvelle telecharger installer maj update",
         command: Command::CheckUpdates,
         needs_document: false,
+    },
+    // Le commentaire sélectionné sur la page : la palette ne les propose
+    // qu'avec lui (voir `Viewer::open_palette`).
+    Entry {
+        label: "Répondre au commentaire",
+        shortcut: "",
+        keywords: "reponse repondre discussion fil annotation note bulle",
+        command: Command::ReplyComment,
+        needs_document: true,
+    },
+    Entry {
+        label: "Modifier le texte du commentaire…",
+        shortcut: "",
+        keywords: "texte commentaire note contenu modifier corriger annotation",
+        command: Command::EditCommentText,
+        needs_document: true,
+    },
+    Entry {
+        label: "Statut : Accepté",
+        shortcut: "",
+        keywords: "accepter valider statut commentaire relecture etat",
+        command: Command::CommentAccepted,
+        needs_document: true,
+    },
+    Entry {
+        label: "Statut : Refusé",
+        shortcut: "",
+        keywords: "refuser rejeter statut commentaire relecture etat",
+        command: Command::CommentRejected,
+        needs_document: true,
+    },
+    Entry {
+        label: "Statut : Annulé",
+        shortcut: "",
+        keywords: "annuler statut commentaire relecture etat",
+        command: Command::CommentCancelled,
+        needs_document: true,
+    },
+    Entry {
+        label: "Statut : Terminé",
+        shortcut: "",
+        keywords: "terminer fini fait statut commentaire relecture etat",
+        command: Command::CommentCompleted,
+        needs_document: true,
+    },
+    Entry {
+        label: "Retirer le statut du commentaire",
+        shortcut: "",
+        keywords: "aucun statut effacer relecture etat",
+        command: Command::CommentNoStatus,
+        needs_document: true,
+    },
+    Entry {
+        label: "Cocher le commentaire",
+        shortcut: "",
+        keywords: "coche case marque marquer decocher relecture",
+        command: Command::ToggleCommentMark,
+        needs_document: true,
+    },
+    Entry {
+        label: "Supprimer le commentaire",
+        shortcut: "Suppr",
+        keywords: "effacer retirer annotation commentaire note forme",
+        command: Command::DeleteComment,
+        needs_document: true,
     },
     Entry {
         label: "Paramètres",

@@ -134,6 +134,10 @@ pub enum Icon {
     TextBox,
     /// Cadre à deux lignes et son trait d'ancrage fléché (légende).
     Callout,
+    /// Corbeille (supprimer un commentaire).
+    Trash,
+    /// Flèche qui revient en arrière (répondre).
+    Reply,
 }
 
 /// Contour d'une page, motif commun à beaucoup d'icônes.
@@ -626,6 +630,29 @@ pub fn geometry(icon: Icon) -> (Path, Path) {
             polyline(&mut lines, &[(9.0, 13.0), (4.0, 19.5)]);
             polyline(&mut lines, &[(4.0, 15.0), (4.0, 19.5), (8.5, 19.5)]);
         }
+        Icon::Trash => {
+            // Le couvercle et sa poignée, puis la cuve et ses trois stries.
+            polyline(&mut lines, &[(4.0, 6.5), (20.0, 6.5)]);
+            polyline(
+                &mut lines,
+                &[(9.5, 6.5), (9.5, 4.0), (14.5, 4.0), (14.5, 6.5)],
+            );
+            polyline(
+                &mut lines,
+                &[(6.0, 6.5), (7.0, 20.0), (17.0, 20.0), (18.0, 6.5)],
+            );
+            polyline(&mut lines, &[(10.0, 10.0), (10.0, 16.5)]);
+            polyline(&mut lines, &[(14.0, 10.0), (14.0, 16.5)]);
+        }
+        Icon::Reply => {
+            // Une flèche qui repart vers la gauche, puis descend : la
+            // réponse revient à ce qu'on a dit.
+            polyline(&mut lines, &[(9.0, 5.0), (4.0, 10.0), (9.0, 15.0)]);
+            let mut tail = vec![(4.0, 10.0), (14.0, 10.0)];
+            tail.extend(arc(14.0, 15.0, 6.0, 5.0, -90.0, 0.0).into_iter().skip(1));
+            tail.push((20.0, 19.5));
+            polyline(&mut lines, &tail);
+        }
         Icon::Redact => {
             page(&mut lines, 5.0, 3.5, 14.0, 17.0);
             bar(&mut fills, 7.5, 9.5, 9.0, 5.0);
@@ -848,6 +875,8 @@ mod tests {
             Icon::Pencil,
             Icon::TextBox,
             Icon::Callout,
+            Icon::Trash,
+            Icon::Reply,
         ];
         let mut raster = Rasterizer::new();
         for icon in icons {

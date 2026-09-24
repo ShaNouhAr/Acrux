@@ -5,6 +5,8 @@
 //! | Module    | Rôle                                                  |
 //! |-----------|-------------------------------------------------------|
 //! | `anim`    | valeurs animées et horloge : panneaux, fondus, défilement |
+//! | `annotbar` | barre de propriétés d'une annotation sélectionnée : couleur, fond, épaisseur, opacité, texte, répondre, supprimer |
+//! | `bubble`  | bulle d'un commentaire : auteur, date, statut, texte, réponses, champ « Répondre » |
 //! | `controls` | contrôles composés : creux, segments, pastilles, cases, jauge |
 //! | `cursors` | pointeurs dessinés : texte ajouté, surligneur, note… |
 //! | `dialog`  | fenêtres de dialogue dessinées : question, boutons    |
@@ -20,7 +22,7 @@
 //! | `input`   | champ de saisie sur une ligne, avec sélection (Ctrl+A, Maj+flèches) |
 //! | `icons`   | icônes vectorielles rasterisées à la demande          |
 //! | `toolbar` | barre d'outils (boutons, champ de page, zoom, annuler / rétablir, bascules) |
-//! | `panel`   | panneau latéral (vignettes, signets)                  |
+//! | `panel`   | panneau latéral (vignettes, signets, commentaires triés, filtrés, cherchés, avec leurs réponses et statuts) |
 //! | `prefs`   | réglages persistants et modes d'affichage             |
 //! | `settings` | fiche « Paramètres » : langue, apparence, mises à jour |
 //! | `protect` | fenêtre « Protéger par mot de passe » : deux mots de passe, permissions |
@@ -38,6 +40,8 @@
 //! À venir : info-bulles détaillées.
 
 pub mod anim;
+pub mod annotbar;
+pub mod bubble;
 pub mod controls;
 pub mod cursors;
 pub mod dialog;

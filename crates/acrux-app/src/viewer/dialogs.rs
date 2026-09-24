@@ -38,6 +38,8 @@ pub(super) enum Then {
     ResetForm,
     /// Aplatir le formulaire.
     FlattenForm,
+    /// Supprimer un commentaire et ses réponses (page, rang).
+    DeleteComment(usize, usize),
 }
 
 /// Forme de la question, qui dit ce que veut chaque bouton.
@@ -314,6 +316,7 @@ impl Viewer {
             Then::DeletePage(page) => {
                 self.apply_edit(EditOp::Delete { pages: vec![page] });
             }
+            Then::DeleteComment(page, index) => self.remove_annot(page, index),
             Then::InstallUpdate(url, version) => self.install_update_now(&url, &version),
             Then::ClearRecent => self.clear_recent(),
             // Deux opérations rares qui touchent tout le formulaire, voire le
