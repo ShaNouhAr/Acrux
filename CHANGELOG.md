@@ -43,6 +43,9 @@ c'est la section correspondante de ce fichier qui devient la page de version.
   page (`--at x,y`, `--width` ou `--height`).
 - Ouvrir une image ne met plus son fichier PDF temporaire dans les documents
   récents : il disparaîtrait.
+- Dans « Modifier les objets », `Ctrl+Z` et `Ctrl+Y` relisent les objets de
+  la page : les poignées restaient là où l'objet n'était plus, et `Suppr`
+  après l'annulation d'une image collée échouait sur un objet disparu.
 
 - **Gérer les commentaires sur la page, comme dans Acrobat.** Un clic sur une
   annotation — une des nôtres ou celle d'un autre logiciel — la sélectionne :

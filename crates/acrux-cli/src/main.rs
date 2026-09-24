@@ -1060,7 +1060,13 @@ fn cmd_stamp(path: &str, rest: &[String]) -> acrux_core::Result<()> {
         ..Options::new(source, page, center)
     };
     rubber_stamp::place(&doc, &options)?;
-    if let Some(placed) = rubber_stamp::list(&doc)?.last() {
+    // Le tampon neuf est le dernier de **sa** page : le dernier de
+    // l'inventaire serait celui d'une page plus loin, s'il y en a un.
+    if let Some(placed) = rubber_stamp::list(&doc)?
+        .iter()
+        .rev()
+        .find(|p| p.page == page)
+    {
         println!(
             "tampon posé page {} : [{:.1} {:.1} {:.1} {:.1}] {}",
             page + 1,

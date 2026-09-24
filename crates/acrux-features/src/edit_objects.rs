@@ -693,15 +693,11 @@ pub fn add_image(
         .then(&upright(page.rotate(doc)))
         .then(&Matrix::translate(center.x, center.y));
     let written = wanted.then(&back);
-    let mut raw = String::from(
-        "
-",
-    );
+    // Un saut de ligne d'abord : le flux précédent peut finir sur un
+    // opérateur sans séparateur.
+    let mut raw = String::from("\n");
     for _ in 0..scanned.open {
-        raw.push_str(
-            "Q
-",
-        );
+        raw.push_str("Q\n");
     }
     let _ = writeln!(raw, "q {} cm /{} Do Q", cm(written), name.as_str());
     let raw = raw.into_bytes();

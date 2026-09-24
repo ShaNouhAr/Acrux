@@ -4765,6 +4765,9 @@ impl Viewer {
         self.panel.comments = comment_view;
         // La sélection retrouve son annotation, si elle existe encore.
         self.refresh_annot_selection();
+        // L'outil des objets aussi : Suppr après Ctrl+Z d'une image collée
+        // visait sinon un objet disparu.
+        self.refresh_objects();
         // Le focus revient au champ qui l'avait.
         self.focus_field = focused.and_then(|(name, wi)| {
             let fields = &self.loaded.as_ref()?.fields;
@@ -5983,6 +5986,27 @@ impl Viewer {
             handle: None,
             drag: None,
         });
+    }
+
+    /// Relit l'inventaire de l'outil des objets, s'il est ouvert, après une
+    /// modification ou un rechargement du document : l'ancien désignait des
+    /// objets par leur rang et leurs octets, qui ont pu changer ou
+    /// disparaître. La sélection se garde tant que son rang existe encore ;
+    /// l'outil se referme si sa page n'existe plus.
+    fn refresh_objects(&mut self) {
+        let Some((page, selected)) = self.objects.as_ref().map(|t| (t.page, t.selected)) else {
+            return;
+        };
+        if self.loaded.as_ref().is_none_or(|l| page >= l.pages.len()) {
+            self.objects = None;
+            return;
+        }
+        self.load_objects(page);
+        if let (Some(t), Some(index)) = (&mut self.objects, selected) {
+            if index < t.objects.len() {
+                t.selected = Some(index);
+            }
+        }
     }
 
     /// Rectangle d'une boîte de page dans la vue, ou `None` si la page n'est

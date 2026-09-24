@@ -57,6 +57,7 @@ use super::{author_name, log_line, AnnotTool, Viewer};
 use crate::platform::{Event, Frame, WindowHandle};
 use crate::render_worker::{EditOp, Right};
 use crate::ui::lang::{self, tr};
+use crate::ui::objects::ViewRect;
 use crate::ui::pickers::Outcome;
 use crate::ui::stamps::{Pick, StampPicker, MAX_IMAGES};
 
@@ -458,16 +459,14 @@ impl Viewer {
                 0,
             ));
         let theme = self.theme;
-        let thumbs = self
-            .stamps
-            .thumbs
-            .as_ref()
-            .map(|(_, t)| t.clone())
-            .unwrap_or_default();
-        let (Some(text), Some(picker)) = (self.text.as_mut(), self.stamps.picker.as_mut()) else {
+        // Les vignettes sont prêtées, pas copiées : la carte se repeint à
+        // chaque survol.
+        let StampState { picker, thumbs, .. } = &mut self.stamps;
+        let thumbs = thumbs.as_ref().map_or(&[][..], |(_, t)| t.as_slice());
+        let (Some(text), Some(picker)) = (self.text.as_mut(), picker.as_mut()) else {
             return;
         };
-        picker.paint(frame, text, &mut self.raster, &theme, dpi, anchor, &thumbs);
+        picker.paint(frame, text, &mut self.raster, &theme, dpi, anchor, thumbs);
     }
 
     // --- Poser un tampon -------------------------------------------------------------
@@ -567,6 +566,15 @@ impl Viewer {
         let Some(view) = self.page_rect_to_view(page, rect) else {
             return;
         };
+        // À fort zoom, le tampon rendu en entier pèserait des dizaines de
+        // mégaoctets — un tampon image de 200 pt à 1600 % fait 6400 pixels
+        // de côté —, rendus pendant la peinture pour n'en montrer qu'un coin.
+        // Plus grand que deux fois la vue, l'aperçu se réduit à son cadre.
+        let budget = 2.0 * f64::from(self.view_width()) * f64::from(self.view_height());
+        if view.w * view.h > budget {
+            self.paint_place_frame(frame, &view);
+            return;
+        }
         let key = GhostKey {
             choice,
             dynamic: dynamic.clone(),
@@ -595,6 +603,30 @@ impl Viewer {
                 b.data(),
             );
         }
+    }
+
+    /// Le cadre d'accent, légèrement teinté, qui montre où tombera ce qu'on
+    /// pose : l'image en attente, ou un tampon trop grand pour son aperçu.
+    fn paint_place_frame(&self, frame: &mut Frame<'_>, view: &ViewRect) {
+        let dpi = self.dpi_scale as f32;
+        let (x, y, w, h) = (
+            view.x.round() as i32,
+            view.y.round() as i32,
+            view.w.round() as i32,
+            view.h.round() as i32,
+        );
+        let accent = self.theme.accent;
+        crate::ui::paint::round_rect_alpha(frame, x, y, w, h, 2.0 * dpi, accent, 0.12);
+        crate::ui::paint::round_rect_outline(
+            frame,
+            x,
+            y,
+            w,
+            h,
+            2.0 * dpi,
+            (1.5 * dpi).max(1.0),
+            accent,
+        );
     }
 
     // --- Ajouter une image ---------------------------------------------------------
@@ -774,24 +806,9 @@ impl Viewer {
             return;
         };
         let dpi = self.dpi_scale as f32;
-        let (x, y, vw, vh) = (
-            view.x.round() as i32,
-            view.y.round() as i32,
-            view.w.round() as i32,
-            view.h.round() as i32,
-        );
+        let (x, y) = (view.x.round() as i32, view.y.round() as i32);
         let accent = self.theme.accent;
-        crate::ui::paint::round_rect_alpha(frame, x, y, vw, vh, 2.0 * dpi, accent, 0.12);
-        crate::ui::paint::round_rect_outline(
-            frame,
-            x,
-            y,
-            vw,
-            vh,
-            2.0 * dpi,
-            (1.5 * dpi).max(1.0),
-            accent,
-        );
+        self.paint_place_frame(frame, &view);
         let label = format!("{:.0} × {:.0} pt", size.0, size.1);
         let size_px = self.theme.font_size * dpi * 0.9;
         if let Some(text) = self.text.as_mut() {
