@@ -117,8 +117,27 @@ fn inside(r: Rect, x: i32, y: i32) -> bool {
 /// plus long que la ligne est coupé où il déborde. Les sauts de ligne du
 /// texte sont gardés.
 pub fn wrap(text: &str, width: f32, measure: &mut dyn FnMut(&str) -> f32) -> Vec<String> {
+    wrap_at_most(text, width, measure, usize::MAX)
+}
+
+/// Comme [`wrap`], mais s'arrête dès qu'il y a plus de `max` lignes : le
+/// résultat en a alors au moins `max + 1`, ce qui suffit à savoir qu'il
+/// faut couper. Le panneau des commentaires, qui ne montre que deux lignes
+/// de chaque texte et se redessine à chaque survol, ne mesure ainsi pas
+/// tout un long commentaire, ni tous ceux d'un document qui en compte des
+/// centaines.
+pub fn wrap_at_most(
+    text: &str,
+    width: f32,
+    measure: &mut dyn FnMut(&str) -> f32,
+    max: usize,
+) -> Vec<String> {
     let mut out = Vec::new();
-    for paragraph in text.split('\n') {
+    // Assez de lignes, dont une qui dit quelque chose au-delà de `max` : les
+    // lignes vides de queue, elles, sont retirées à la fin.
+    let enough =
+        |out: &[String]| out.len() > max && out[max..].iter().any(|l: &String| !l.is_empty());
+    'text: for paragraph in text.split('\n') {
         let mut line = String::new();
         for word in paragraph.split_whitespace() {
             let candidate = if line.is_empty() {
@@ -132,6 +151,9 @@ pub fn wrap(text: &str, width: f32, measure: &mut dyn FnMut(&str) -> f32) -> Vec
             }
             if !line.is_empty() {
                 out.push(std::mem::take(&mut line));
+                if enough(&out) {
+                    break 'text;
+                }
             }
             // Un mot seul trop long : coupé lettre à lettre.
             let mut piece = String::new();
@@ -140,12 +162,18 @@ pub fn wrap(text: &str, width: f32, measure: &mut dyn FnMut(&str) -> f32) -> Vec
                 if measure(&piece) > width && piece.chars().count() > 1 {
                     piece.pop();
                     out.push(std::mem::take(&mut piece));
+                    if enough(&out) {
+                        break 'text;
+                    }
                     piece.push(c);
                 }
             }
             line = piece;
         }
         out.push(line);
+        if enough(&out) {
+            break;
+        }
     }
     // Pas de lignes vides en queue : un texte qui finit par un saut de
     // ligne ne grandit pas la bulle pour rien.
@@ -628,6 +656,31 @@ mod tests {
         // Les sauts de ligne restent, pas ceux de la fin.
         assert_eq!(wrap("a\nb\n\n", 100.0, &mut tens), ["a", "b"]);
         assert_eq!(wrap("", 100.0, &mut tens), [""]);
+    }
+
+    /// Le panneau ne veut que deux lignes : la coupe s'arrête à la
+    /// troisième, sans mesurer le reste, et des lignes vides en queue ne
+    /// font pas croire qu'il y a une suite.
+    #[test]
+    fn la_coupe_s_arrete_au_nombre_de_lignes_voulu() {
+        let long = "mot ".repeat(10_000);
+        let mut calls = 0;
+        let mut counted = |t: &str| {
+            calls += 1;
+            tens(t)
+        };
+        let lines = wrap_at_most(&long, 90.0, &mut counted, 2);
+        assert_eq!(lines, ["mot mot", "mot mot", "mot mot"]);
+        assert!(calls < 50, "{calls} mesures pour trois lignes");
+        assert_eq!(wrap_at_most("a\nb\n\n\n", 100.0, &mut tens, 2), ["a", "b"]);
+        assert_eq!(
+            wrap_at_most("a\nb\n\nc", 100.0, &mut tens, 2),
+            ["a", "b", "", "c"]
+        );
+        assert_eq!(
+            wrap_at_most("un deux trois quatre", 90.0, &mut tens, usize::MAX),
+            wrap("un deux trois quatre", 90.0, &mut tens)
+        );
     }
 
     #[test]

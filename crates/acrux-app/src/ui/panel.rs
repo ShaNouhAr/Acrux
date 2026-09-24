@@ -1048,7 +1048,9 @@ impl Panel {
             let mut lines = if c.contents.trim().is_empty() {
                 vec![tr("(sans texte)").to_string()]
             } else {
-                crate::ui::bubble::wrap(&c.contents, room, &mut measure)
+                // Deux lignes montrées : une troisième suffit à savoir qu'il
+                // faut couper.
+                crate::ui::bubble::wrap_at_most(&c.contents, room, &mut measure, 2)
             };
             if lines.len() > 2 {
                 lines.truncate(2);

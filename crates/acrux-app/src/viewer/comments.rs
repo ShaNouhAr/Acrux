@@ -283,6 +283,49 @@ impl Viewer {
         best.map(|(_, index)| (page, index))
     }
 
+    /// Commentaire que vise un clic droit au point `(x, y)` de la vue : celui
+    /// qui est dessous, sauf si le point tombe sur du texte sélectionné. Le
+    /// menu de la sélection (Copier, Surligner…) passe alors avant, comme
+    /// dans Acrobat : sélectionner le commentaire effacerait la sélection
+    /// qu'on voulait copier, et un passage surligné ne se copierait plus
+    /// d'un clic droit.
+    pub(super) fn annot_menu_at(&mut self, x: i32, y: i32) -> Option<(usize, usize)> {
+        let hit = self.annot_at(x, y)?;
+        if self.on_text_selection(x, y) {
+            return None;
+        }
+        Some(hit)
+    }
+
+    /// Vrai si le point `(x, y)` de la vue tombe sur le texte sélectionné.
+    /// Seule la page sous le point est lue : une sélection de tout le
+    /// document ne fait pas extraire le texte de toutes ses pages.
+    fn on_text_selection(&mut self, x: i32, y: i32) -> bool {
+        let Some(sel) = self.selection.filter(|s| !s.is_empty()) else {
+            return false;
+        };
+        let Some((page, pt)) = self.page_at(x, y) else {
+            return false;
+        };
+        let tol = 2.0 * self.dpi_scale / self.scale().max(1e-6);
+        let Some(l) = self.loaded.as_mut() else {
+            return false;
+        };
+        if page >= l.pages.len() {
+            return false;
+        }
+        let text = &l.text(page).1;
+        let Some((from, to)) = sel.range_on_page(page, text.len()) else {
+            return false;
+        };
+        text.rects(from, to).iter().any(|r| {
+            pt.x >= r.x0.min(r.x1) - tol
+                && pt.x <= r.x0.max(r.x1) + tol
+                && pt.y >= r.y0.min(r.y1) - tol
+                && pt.y <= r.y0.max(r.y1) + tol
+        })
+    }
+
     /// Sélectionne l'annotation de rang `index` sur `page`.
     pub(super) fn select_annot(&mut self, page: usize, index: usize) {
         let Some(a) = self.annot_info(page, index) else {
@@ -633,12 +676,31 @@ impl Viewer {
             }
             Key::Left | Key::Right | Key::Up | Key::Down if movable && !m.ctrl => {
                 let step = if m.shift { 10.0 } else { 1.0 };
-                let (dx, dy) = match key {
+                // La flèche dit une direction de l'écran (y vers le bas) :
+                // sur une page tournée, ou dans une vue pivotée, ce n'est
+                // plus un axe de la page. Le décalage passe donc par
+                // l'inverse de la matrice d'affichage — sans elle, → faisait
+                // descendre l'annotation dans une vue pivotée d'un quart de
+                // tour.
+                let (sx, sy) = match key {
                     Key::Left => (-step, 0.0),
                     Key::Right => (step, 0.0),
-                    Key::Up => (0.0, step),
-                    _ => (0.0, -step),
+                    Key::Up => (0.0, -step),
+                    _ => (0.0, step),
                 };
+                let rotation = self
+                    .loaded
+                    .as_ref()
+                    .and_then(|l| l.pages.get(page).map(|p| shown_rotation(l, p)))
+                    .unwrap_or(0);
+                let screen = acrux_render::page::base_matrix(&rect, 1.0, rotation, 1, 1);
+                let Some(delta) = screen
+                    .invert()
+                    .map(|inv| inv.apply_vector(Point::new(sx, sy)))
+                else {
+                    return true;
+                };
+                let (dx, dy) = (delta.x, delta.y);
                 let to = Rect::new(rect.x0 + dx, rect.y0 + dy, rect.x1 + dx, rect.y1 + dy);
                 self.apply_annot_edit(
                     EditOp::AnnotSet {

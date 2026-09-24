@@ -333,9 +333,10 @@ impl Viewer {
             return None;
         }
         // Sur un commentaire, son menu : il est sélectionné d'abord, comme
-        // dans Acrobat, pour qu'on voie ce que le menu vise.
+        // dans Acrobat, pour qu'on voie ce que le menu vise. Sur du texte
+        // sélectionné, le menu de la sélection garde la main.
         if self.annot_mode() {
-            if let Some((page, index)) = self.annot_at(vx, vy) {
+            if let Some((page, index)) = self.annot_menu_at(vx, vy) {
                 self.select_annot(page, index);
                 return Some((self.annot_menu(x, y), "commentaire", Some((vx, vy))));
             }
