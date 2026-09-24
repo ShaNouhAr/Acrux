@@ -313,12 +313,17 @@ pub fn set_annotation_properties(
     }
     let old = rect_of(doc, &d).unwrap_or_default();
     let mut resized = false;
+    // La fenêtre contextuelle est un autre objet : elle ne suit qu'une fois
+    // tous les refus passés, pour qu'une modification refusée ne laisse
+    // rien derrière elle (le document affiché et la copie du fil de rendu
+    // divergeraient).
+    let mut popup_to = None;
     if let Some(rect) = changes.rect {
         let rect = normalized(rect);
         let map = Remap::new(old, rect);
         resized = !map.is_translation();
         move_geometry(doc, &mut d, map, rect);
-        move_popup(doc, &d, old, rect);
+        popup_to = Some(rect);
     }
     if let Some(color) = changes.color {
         set_color(&mut d, &subtype, color.map(|v| v.clamp(0.0, 1.0)));
@@ -385,6 +390,9 @@ pub fn set_annotation_properties(
                 }
             }
         }
+    }
+    if let Some(rect) = popup_to {
+        move_popup(doc, &d, old, rect);
     }
     let date = changes.date.clone().unwrap_or_else(pdf_date_now);
     d.insert(Name::new("M"), Object::String(date.into_bytes()));

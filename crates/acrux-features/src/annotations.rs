@@ -3096,6 +3096,62 @@ mod tests {
         assert!(list[signed].fill_sign);
     }
 
+    /// Une modification refusée ne laisse rien derrière elle : la fenêtre
+    /// contextuelle d'un tampon qu'on voulait déplacer **et** recolorer ne
+    /// bouge pas seule. Sinon le document affiché et la copie du fil de
+    /// rendu, où la même modification échoue autrement, divergeraient.
+    #[test]
+    fn une_modification_refusee_ne_touche_a_rien() {
+        let d = doc();
+        let form = d.add(appearance_stream(
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+            "0 0 1 rg 0 0 10 10 re f".into(),
+            &[],
+        ));
+        let mut ap = Dict::new();
+        ap.insert(Name::new("N"), Object::Reference(form));
+        let popup = raw_annotation(
+            &d,
+            &[
+                ("Subtype", name_obj("Popup")),
+                ("Rect", reals(&[200.0, 200.0, 300.0, 260.0])),
+            ],
+        );
+        let popup_ref = list_annotations(&d, &page0(&d)).unwrap()[popup]
+            .reference
+            .unwrap();
+        let stamp = raw_annotation(
+            &d,
+            &[
+                ("Subtype", name_obj("Stamp")),
+                ("Rect", reals(&[120.0, 120.0, 160.0, 160.0])),
+                ("AP", Object::Dict(ap)),
+                ("Popup", Object::Reference(popup_ref)),
+            ],
+        );
+        let body = |d: &Document| {
+            let bytes = d.save_full().unwrap();
+            let end = bytes.windows(7).position(|w| w == b"trailer").unwrap();
+            bytes[..end].to_vec()
+        };
+        let before = body(&d);
+        let both = AnnotChanges {
+            rect: Some(Rect::new(20.0, 20.0, 60.0, 60.0)),
+            color: Some([1.0, 0.0, 0.0]),
+            ..AnnotChanges::default()
+        };
+        assert!(set_annotation_properties(&d, &page0(&d), stamp, &both).is_err());
+        assert_eq!(body(&d), before, "rien n'a bougé, pas même la fenêtre");
+        // Le déplacement seul passe, et la fenêtre suit.
+        let moved = AnnotChanges {
+            rect: Some(Rect::new(20.0, 20.0, 60.0, 60.0)),
+            ..AnnotChanges::default()
+        };
+        set_annotation_properties(&d, &page0(&d), stamp, &moved).unwrap();
+        let list = list_annotations(&d, &page0(&d)).unwrap();
+        assert_eq!(list[popup].rect, Rect::new(100.0, 100.0, 200.0, 160.0));
+    }
+
     fn meta(author: &str, date: &str) -> AnnotMeta {
         AnnotMeta {
             author: Some(author.into()),
