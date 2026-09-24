@@ -61,6 +61,7 @@ use acrux_core::{Error, Matrix, Result};
 use acrux_document::{collect_pages, Dict, Document, Name, Object, ObjectRef, Page};
 
 pub use crate::annotations::Rgb;
+pub use image::{image_size, prepare_image, PreparedImage};
 pub use metrics::{encode_win_ansi, pdf_literal, Encoded, StandardFont};
 pub use numbering::NumberFormat;
 
@@ -952,7 +953,7 @@ fn marked_stream(raw: Vec<u8>, tag: &str) -> Object {
 }
 
 /// Éléments de `/Contents`, toujours sous forme de références indirectes.
-fn content_items(doc: &Document, dict: &Dict) -> Vec<Object> {
+pub(crate) fn content_items(doc: &Document, dict: &Dict) -> Vec<Object> {
     match dict.get(&Name::new("Contents")) {
         None | Some(Object::Null) => Vec::new(),
         Some(Object::Array(a)) => a.clone(),
@@ -970,7 +971,7 @@ fn content_items(doc: &Document, dict: &Dict) -> Vec<Object> {
 }
 
 /// Dictionnaire **propre** de la page, à jour (sans les attributs hérités).
-fn current_dict(doc: &Document, page: &Page) -> Result<Dict> {
+pub(crate) fn current_dict(doc: &Document, page: &Page) -> Result<Dict> {
     match page.reference {
         Some(r) => Ok(doc
             .get(r)?
@@ -1011,6 +1012,22 @@ fn resources_of(doc: &Document, page: &Page, dict: &Dict) -> (Dict, Option<Objec
 /// Ajoute une ressource à la page et renvoie son nom. Une ressource déjà
 /// présente sous le même objet est réutilisée.
 fn add_resource(doc: &Document, page: &Page, category: &str, value: Object) -> Result<Name> {
+    add_resource_prefixed(doc, page, category, value, PREFIX)
+}
+
+/// Même chose, sous un préfixe choisi par l'appelant.
+///
+/// Le préfixe dit à qui appartient la ressource : [`remove_stamps`] retire
+/// tout ce qui commence par `AKS`, si bien qu'une image posée sur la page
+/// par un autre module (`AKI`, voir `edit_objects::add_image`) doit porter
+/// un autre nom pour ne pas disparaître avec les filigranes.
+pub(crate) fn add_resource_prefixed(
+    doc: &Document,
+    page: &Page,
+    category: &str,
+    value: Object,
+    prefix: &str,
+) -> Result<Name> {
     let page_ref = page
         .reference
         .ok_or_else(|| Error::Corrupt("la page doit être un objet indirect".into()))?;
@@ -1024,13 +1041,13 @@ fn add_resource(doc: &Document, page: &Page, category: &str, value: Object) -> R
         .unwrap_or_default();
     if let Some((name, _)) = sub
         .iter()
-        .find(|(n, v)| *v == &value && n.as_str().starts_with(PREFIX))
+        .find(|(n, v)| *v == &value && n.as_str().starts_with(prefix))
     {
         return Ok(name.clone());
     }
     let mut index = 0;
     let name = loop {
-        let candidate = Name::new(&format!("{PREFIX}{index}"));
+        let candidate = Name::new(&format!("{prefix}{index}"));
         if !sub.contains_key(&candidate) {
             break candidate;
         }
@@ -1320,7 +1337,7 @@ fn build_form(
 /// tant que le texte tient en WinAnsiEncoding, sinon une police système
 /// incorporée en sous-ensemble. C'est ce qui permet de tamponner « 機密 » ou
 /// « Конфиденциально » et pas seulement du latin.
-enum TextFont {
+pub(crate) enum TextFont {
     /// Police standard, texte écrit en littéral WinAnsi.
     Standard(StandardFont),
     /// Police incorporée, texte écrit en indices de glyphes hexadécimaux.
@@ -1330,7 +1347,7 @@ enum TextFont {
 impl TextFont {
     /// Choisit la police et crée son objet. Le texte donné est l'ensemble de
     /// ce qui sera écrit avec elle : c'est lui qui décide.
-    fn resolve(
+    pub(crate) fn resolve(
         doc: &Document,
         text: &str,
         font: StandardFont,
@@ -1373,7 +1390,7 @@ impl TextFont {
     }
 
     /// Ascendante et descendante en millièmes d'em.
-    fn vertical(&self) -> (f64, f64) {
+    pub(crate) fn vertical(&self) -> (f64, f64) {
         match self {
             TextFont::Standard(f) => (f.ascent(), f.descent()),
             TextFont::Embedded(f) => (f.ascent, f.descent),
@@ -1381,7 +1398,7 @@ impl TextFont {
     }
 
     /// Largeur du texte à la taille donnée, en points.
-    fn width(&self, text: &str, size: f64) -> f64 {
+    pub(crate) fn width(&self, text: &str, size: f64) -> f64 {
         match self {
             TextFont::Standard(f) => f.text_width(text, size),
             TextFont::Embedded(f) => f.width(text, size),
@@ -1389,7 +1406,7 @@ impl TextFont {
     }
 
     /// Opérande prête à écrire devant `Tj`.
-    fn show(&self, text: &str, replaced: &mut Vec<char>) -> String {
+    pub(crate) fn show(&self, text: &str, replaced: &mut Vec<char>) -> String {
         match self {
             TextFont::Standard(_) => {
                 let encoded = metrics::encode_win_ansi(text);

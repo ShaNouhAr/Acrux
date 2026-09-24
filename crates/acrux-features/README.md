@@ -143,6 +143,12 @@ Le TIFF ne fait guère que lire des étiquettes : ses compressions sont celles
 des flux PDF, et passent donc par `acrux-codecs` — le Groupe 4 d'un scanner
 emprunte le décodeur CCITT qui sert déjà aux images incorporées.
 
+`prepare_image` décode **une fois** et garde les flux déjà compressés
+(`PreparedImage`) : une opération de l'application, appliquée au document
+affiché, à la copie du fil de rendu puis rejouée à chaque annulation, ne
+recompresse pas trois fois une grande image collée. `image_size` lit les
+dimensions dans l'en-tête quand le format le permet.
+
 **Un TIFF de plusieurs pages rend plusieurs images** (`decode_all`) : une
 feuille numérisée par page, ce qui permet à `create::from_images` d'en faire
 un document d'un seul geste.
@@ -191,6 +197,32 @@ acr media rapport.pdf --extract ./medias   # sort les fichiers incorporés
 ```
 
 Dans l'application : un clic sur l'affiche lance la lecture.
+
+## Tampons (`rubber_stamp`)
+
+Les tampons d'Acrobat, en annotations `/Stamp` (§12.5.6.12). Le nom `stamp`
+est déjà pris par les filigranes et la numérotation Bates, qui posent du
+**contenu** ; un tampon, lui, est une **annotation** qu'on sélectionne, déplace
+et agrandit comme un commentaire.
+
+| Élément | Rôle |
+| --- | --- |
+| `StandardStamp` | les douze d'Acrobat, leur nom PDF (`/Approved`, `/SBRejected`…), leur couleur, leur libellé en français et en anglais ; `from_name` accepte les deux langues, sans accents ni séparateurs |
+| `Source` | un tampon standard, un texte libre coloré, ou une image (`PreparedImage`, décodée une fois) |
+| `Options` | page, centre, taille (naturelle par défaut), ligne dynamique **déjà écrite**, identité de l'annotation tirée d'avance : la pose se rejoue à l'identique |
+| `place` | formulaire d'apparence (fond teinté à 10 %, double cadre arrondi, capitales en Helvetica-Bold, repli sur une police système incorporée pour un auteur en cyrillique), `/Matrix` qui le redresse sur une page tournée, clé privée `/AKRubber` (`Standard`, `Dynamic`, `Custom`, `Image`) qui le distingue des éléments de « remplir et signer » |
+| `dynamic_line` | « par Nina, le 24/09/2026 à 14:05 » ou « By Nina at 2:05 PM, Sep 24, 2026 », au fuseau donné |
+| `natural_size`, `stamp_rect`, `top_right` | la taille naturelle, le rectangle ramené dans la page (côtés échangés à 90°), le coin supérieur droit de la page affichée |
+| `rounded_rect` | le rectangle arrondi en Bézier, réutilisable |
+
+Déplacer ou agrandir un tampon, c'est changer son `/Rect`
+(`annotations::set_annotation_properties`) : l'apparence, vectorielle, suit.
+
+```bash
+acr stamp --list
+acr stamp contrat.pdf 1 approuve --dynamic --author "Nina" --utc-offset +02:00 -o vise.pdf
+acr stamp contrat.pdf 2 --image cachet.png --at 450,120 -o vise.pdf
+```
 
 ## Modifier les objets (`edit_objects`)
 
@@ -249,6 +281,20 @@ acr edit-object contrat.pdf --page 1 --object 3 --place 300,120,420,200 -o modif
 acr edit-object contrat.pdf --page 1 --object 3 --crop 178,589,250,685 -o modifie.pdf
 acr edit-object contrat.pdf --page 1 --object 3 --order devant -o modifie.pdf
 acr edit-object contrat.pdf --page 1 --object 2,4,7 --align gauche -o modifie.pdf
+```
+
+**Poser une image** (`add_image`, « Ajouter une image » d'Acrobat) : l'image
+(`stamp::prepare_image`, décodée une fois) est ajoutée en **flux de plus** au
+bout de `/Contents` ; les flux d'origine ne changent pas, un flux partagé par
+deux pages non plus. Ce flux referme d'abord les `q` laissés ouverts
+(`scan::Scan::open`) puis compense la matrice restée au niveau racine
+(`Scan::tail`), et redresse l'image sur une page tournée. Le contenu d'origine
+n'est pas encadré de `q … Q` : ses objets resteraient sinon au second niveau,
+hors de portée d'« Avancer » et « Reculer ». La ressource se nomme `AKI…` :
+`remove_stamps` ne retire que les siennes (`AKS…`).
+
+```bash
+acr add-image contrat.pdf 1 logo.png --at 300,700 --width 120 -o modifie.pdf
 ```
 
 Dans l'application : touche `O`. Clic pour sélectionner, glisser pour déplacer,

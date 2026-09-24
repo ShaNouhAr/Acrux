@@ -198,6 +198,12 @@ pub struct Scan {
     /// Matrice du niveau racine **à la fin** du flux : celle que subirait
     /// tout ce qu'on ajouterait après.
     pub tail: Matrix,
+    /// Nombre de `q` encore ouverts à la fin du flux.
+    ///
+    /// Un producteur qui laisse des `q` ouverts laisse aussi l'état qu'ils
+    /// protègent : ce qu'on ajoute après doit d'abord les refermer pour
+    /// retrouver le niveau racine, où la matrice vaut [`Scan::tail`].
+    pub open: usize,
 }
 
 /// Balaye une page et rend ses objets, dans l'ordre de tracé.
@@ -405,6 +411,7 @@ pub fn scan(doc: &Document, page: &Page, content: &[u8]) -> acrux_core::Result<S
     Ok(Scan {
         objects,
         tail: outer,
+        open: stack.len(),
     })
 }
 

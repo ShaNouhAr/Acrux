@@ -233,6 +233,18 @@ fn usage() {
     eprintln!(
         "                                  retire les tampons posés par les commandes ci-dessus"
     );
+    eprintln!("  stamp      <fichier> <page> <nom> | --image <f.png|jpg> | --text <texte> [--color r,g,b]");
+    eprintln!("             [--at x,y | --rect x0,y0,x1,y1] [--dynamic] [--author <nom>] [--utc-offset +HH:MM]");
+    eprintln!("             [--lang fr|en] [--opacity N] -o <sortie>");
+    eprintln!("                                  tampon d'Acrobat en annotation /Stamp : approuve, refuse, brouillon,");
+    eprintln!("                                  confidentiel, final, termine, commentaire, information, recu, paye,");
+    eprintln!("                                  non-approuve, nul (acr stamp --list) ; --dynamic ajoute l'auteur,");
+    eprintln!("                                  la date et l'heure ; par défaut en haut à droite de la page");
+    eprintln!(
+        "  add-image  <fichier> <page> <image> [--at x,y] [--width N | --height N] -o <sortie>"
+    );
+    eprintln!("                                  pose une image (PNG, JPEG, BMP, GIF, TIFF) comme objet de la page,");
+    eprintln!("                                  au centre par défaut, à 96 ppp dans la limite de la page");
     eprintln!();
     eprintln!(
         "  compare <avant.pdf> <apres.pdf> [--pages] [--visual] [--tolerance N] [-o rapport.pdf]"
@@ -410,6 +422,8 @@ fn main() -> ExitCode {
         (Some("header-footer"), Some(f)) => cmd_header_footer(f, &args[2..]),
         (Some("bates"), Some(_)) => cmd_bates(&args[1..]),
         (Some("unstamp"), Some(f)) => cmd_unstamp(f, &args[2..]),
+        (Some("stamp"), Some(f)) => cmd_stamp(f, &args[2..]),
+        (Some("add-image"), Some(f)) => cmd_add_image(f, &args[2..]),
         (Some("edit-text"), Some(f)) => cmd_edit_text(f, &args[2..]),
         (Some("reflow"), Some(f)) => cmd_reflow(f, &args[2..]),
         (Some("protect"), Some(f)) => cmd_protect(f, &args[2..]),
@@ -938,6 +952,215 @@ fn cmd_unstamp(path: &str, rest: &[String]) -> acrux_core::Result<()> {
     };
     let removed = acrux_features::stamp::remove_stamps(&doc, &kinds)?;
     println!("{removed} tampon(s) retiré(s)");
+    save(&doc, &out, rest)
+}
+
+/// « x,y » : un point de la page.
+fn parse_point(spec: &str) -> acrux_core::Result<acrux_core::Point> {
+    let v: Vec<f64> = spec
+        .split(',')
+        .filter_map(|p| p.trim().parse().ok())
+        .collect();
+    if v.len() != 2 {
+        return Err(acrux_core::Error::Corrupt(format!(
+            "point « x,y » attendu, reçu « {spec} »"
+        )));
+    }
+    Ok(acrux_core::Point::new(v[0], v[1]))
+}
+
+/// Page désignée par le premier argument positionnel, comptée à partir de 1.
+fn page_number_arg(
+    doc: &Document,
+    pos: &[&String],
+    usage: &str,
+) -> acrux_core::Result<(usize, acrux_document::Page)> {
+    let pages = collect_pages(doc)?;
+    let number = pos
+        .first()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| (1..=pages.len()).contains(n))
+        .ok_or_else(|| {
+            acrux_core::Error::Corrupt(format!("{usage} (page de 1 à {})", pages.len()))
+        })?;
+    Ok((number - 1, pages[number - 1].clone()))
+}
+
+/// `acr stamp` : un tampon d'Acrobat (Approuvé, Confidentiel…), dynamique ou
+/// image, posé en annotation `/Stamp`.
+fn cmd_stamp(path: &str, rest: &[String]) -> acrux_core::Result<()> {
+    use acrux_features::rubber_stamp::{self, Language, Options, StandardStamp};
+    if path == "--list" || rest.iter().any(|a| a == "--list") {
+        println!("nom           français            anglais             /Name");
+        for s in StandardStamp::ALL {
+            println!(
+                "{:<13} {:<19} {:<19} /{}",
+                s.key(),
+                s.label(Language::Fr),
+                s.label(Language::En),
+                s.pdf_name()
+            );
+        }
+        return Ok(());
+    }
+    let usage = "usage : stamp <fichier> <page> <nom|--image f|--text texte> -o <sortie>";
+    let out = output_arg(rest)?;
+    let (doc, _) = open(path)?;
+    let pos = positional(rest);
+    let (page, target) = page_number_arg(&doc, &pos, usage)?;
+    let lang = match option_value(rest, "--lang") {
+        Some(v) => Language::from_name(v).ok_or_else(|| {
+            acrux_core::Error::Corrupt(format!("langue inconnue « {v} » : fr ou en"))
+        })?,
+        None => Language::Fr,
+    };
+    let source = stamp_source(rest, pos.get(1).copied(), usage)?;
+    let author = option_value(rest, "--author").map(|a| cli_text(a));
+    let dynamic = if rest.iter().any(|a| a == "--dynamic") {
+        Some(rubber_stamp::dynamic_line(
+            author.as_deref().unwrap_or(""),
+            lang,
+            utc_offset(rest)?,
+        ))
+    } else {
+        None
+    };
+    let crop = target.crop_box(&doc);
+    let rotate = target.rotate(&doc);
+    let natural = rubber_stamp::natural_size(&source, lang, dynamic.as_deref());
+    let (center, size) = if let Some(spec) = option_value(rest, "--rect") {
+        // Le tampon garde ses proportions et tient dans le rectangle.
+        let r = parse_rect(spec)?;
+        let (w, h) = ((r.x1 - r.x0).abs(), (r.y1 - r.y0).abs());
+        let (w, h) = if matches!(rotate, 90 | 270) {
+            (h, w)
+        } else {
+            (w, h)
+        };
+        let k = (w / natural.0).min(h / natural.1);
+        let center = acrux_core::Point::new(f64::midpoint(r.x0, r.x1), f64::midpoint(r.y0, r.y1));
+        (center, Some((natural.0 * k, natural.1 * k)))
+    } else if let Some(spec) = option_value(rest, "--at") {
+        (parse_point(spec)?, None)
+    } else {
+        (rubber_stamp::top_right(crop, rotate, natural, 36.0), None)
+    };
+    let opacity = match option_value(rest, "--opacity") {
+        Some(v) => v
+            .parse::<f64>()
+            .map_err(|_| acrux_core::Error::Corrupt(format!("opacité illisible « {v} »")))?,
+        None => 1.0,
+    };
+    let options = Options {
+        size,
+        label_lang: lang,
+        dynamic,
+        meta: acrux_features::annotations::AnnotMeta::fresh(author.as_deref()),
+        opacity,
+        ..Options::new(source, page, center)
+    };
+    rubber_stamp::place(&doc, &options)?;
+    if let Some(placed) = rubber_stamp::list(&doc)?.last() {
+        println!(
+            "tampon posé page {} : [{:.1} {:.1} {:.1} {:.1}] {}",
+            page + 1,
+            placed.rect.x0,
+            placed.rect.y0,
+            placed.rect.x1,
+            placed.rect.y1,
+            placed
+                .contents
+                .as_deref()
+                .unwrap_or("")
+                .replace('\n', " — ")
+        );
+    }
+    save(&doc, &out, rest)
+}
+
+/// Ce que montre le tampon de `acr stamp` : une image, un texte libre ou
+/// l'un des douze tampons standard, nommé par le second argument.
+fn stamp_source(
+    rest: &[String],
+    name: Option<&String>,
+    usage: &str,
+) -> acrux_core::Result<acrux_features::rubber_stamp::Source> {
+    use acrux_features::rubber_stamp::{Source, StandardStamp};
+    if let Some(file) = option_value(rest, "--image") {
+        let data =
+            std::fs::read(file).map_err(|e| acrux_core::Error::Io(format!("{file}: {e}")))?;
+        return Ok(Source::Image(std::sync::Arc::new(
+            acrux_features::stamp::prepare_image(&data)?,
+        )));
+    }
+    if let Some(text) = option_value(rest, "--text") {
+        let color = match option_value(rest, "--color") {
+            Some(c) => parse_rgb(c)?,
+            None => StandardStamp::Rejected.color(),
+        };
+        return Ok(Source::Custom {
+            text: cli_text(text),
+            color,
+        });
+    }
+    let name = name.ok_or_else(|| acrux_core::Error::Corrupt(usage.into()))?;
+    let stamp = StandardStamp::from_name(name).ok_or_else(|| {
+        acrux_core::Error::Corrupt(format!(
+            "tampon inconnu « {name} » : acr stamp --list donne les noms"
+        ))
+    })?;
+    Ok(Source::Standard(stamp))
+}
+
+/// `acr add-image` : une image posée comme objet de la page, comme
+/// « Ajouter une image » d'Acrobat.
+fn cmd_add_image(path: &str, rest: &[String]) -> acrux_core::Result<()> {
+    let usage = "usage : add-image <fichier> <page> <image> [--at x,y] -o <sortie>";
+    let out = output_arg(rest)?;
+    let (doc, _) = open(path)?;
+    let pos = positional(rest);
+    let (page, target) = page_number_arg(&doc, &pos, usage)?;
+    let file = pos
+        .get(1)
+        .ok_or_else(|| acrux_core::Error::Corrupt(usage.into()))?;
+    let data =
+        std::fs::read(file.as_str()).map_err(|e| acrux_core::Error::Io(format!("{file}: {e}")))?;
+    let image = acrux_features::stamp::prepare_image(&data)?;
+    let crop = target.crop_box(&doc);
+    let rotate = target.rotate(&doc);
+    // Ce que la page montre, rotation comprise : l'image y tient, aux
+    // quatre cinquièmes au plus, proportions gardées.
+    let (shown_w, shown_h) = if matches!(rotate, 90 | 270) {
+        (crop.height().abs(), crop.width().abs())
+    } else {
+        (crop.width().abs(), crop.height().abs())
+    };
+    let (w, h) = image.natural_size(None);
+    let fit = (0.8 * shown_w / w).min(0.8 * shown_h / h).min(1.0);
+    let ratio = h / w;
+    let size = if let Some(v) = number_option(rest, "--width")? {
+        (v, v * ratio)
+    } else if let Some(v) = number_option(rest, "--height")? {
+        (v / ratio, v)
+    } else {
+        (w * fit, h * fit)
+    };
+    let center = match option_value(rest, "--at") {
+        Some(spec) => parse_point(spec)?,
+        None => acrux_core::Point::new(
+            f64::midpoint(crop.x0, crop.x1),
+            f64::midpoint(crop.y0, crop.y1),
+        ),
+    };
+    let index = acrux_features::edit_objects::add_image(&doc, &target, &image, center, size)?;
+    println!(
+        "image posée page {} : objet n° {index}, {:.1} × {:.1} pt centrés en ({:.1}, {:.1})",
+        page + 1,
+        size.0,
+        size.1,
+        center.x,
+        center.y
+    );
     save(&doc, &out, rest)
 }
 
@@ -1489,6 +1712,10 @@ fn positional(rest: &[String]) -> Vec<&String> {
                 | "--points"
                 | "--state"
                 | "--marked"
+                | "--at"
+                | "--utc-offset"
+                | "--lang"
+                | "--height"
         ) {
             skip = true;
             continue;

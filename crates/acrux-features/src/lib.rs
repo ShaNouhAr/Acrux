@@ -13,7 +13,7 @@
 //! | `compare` | comparaison de deux documents : appariement des pages, différences de texte, différences de pixels, rapport PDF côte à côte | §8 |
 //! | `export` | conversion : pages en PNG / JPEG, images incorporées, HTML, DOCX, XLSX, texte, Markdown | §6 |
 //! | `fillsign` | remplir et signer : signature tracée, tapée ou importée, texte et marques, aplatissement | §9 |
-//! | `edit_objects` | édition des objets : inventaire, déplacer, redimensionner, pivoter, recadrer, réordonner, aligner, remplacer une image | §3 |
+//! | `edit_objects` | édition des objets : inventaire, déplacer, redimensionner, pivoter, recadrer, réordonner, aligner, remplacer une image, poser une image neuve (« Ajouter une image ») | §3 |
 //! | `edit_text` | édition de texte in place : réécriture chirurgicale du flux, remplacement, recomposition de paragraphe, sous-ensembles de polices | §3 |
 //! | `forms`  | formulaires AcroForm : inventaire, remplissage avec apparences, aplatissement, FDF, réinitialisation, ordre de tabulation, aspect d'un champ pour la saisie en place | §9 |
 //! | `linkedit` | écriture des liens : pose, retrait, détection automatique des adresses | §1 |
@@ -25,6 +25,7 @@
 //! | `pagelabels` | étiquettes de page `/PageLabels` (i, ii, 1, 2, Annexe-A…), lecture, écriture, recherche par étiquette | §1 |
 //! | `preflight` | contrôle en amont PDF/A, PDF/X, PDF/UA, correctifs, aperçu de sortie | §10 |
 //! | `signature` | signatures numériques (§12.8) : inventaire, vérification (condensé, RSA, chaîne X.509, couverture, modifications), pose d'une signature CMS détachée | §9 |
+//! | `rubber_stamp` | tampons d'Acrobat : les douze standard (Approuvé, Confidentiel, Brouillon…), dynamiques (auteur, date et heure) ou image, en annotations `/Stamp` à l'apparence vectorielle, redressées sur une page tournée | §8 |
 //! | `redact` | biffure définitive (réécriture du flux, images, tracés), recherche par motif, nettoyage des données cachées | §7 |
 //! | `stamp`  | filigranes, arrière-plans, en-têtes et pieds de page, numérotation Bates | §4 |
 //! | `three_d` | modèles 3D (§13.6) : annotations `/3D`, lecture du format U3D (ECMA-363), rendu et manipulation | §13 |
@@ -55,6 +56,7 @@ pub mod pagelabels;
 pub mod pages;
 pub mod preflight;
 pub mod redact;
+pub mod rubber_stamp;
 pub mod signature;
 pub mod stamp;
 pub mod sysfonts;

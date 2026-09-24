@@ -1420,8 +1420,9 @@ fn annots_of(doc: &Document, page_dict: &Dict) -> Result<Vec<Object>> {
 }
 
 /// Ajoute des annotations à `/Annots` (créé si absent), en une seule
-/// réécriture de la page.
-fn push_to_annots(doc: &Document, page: &Page, refs: &[ObjectRef]) -> Result<()> {
+/// réécriture de la page. Les modules voisins qui posent leurs propres
+/// annotations (les tampons) passent aussi par ici.
+pub(crate) fn push_to_annots(doc: &Document, page: &Page, refs: &[ObjectRef]) -> Result<()> {
     let (page_ref, mut page_dict) = current_page(doc, page)?;
     let mut annots = annots_of(doc, &page_dict)?;
     annots.extend(refs.iter().map(|r| Object::Reference(*r)));

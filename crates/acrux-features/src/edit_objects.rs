@@ -69,7 +69,7 @@ pub mod scan;
 
 use std::fmt::Write as _;
 
-use acrux_core::{Error, Matrix, Rect, Result};
+use acrux_core::{Error, Matrix, Point, Rect, Result};
 use acrux_document::{collect_pages, Dict, Document, Name, Object, Page};
 
 use crate::edit_text::set_page_content;
@@ -630,6 +630,110 @@ pub fn place(doc: &Document, page: &Page, index: usize, rect: Rect) -> Result<us
     apply(doc, page, &[Edit::Transform { index, matrix }])
 }
 
+/// Préfixe des images posées par [`add_image`]. Pas `AKS` : c'est celui des
+/// filigranes, et [`crate::stamp::remove_stamps`] retire toutes les
+/// ressources qui le portent — l'image deviendrait invisible.
+const IMAGE_PREFIX: &str = "AKI";
+
+/// Pose une image sur la page, comme « Ajouter une image » d'Acrobat, et
+/// rend son rang dans l'inventaire des objets ([`list`]) : elle se
+/// manipule ensuite comme tout autre objet — déplacer, redimensionner,
+/// réordonner, supprimer.
+///
+/// `center` est en coordonnées de page ; `size` est la largeur et la
+/// hauteur **telles qu'on les voit**, rotation de la page comprise : sur une
+/// page `/Rotate 90`, l'image reste droite à l'écran.
+///
+/// # Ce qui n'est pas touché
+///
+/// Les flux d'origine gardent leurs octets : l'image est un flux de plus au
+/// bout de `/Contents`, si bien qu'un flux partagé par deux pages ne change
+/// pas l'autre page. Ce flux referme d'abord les `q` que le contenu aurait
+/// laissés ouverts, puis compense la matrice restée au niveau racine (le
+/// `cm` jamais refermé de Chrome) : l'image tombe exactement où on la veut.
+///
+/// Le contenu d'origine n'est **pas** encadré de `q … Q` : ses objets
+/// passeraient au second niveau, et « Avancer » ou « Reculer », qui ne
+/// permutent que des voisins du premier niveau, les enverraient tous au
+/// premier plan.
+///
+/// # Errors
+/// Taille nulle, page non indirecte ou flux de contenu illisible.
+pub fn add_image(
+    doc: &Document,
+    page: &Page,
+    image: &crate::stamp::PreparedImage,
+    center: Point,
+    size: (f64, f64),
+) -> Result<usize> {
+    let (w, h) = size;
+    if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
+        return Err(Error::Unsupported("image de taille nulle".into()));
+    }
+    let page_ref = page
+        .reference
+        .ok_or_else(|| Error::Corrupt("la page doit être un objet indirect".into()))?;
+    let content = page_content(doc, page);
+    let scanned = scan::scan(doc, page, &content)?;
+    let back = scanned.tail.invert().unwrap_or(Matrix::IDENTITY);
+    let reference = image.write(doc);
+    let name = crate::stamp::add_resource_prefixed(
+        doc,
+        page,
+        "XObject",
+        Object::Reference(reference),
+        IMAGE_PREFIX,
+    )?;
+    // Le carré unité devient l'image : mise à l'échelle, centrée sur
+    // l'origine, redressée contre la rotation de la page, puis amenée au
+    // point voulu. La matrice écrite retire celle que le niveau racine
+    // applique déjà (voir `standalone`).
+    let wanted = Matrix::scale(w, h)
+        .then(&Matrix::translate(-w / 2.0, -h / 2.0))
+        .then(&upright(page.rotate(doc)))
+        .then(&Matrix::translate(center.x, center.y));
+    let written = wanted.then(&back);
+    let mut raw = String::from(
+        "
+",
+    );
+    for _ in 0..scanned.open {
+        raw.push_str(
+            "Q
+",
+        );
+    }
+    let _ = writeln!(raw, "q {} cm /{} Do Q", cm(written), name.as_str());
+    let raw = raw.into_bytes();
+    let mut stream = Dict::new();
+    stream.insert(
+        Name::new("Length"),
+        Object::Integer(i64::try_from(raw.len()).unwrap_or(0)),
+    );
+    let added = doc.add(Object::Stream { dict: stream, raw });
+    // Relu après l'ajout de la ressource, qui a pu réécrire la page.
+    let mut dict = crate::stamp::current_dict(doc, page)?;
+    let mut items = crate::stamp::content_items(doc, &dict);
+    items.push(Object::Reference(added));
+    dict.insert(Name::new("Contents"), Object::Array(items));
+    doc.set(page_ref, Object::Dict(dict));
+    // L'image est le seul objet que dessine le flux ajouté : elle vient
+    // juste après ceux d'avant.
+    Ok(scanned.objects.len())
+}
+
+/// Matrice qui redresse un dessin sur une page tournée de `rotate` degrés :
+/// ce qui est horizontal dans le dessin l'est à l'écran.
+#[must_use]
+pub fn upright(rotate: i32) -> Matrix {
+    match rotate.rem_euclid(360) {
+        90 => Matrix::new(0.0, 1.0, -1.0, 0.0, 0.0, 0.0),
+        180 => Matrix::new(-1.0, 0.0, 0.0, -1.0, 0.0, 0.0),
+        270 => Matrix::new(0.0, -1.0, 1.0, 0.0, 0.0, 0.0),
+        _ => Matrix::IDENTITY,
+    }
+}
+
 /// Façon d'aligner plusieurs objets entre eux.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Align {
@@ -782,5 +886,234 @@ mod tests {
         let got = c.apply(n.apply(p));
         assert!((got.x - expected.x).abs() < 1e-9, "{got:?} {expected:?}");
         assert!((got.y - expected.y).abs() < 1e-9);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod image_tests {
+    use super::{add_image, apply, list, translate, Edit, Kind, Order, PageObject};
+    use acrux_core::{Point, Rect};
+    use acrux_document::{collect_pages, Document, Name, Object, ObjectRef};
+    use std::fmt::Write as _;
+
+    /// Pages de 400 × 300, une par flux donné ; `shared` fait lire aux deux
+    /// premières pages le **même** flux. Écrit sans table de références :
+    /// le document est réparé à l'ouverture.
+    fn document(contents: &[&str], rotate: i32, shared: bool, extra: &str) -> Document {
+        let mut out = String::from("%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n");
+        let kids: Vec<String> = (0..contents.len())
+            .map(|i| format!("{} 0 R", 3 + i * 2))
+            .collect();
+        let _ = writeln!(
+            out,
+            "2 0 obj << /Type /Pages /Kids [{}] /Count {} >> endobj",
+            kids.join(" "),
+            contents.len()
+        );
+        for (i, content) in contents.iter().enumerate() {
+            let page = 3 + i * 2;
+            let stream = if shared && i == 1 { 4 } else { page + 1 };
+            let _ = writeln!(
+                out,
+                "{page} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] \
+                 /Rotate {rotate} /Contents {stream} 0 R /Resources << /XObject << {extra} >> \
+                 >> >> endobj"
+            );
+            let _ = writeln!(
+                out,
+                "{} 0 obj << /Length {} >>\nstream\n{content}\nendstream\nendobj",
+                page + 1,
+                content.len() + 1
+            );
+        }
+        Document::from_bytes(out.into_bytes()).unwrap()
+    }
+
+    fn image() -> crate::stamp::PreparedImage {
+        let png = acrux_graphics::encode_png_rgb(4, 2, &[200; 24]);
+        crate::stamp::prepare_image(&png).unwrap()
+    }
+
+    fn close(a: Rect, b: Rect) -> bool {
+        (a.x0 - b.x0).abs() < 1e-3
+            && (a.y0 - b.y0).abs() < 1e-3
+            && (a.x1 - b.x1).abs() < 1e-3
+            && (a.y1 - b.y1).abs() < 1e-3
+    }
+
+    /// Le rectangle attendu pour une image 80 × 40 centrée en (200, 150).
+    fn expected() -> Rect {
+        Rect::new(160.0, 130.0, 240.0, 170.0)
+    }
+
+    /// Pose l'image au centre (200, 150), 80 × 40, et rend l'inventaire.
+    fn placed(doc: &Document, page: usize) -> Vec<PageObject> {
+        let pages = collect_pages(doc).unwrap();
+        let index = add_image(
+            doc,
+            &pages[page],
+            &image(),
+            Point::new(200.0, 150.0),
+            (80.0, 40.0),
+        )
+        .unwrap();
+        let objects = list(doc, &collect_pages(doc).unwrap()[page]).unwrap();
+        assert_eq!(index, objects.len() - 1, "l'image est la dernière");
+        assert_eq!(objects[index].kind, Kind::Image);
+        objects
+    }
+
+    #[test]
+    fn une_image_se_pose_exactement_sur_une_page_vierge() {
+        let doc = document(&[""], 0, false, "");
+        let got = placed(&doc, 0).last().unwrap().bbox;
+        assert!(close(got, expected()), "{got:?}");
+    }
+
+    #[test]
+    fn un_cm_racine_jamais_referme_est_compense() {
+        // Chrome : une mise à l'échelle au niveau racine, sans `q`.
+        let doc = document(&["2 0 0 2 0 0 cm 0 0 10 10 re f"], 0, false, "");
+        let got = placed(&doc, 0).last().unwrap().bbox;
+        assert!(close(got, expected()), "{got:?}");
+    }
+
+    #[test]
+    fn un_q_laisse_ouvert_est_referme_dabord() {
+        let doc = document(&["q 1 0 0 1 50 50 cm 0 0 10 10 re f"], 0, false, "");
+        let pages = collect_pages(&doc).unwrap();
+        let content = acrux_render::page::page_content(&doc, &pages[0]);
+        assert_eq!(
+            super::scan::scan(&doc, &pages[0], &content).unwrap().open,
+            1
+        );
+        let objects = placed(&doc, 0);
+        let got = objects.last().unwrap();
+        assert_eq!(got.depth, 1, "au niveau racine, sous son seul `q`");
+        assert!(close(got.bbox, expected()), "{:?}", got.bbox);
+    }
+
+    #[test]
+    fn sur_une_page_tournee_limage_reste_droite() {
+        let doc = document(&[""], 90, false, "");
+        let objects = placed(&doc, 0);
+        let got = objects.last().unwrap();
+        // Vue tournée d'un quart de tour : 80 de large à l'écran, donc 80 de
+        // haut dans l'espace de la page.
+        assert!(
+            close(got.bbox, Rect::new(180.0, 110.0, 220.0, 190.0)),
+            "{:?}",
+            got.bbox
+        );
+        // Le bas de l'image (son axe des x) monte dans la page : à l'écran,
+        // tourné de 90° dans le sens horaire, il va vers la droite.
+        assert!(
+            got.matrix.a.abs() < 1e-9 && got.matrix.b > 0.0,
+            "{:?}",
+            got.matrix
+        );
+    }
+
+    #[test]
+    fn deux_images_ont_deux_noms() {
+        let doc = document(&[""], 0, false, "");
+        placed(&doc, 0);
+        let objects = placed(&doc, 0);
+        let names: Vec<String> = objects.iter().filter_map(|o| o.name.clone()).collect();
+        assert_eq!(names, ["AKI0", "AKI1"]);
+    }
+
+    #[test]
+    fn une_ressource_du_meme_nom_nest_pas_ecrasee() {
+        let doc = document(&[""], 0, false, "/AKI0 99 0 R");
+        let objects = placed(&doc, 0);
+        assert_eq!(objects.last().unwrap().name.as_deref(), Some("AKI1"));
+        let resources = super::resources(&doc, &collect_pages(&doc).unwrap()[0]);
+        let xobjects = doc
+            .dict_get(&resources, "XObject")
+            .unwrap()
+            .unwrap()
+            .as_dict()
+            .cloned()
+            .unwrap();
+        assert_eq!(
+            xobjects.get(&Name::new("AKI0")),
+            Some(&Object::Reference(ObjectRef {
+                number: 99,
+                generation: 0
+            }))
+        );
+    }
+
+    #[test]
+    fn un_flux_partage_ne_change_pas_lautre_page() {
+        let doc = document(&["0 0 10 10 re f", "0 0 10 10 re f"], 0, true, "");
+        let before = {
+            let pages = collect_pages(&doc).unwrap();
+            acrux_render::page::page_content(&doc, &pages[1])
+        };
+        placed(&doc, 0);
+        let pages = collect_pages(&doc).unwrap();
+        assert_eq!(acrux_render::page::page_content(&doc, &pages[1]), before);
+        assert_eq!(list(&doc, &pages[1]).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn les_objets_dorigine_se_manipulent_encore() {
+        let doc = document(&["0 0 10 10 re f\n20 20 10 10 re f"], 0, false, "");
+        placed(&doc, 0);
+        let pages = collect_pages(&doc).unwrap();
+        translate(&doc, &pages[0], 0, 5.0, 0.0).unwrap();
+        let pages = collect_pages(&doc).unwrap();
+        let objects = list(&doc, &pages[0]).unwrap();
+        assert!(
+            (objects[0].bbox.x0 - 5.0).abs() < 1e-6,
+            "{:?}",
+            objects[0].bbox
+        );
+        // Les carrés sont restés au premier niveau : le premier passe devant
+        // l'image.
+        let pages = collect_pages(&doc).unwrap();
+        apply(
+            &doc,
+            &pages[0],
+            &[Edit::Arrange {
+                index: 0,
+                to: Order::Front,
+            }],
+        )
+        .unwrap();
+        let pages = collect_pages(&doc).unwrap();
+        let objects = list(&doc, &pages[0]).unwrap();
+        let kinds: Vec<Kind> = objects.iter().map(|o| o.kind).collect();
+        assert_eq!(kinds, [Kind::Path, Kind::Image, Kind::Path]);
+        assert!(
+            (objects[2].bbox.x0 - 5.0).abs() < 1e-6,
+            "le carré déplacé est devant : {:?}",
+            objects[2].bbox
+        );
+    }
+
+    #[test]
+    fn retirer_les_filigranes_laisse_limage() {
+        use crate::stamp::{add_watermark, remove_stamps, StampKind, WatermarkOptions};
+        let doc = document(&["0 0 10 10 re f"], 0, false, "");
+        add_watermark(&doc, &WatermarkOptions::default()).unwrap();
+        placed(&doc, 0);
+        let all = [
+            StampKind::Watermark,
+            StampKind::Background,
+            StampKind::HeaderFooter,
+            StampKind::Bates,
+        ];
+        assert_eq!(remove_stamps(&doc, &all).unwrap(), 1);
+        let reloaded = Document::from_bytes(doc.save_full().unwrap()).unwrap();
+        let pages = collect_pages(&reloaded).unwrap();
+        let objects = list(&reloaded, &pages[0]).unwrap();
+        let kinds: Vec<Kind> = objects.iter().map(|o| o.kind).collect();
+        assert_eq!(kinds, [Kind::Path, Kind::Image]);
+        let got = objects[1].bbox;
+        assert!(close(got, expected()), "{got:?}");
     }
 }
