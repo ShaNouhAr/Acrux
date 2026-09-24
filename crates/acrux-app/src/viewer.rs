@@ -1161,8 +1161,10 @@ pub struct Viewer {
     draw_style: DrawStyle,
     /// Nuancier ou liste d'un réglage de dessin, déroulé.
     draw_popup: Option<DrawPopup>,
-    /// Police d'écran des zones de texte en cours de frappe.
-    draw_text_font: Option<(acrux_features::stamp::StandardFont, TextRenderer)>,
+    /// Police d'écran des zones de texte en cours de frappe, par police
+    /// standard ; `None` à droite retient qu'aucun fichier ne l'a donnée,
+    /// pour ne pas relire le disque à chaque image.
+    draw_text_font: Option<(acrux_features::stamp::StandardFont, Option<TextRenderer>)>,
     /// Barre des outils, à droite, affichée.
     tools_open: bool,
     /// Barre des outils.
@@ -7596,20 +7598,10 @@ impl Viewer {
             // va d'abord à eux. Taper « s » écrit un s, il n'ouvre pas
             // « remplir et signer » ; Ctrl+Z défait la frappe ou le dernier
             // trait, pas l'annotation d'avant.
-            Event::Key(key, m)
-                if self.draft.is_some()
-                    && self.prompt.is_none()
-                    && self.palette.is_none()
-                    && self.draft_key(key, m) =>
-            {
+            Event::Key(key, m) if self.draft_has_keys() && self.draft_key(key, m) => {
                 window.request_redraw();
             }
-            Event::Char(c, m)
-                if self.draft.is_some()
-                    && self.prompt.is_none()
-                    && self.palette.is_none()
-                    && self.draft_char(c, m, window) =>
-            {
+            Event::Char(c, m) if self.draft_has_keys() && self.draft_char(c, m, window) => {
                 window.request_redraw();
             }
             Event::Key(Key::Escape, _)
@@ -7856,7 +7848,18 @@ impl Viewer {
                 }
                 // La carte de recherche flotte au-dessus de la page : ses
                 // champs et ses boutons se cliquent avant elle, et un clic
-                // dans ses marges s'y arrête.
+                // dans ses marges s'y arrête. Un clic dans la carte lui rend
+                // le clavier : la zone de texte en cours est posée d'abord
+                // (`open_search_ui` la pose et rouvre la carte, que la
+                // modification du document venait de fermer). Le clic
+                // s'arrête là : la carte rouverte n'a pas encore été
+                // peinte, ses zones ne se testent pas, et il tomberait sur
+                // la page — où l'outil ouvrirait une autre zone.
+                if self.draft_typing() && self.search_hit(x, y).is_some() {
+                    self.open_search_ui();
+                    window.request_redraw();
+                    return;
+                }
                 if self.search_mouse_down(x, y) {
                     window.request_redraw();
                     return;

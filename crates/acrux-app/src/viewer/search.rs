@@ -264,6 +264,12 @@ impl Viewer {
         if self.loaded.is_none() {
             return;
         }
+        // Une zone de texte qu'on tape, un dessin en cours : posés d'abord.
+        // Sans cela la zone gardait le clavier, et ce qu'on croyait taper
+        // dans la carte s'écrivait dans la zone. Poser modifie le document,
+        // ce qui ferme une carte déjà ouverte : elle est rouverte juste
+        // après, sa requête retenue.
+        self.commit_draft();
         let candidate = query_from_selection(&self.selected_text());
         let last = self.last_search.clone();
         let s = self.search.get_or_insert_with(|| {

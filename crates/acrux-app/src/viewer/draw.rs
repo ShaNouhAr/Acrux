@@ -982,10 +982,19 @@ impl Viewer {
 
     /// Vrai si une zone de texte reçoit la frappe.
     pub(super) fn draft_typing(&self) -> bool {
-        matches!(self.draft, Some(Draft::Text(_)))
+        matches!(self.draft, Some(Draft::Text(_))) && self.draft_has_keys()
+    }
+
+    /// Vrai si le brouillon reçoit le clavier : aucune invite, palette ni
+    /// liste ne passe devant, et le numéro de page de la barre d'outils
+    /// n'est pas en saisie — sans quoi « 5 » puis Entrée s'écrivaient dans
+    /// la zone ouverte au lieu de mener à la page 5.
+    pub(super) fn draft_has_keys(&self) -> bool {
+        self.draft.is_some()
             && self.prompt.is_none()
             && self.palette.is_none()
             && self.draw_popup.is_none()
+            && !self.toolbar.has_focus()
     }
 
     /// Une touche pendant un brouillon ; vrai si elle a servi.
@@ -1097,9 +1106,14 @@ impl Viewer {
                         'y' | 'Y' | '\u{19}' => {
                             self.draft_redo_step();
                         }
-                        // Les autres raccourcis (enregistrer, imprimer…)
-                        // valent pour le document : ils valident d'abord.
-                        _ => return false,
+                        // Les autres raccourcis (enregistrer, imprimer,
+                        // rechercher…) valent pour le document : ils
+                        // valident d'abord, comme dans un champ de
+                        // formulaire.
+                        _ => {
+                            self.commit_draft();
+                            return false;
+                        }
                     }
                     return true;
                 }
@@ -1383,8 +1397,9 @@ impl Viewer {
         self.draw_popup = Some(popup);
     }
 
-    /// Applique une couleur choisie.
-    fn set_draw_color(&mut self, target: DrawSetting, color: Option<[f64; 3]>) {
+    /// Applique une couleur choisie ; `persist` l'écrit aussi dans le
+    /// fichier des préférences (voir `draw_style_changed`).
+    fn set_draw_color(&mut self, target: DrawSetting, color: Option<[f64; 3]>, persist: bool) {
         let s = &mut self.draw_style;
         match target {
             DrawSetting::Stroke => s.stroke = color.unwrap_or(s.stroke),
@@ -1394,7 +1409,7 @@ impl Viewer {
             DrawSetting::TextFill => s.text_fill = color,
             _ => {}
         }
-        self.draw_style_changed();
+        self.draw_style_changed(persist);
     }
 
     /// Applique une valeur choisie dans une liste.
@@ -1407,18 +1422,26 @@ impl Viewer {
             (DrawSetting::Font, Choice::Font(f)) => s.font = f,
             _ => {}
         }
-        self.draw_style_changed();
+        self.draw_style_changed(true);
     }
 
     /// Un réglage a changé : la zone ouverte le prend aussitôt, les
     /// préférences le retiennent.
-    fn draw_style_changed(&mut self) {
+    ///
+    /// Le fichier n'est écrit que si `persist` : la couleur qui suit le
+    /// pointeur dans le carré sur mesure du nuancier change à chaque
+    /// mouvement, et l'écrire à chaque fois ferait un accès disque par
+    /// mouvement de souris. Elle est écrite quand le nuancier se referme,
+    /// ou en quittant (`save_prefs`), qui reprend `prefs.draw_style`.
+    fn draw_style_changed(&mut self, persist: bool) {
         let style = self.draw_style;
         if let Some(Draft::Text(t)) = &mut self.draft {
             refit(t, &style);
         }
         self.prefs.draw_style = style.encode();
-        self.prefs.save();
+        if persist {
+            self.prefs.save();
+        }
     }
 
     /// Un événement pour le nuancier ou la liste d'un réglage, s'il est
@@ -1439,7 +1462,7 @@ impl Viewer {
                     Event::MouseDown { x, y, .. } => {
                         if picker.none_at(x, y) {
                             self.draw_popup = None;
-                            self.set_draw_color(target, None);
+                            self.set_draw_color(target, None, true);
                             window.request_redraw();
                             return true;
                         }
@@ -1468,13 +1491,18 @@ impl Viewer {
                     Event::Wake => return false,
                 };
                 match outcome {
-                    Outcome::Live(c) => self.set_draw_color(target, Some(c)),
+                    Outcome::Live(c) => self.set_draw_color(target, Some(c), false),
                     Outcome::Pick(c) => {
                         remember_color(c);
                         self.draw_popup = None;
-                        self.set_draw_color(target, Some(c));
+                        self.set_draw_color(target, Some(c), true);
                     }
-                    Outcome::Close => self.draw_popup = None,
+                    Outcome::Close => {
+                        // Refermé sans choix : une couleur suivie en
+                        // direct reste, elle est écrite maintenant.
+                        self.draw_popup = None;
+                        self.draw_style_changed(true);
+                    }
                     Outcome::Stay => {}
                 }
             }
@@ -1822,10 +1850,12 @@ impl Viewer {
 
     /// Police d'écran de mêmes largeurs que la police standard choisie.
     fn draw_font(&mut self, font: StandardFont) -> Option<&mut TextRenderer> {
+        // Chargée une fois par police, échec compris : cette fonction est
+        // appelée pendant la peinture, à chaque image.
         if self.draw_text_font.as_ref().is_none_or(|(f, _)| *f != font) {
-            self.draw_text_font = TextRenderer::load(font_files(font)).map(|r| (font, r));
+            self.draw_text_font = Some((font, TextRenderer::load(font_files(font))));
         }
-        self.draw_text_font.as_mut().map(|(_, r)| r)
+        self.draw_text_font.as_mut().and_then(|(_, r)| r.as_mut())
     }
 
     /// La zone de texte : légende, fond, cadre, texte, et pendant la saisie
