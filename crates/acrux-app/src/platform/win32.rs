@@ -1257,6 +1257,28 @@ fn typed_by_key(vk: u32, code: u32) -> bool {
     )
 }
 
+/// Modificateurs d'un caractère `code` reçu par `WM_CHAR`.
+///
+/// Windows fait d'AltGr un Ctrl+Alt : sur un clavier français, « @ », « € »,
+/// « # », « | », « [ » ou « { » arrivent avec Ctrl et Alt enfoncées. Lus
+/// tels quels, ils passaient pour des raccourcis : ils n'entraient ni dans
+/// un champ de formulaire (une adresse électronique ne se tapait pas), ni
+/// dans la recherche, ni dans une note. Un caractère imprimable écrit avec
+/// Ctrl **et** Alt est donc un caractère AltGr, livré sans modificateur ;
+/// Ctrl+lettre, qui arrive en caractère de contrôle (1 à 26), reste un
+/// raccourci.
+fn char_modifiers(m: Modifiers, code: u32) -> Modifiers {
+    if m.ctrl && m.alt && code >= 0x20 {
+        Modifiers {
+            ctrl: false,
+            alt: false,
+            ..m
+        }
+    } else {
+        m
+    }
+}
+
 /// Retient l'état d'un modificateur posté au mode invisible.
 fn note_simulated(vk: u32, down: bool) {
     use std::sync::atomic::Ordering;
@@ -1709,12 +1731,14 @@ fn handle_message(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRES
         // Son relâchement ne doit pas, lui non plus, activer la barre de
         // menus que cette fenêtre n'a pas.
         WM_SYSKEYUP if wparam == 0x79 && modifiers().shift => 0,
-        // Alt+← et Alt+→ : vue précédente et suivante. Alt fait arriver la
-        // touche en message « système », que le reste du code ne voit pas.
-        // Alt se lit dans le bit 29, qui vaut aussi pour le mode invisible,
-        // où GetKeyState ne voit rien. Les autres combinaisons (Alt+F4,
-        // Alt+Espace, Alt seule) gardent leur sens pour Windows.
-        WM_SYSKEYDOWN if (wparam == 0x25 || wparam == 0x27) && lparam & KEY_ALT_DOWN != 0 => {
+        // Alt+← et Alt+→ : vue précédente et suivante ; Alt+↓ déroule la
+        // liste d'un champ de formulaire, comme sous Windows (Alt+↑ suit,
+        // pour la symétrie). Alt fait arriver la touche en message
+        // « système », que le reste du code ne voit pas. Alt se lit dans le
+        // bit 29, qui vaut aussi pour le mode invisible, où GetKeyState ne
+        // voit rien. Les autres combinaisons (Alt+F4, Alt+Espace, Alt seule)
+        // gardent leur sens pour Windows.
+        WM_SYSKEYDOWN if (0x25..=0x28).contains(&wparam) && lparam & KEY_ALT_DOWN != 0 => {
             let m = Modifiers {
                 alt: true,
                 ..modifiers()
@@ -1731,8 +1755,8 @@ fn handle_message(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRES
             // normalise en lettre minuscule avec le modificateur Ctrl, pour que
             // l'application raisonne en raccourcis (« Ctrl+F ») et non en
             // codes ASCII historiques.
-            let m = modifiers();
             let code = wparam as u32;
+            let m = char_modifiers(modifiers(), code);
             let last = LAST_KEY_DOWN.load(std::sync::atomic::Ordering::Relaxed);
             if m.ctrl && typed_by_key(last, code) {
                 return 0;
@@ -2228,6 +2252,31 @@ mod tests {
         assert!(
             !typed_by_key(0x11, 6),
             "le harnais poste Ctrl+F sans la lettre"
+        );
+    }
+
+    #[test]
+    fn un_caractere_altgr_n_est_pas_un_raccourci() {
+        let altgr = Modifiers {
+            ctrl: true,
+            shift: false,
+            alt: true,
+        };
+        let plain = char_modifiers(altgr, u32::from('@'));
+        assert!(!plain.ctrl && !plain.alt, "« @ » d'un clavier français");
+        let euro = char_modifiers(altgr, u32::from('€'));
+        assert!(!euro.ctrl && !euro.alt, "« € » d'AltGr+E");
+        // Ctrl+F reste un raccourci, Alt en plus ou non.
+        let ctrl = Modifiers {
+            ctrl: true,
+            shift: false,
+            alt: false,
+        };
+        assert!(char_modifiers(ctrl, 6).ctrl);
+        assert!(char_modifiers(ctrl, u32::from('f')).ctrl);
+        assert!(
+            char_modifiers(altgr, 6).ctrl,
+            "Ctrl+Alt+F : caractère de contrôle"
         );
     }
 }

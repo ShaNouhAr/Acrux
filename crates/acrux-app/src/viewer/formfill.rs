@@ -45,8 +45,7 @@ use acrux_features::forms::{
     self, Field, FieldLook, FieldType, FieldValue, FontFamily, LINE_SPACING, TEXT_ASCENT,
     TEXT_DESCENT,
 };
-use acrux_graphics::Color;
-use acrux_render::{render_page_rotated, RenderOptions};
+use acrux_render::render_page_rotated;
 
 use super::dialogs::Then;
 use super::{fill_rect_blend, log_line, EditOp, Region, Viewer};
@@ -456,12 +455,7 @@ impl Viewer {
             l.boxes.remove(p);
         }
         l.cache.retain(|(p, _), _| !touched.contains(p));
-        let options = RenderOptions {
-            annotations: true,
-            time_budget: Some(Duration::from_secs(5)),
-            background: Some(Color::WHITE),
-            ..RenderOptions::default()
-        };
+        let options = l.screen_options(Duration::from_secs(5));
         for &p in &touched {
             let shown = layout.get(p).is_some_and(|b| {
                 b.visible && f64::from(b.y + b.h as i32) >= top && f64::from(b.y) <= bottom
@@ -966,7 +960,9 @@ impl Viewer {
                 self.open_field_menu(fi, wi, window);
                 return true;
             }
-            return false;
+            // Alt+↑ et Alt+↓ ne font pas défiler la page sous le curseur ;
+            // Alt+← et Alt+→ (vue précédente, suivante) suivent leur cours.
+            return matches!(key, Key::Up | Key::Down);
         }
         // Ctrl avec une autre touche que celles de la saisie (Ctrl+Tab,
         // Ctrl+Page suivante…) passe son chemin : ce qu'elle fait valide le

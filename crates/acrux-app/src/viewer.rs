@@ -514,6 +514,23 @@ impl Loaded {
         self.fields = fields;
     }
 
+    /// Options d'un rendu **à l'écran** fait ici plutôt que par le fil de
+    /// rendu (une page redessinée tout de suite après un geste) : celles du
+    /// fil, calques compris. Sans les calques, remplir un champ refaisait
+    /// apparaître sur sa page le contenu d'un calque masqué.
+    fn screen_options(&self, budget: std::time::Duration) -> RenderOptions {
+        RenderOptions {
+            annotations: true,
+            time_budget: Some(budget),
+            background: Some(Color::WHITE),
+            layers: self
+                .layers
+                .iter()
+                .map(|(n, _, visible)| (*n, *visible))
+                .collect(),
+        }
+    }
+
     /// Liens d'une page (lus au premier appel).
     fn links(&mut self, page: usize) -> &[Link] {
         let (doc, pages, index) = (&self.doc, &self.pages, &self.page_index);
@@ -6126,12 +6143,7 @@ impl Viewer {
         }
         l.cache.retain(|(p, _), _| *p != placed.0);
         if let Some(page) = l.pages.get(placed.0) {
-            let options = RenderOptions {
-                annotations: true,
-                time_budget: Some(std::time::Duration::from_secs(5)),
-                background: Some(Color::WHITE),
-                ..RenderOptions::default()
-            };
+            let options = l.screen_options(std::time::Duration::from_secs(5));
             let bitmap = render_page_rotated(&l.doc, page, scale, l.view_rotation, &options).bitmap;
             l.cache.insert((placed.0, key), bitmap);
         }
@@ -7251,8 +7263,14 @@ impl Viewer {
                             self.click_widget(fi, wi, (x, y), pt, clicks, modifiers, window);
                         } else if let Some(link) = self.link_at(x, y) {
                             self.selection = None;
+                            self.focus_field = None;
                             self.follow(&link.action, window);
                         } else {
+                            // Un clic hors des champs leur retire le focus :
+                            // sans cela, ↓ pour faire défiler la page changeait
+                            // encore le bouton radio ou la ligne de liste
+                            // cliqués plus tôt, et modifiait le document.
+                            self.focus_field = None;
                             self.mouse_down(x, y, clicks, modifiers.shift);
                         }
                     }

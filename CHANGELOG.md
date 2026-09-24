@@ -49,6 +49,14 @@ c'est la section correspondante de ce fichier qui devient la page de version.
   `acr fields` écrit un saut de ligne d'un champ multiligne `\n`, sur la
   ligne du champ. Un peigne ne garde plus que ses cases (`/MaxLen`), en
   ligne de commande comme dans l'application.
+- **Les caractères AltGr s'écrivent enfin** : « @ », « € », « # », « | »,
+  « [ », « { » d'un clavier français passaient pour des raccourcis Ctrl+Alt
+  et n'entraient nulle part — ni dans un champ de formulaire (pas d'adresse
+  électronique possible), ni dans la recherche, ni dans une note.
+- Alt+↓ déroule la liste d'un champ à choix : Windows gardait la touche pour
+  lui. Un clic hors des champs leur retire le focus : ↓ pour faire défiler
+  la page ne change plus le bouton radio ou la ligne de liste cliqués avant.
+  Remplir un champ ne fait plus réapparaître sur sa page un calque masqué.
 - **Vue précédente, vue suivante.** Alt+← ramène là d'où un lien, un
   signet, « aller à la page » (Ctrl+G), Origine ou Fin, une vignette ou un
   commentaire du panneau, une occurrence de la recherche vous a fait partir ;
