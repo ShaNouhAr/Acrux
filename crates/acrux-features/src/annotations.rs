@@ -28,9 +28,14 @@
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use acrux_core::{Error, Rect, Result};
+use acrux_core::{Error, Point, Rect, Result};
 use acrux_document::text::decode_text_string;
 use acrux_document::{collect_pages, Dict, Document, Name, Object, ObjectRef, Page};
+
+use crate::stamp::StandardFont;
+
+pub mod freetext;
+pub mod shapes;
 
 /// Résumé d'une annotation existante.
 #[derive(Debug, Clone)]
@@ -83,6 +88,159 @@ pub type Rgb = [f64; 3];
 
 /// Couleur du signe d'insertion : le bleu des outils de relecture d'Acrobat.
 pub const CARET_COLOR: Rgb = [0.0, 0.47, 0.84];
+
+/// Rouge des formes, par défaut : celui des outils de dessin d'Acrobat.
+pub const SHAPE_COLOR: Rgb = [0.9, 0.13, 0.13];
+
+/// Aspect d'une forme : couleur du trait, couleur de fond, épaisseur du
+/// trait (`/BS /W`) et opacité (`/CA`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ShapeStyle {
+    /// Couleur du trait (`/C`) ; aucun trait si `None`.
+    pub stroke: Option<Rgb>,
+    /// Couleur de fond (`/IC`) ; transparent si `None`.
+    pub fill: Option<Rgb>,
+    /// Épaisseur du trait, en points.
+    pub width: f64,
+    /// Opacité, de 0 (invisible) à 1 (opaque).
+    pub opacity: f64,
+}
+
+impl Default for ShapeStyle {
+    /// Trait rouge de 2 pt, sans fond, opaque.
+    fn default() -> Self {
+        Self {
+            stroke: Some(SHAPE_COLOR),
+            fill: None,
+            width: 2.0,
+            opacity: 1.0,
+        }
+    }
+}
+
+impl ShapeStyle {
+    /// Le même, ramené dans des bornes raisonnables : épaisseur de 0 à
+    /// 72 pt, opacité de 0 à 1, composantes de 0 à 1 ; une valeur qui n'est
+    /// pas un nombre reprend celle par défaut. Ce qui vient d'une ligne de
+    /// commande ou d'un fichier ne doit pas produire un flux absurde.
+    #[must_use]
+    pub fn clamped(&self) -> Self {
+        let d = Self::default();
+        let rgb = |c: Rgb| {
+            c.map(|v| {
+                if v.is_finite() {
+                    v.clamp(0.0, 1.0)
+                } else {
+                    0.0
+                }
+            })
+        };
+        Self {
+            stroke: self.stroke.map(rgb),
+            fill: self.fill.map(rgb),
+            width: if self.width.is_finite() {
+                self.width.clamp(0.0, 72.0)
+            } else {
+                d.width
+            },
+            opacity: if self.opacity.is_finite() {
+                self.opacity.clamp(0.0, 1.0)
+            } else {
+                d.opacity
+            },
+        }
+    }
+}
+
+/// Terminaison d'une ligne (`/LE`, §12.5.6.7, table 179).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LineEnding {
+    /// Aucune.
+    #[default]
+    None,
+    /// Flèche ouverte : deux traits.
+    OpenArrow,
+    /// Flèche fermée : un triangle plein.
+    ClosedArrow,
+    /// Disque.
+    Circle,
+    /// Carré.
+    Square,
+    /// Butée : un trait perpendiculaire.
+    Butt,
+}
+
+impl LineEnding {
+    /// Toutes, dans l'ordre de la table.
+    pub const ALL: [LineEnding; 6] = [
+        LineEnding::None,
+        LineEnding::OpenArrow,
+        LineEnding::ClosedArrow,
+        LineEnding::Circle,
+        LineEnding::Square,
+        LineEnding::Butt,
+    ];
+
+    /// Nom PDF.
+    #[must_use]
+    pub fn pdf_name(self) -> &'static str {
+        match self {
+            LineEnding::None => "None",
+            LineEnding::OpenArrow => "OpenArrow",
+            LineEnding::ClosedArrow => "ClosedArrow",
+            LineEnding::Circle => "Circle",
+            LineEnding::Square => "Square",
+            LineEnding::Butt => "Butt",
+        }
+    }
+
+    /// Depuis le nom PDF ; un nom inconnu (`Diamond`, `Slash`…) vaut
+    /// `None` plutôt qu'une erreur : la ligne se dessine quand même.
+    #[must_use]
+    pub fn from_name(name: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|e| e.pdf_name() == name)
+            .unwrap_or_default()
+    }
+}
+
+/// Ligne d'ancrage d'une légende : du point désigné, par un coude
+/// facultatif, jusqu'au bord de la zone de texte.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Callout {
+    /// Point désigné, où se pose la flèche.
+    pub anchor: Point,
+    /// Coude ; calculé s'il n'est pas donné (voir
+    /// [`freetext::callout_points`]).
+    pub knee: Option<Point>,
+    /// Terminaison côté ancre.
+    pub ending: LineEnding,
+}
+
+/// Alignement des lignes d'une zone de texte (`/Q`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextAlign {
+    /// À gauche.
+    #[default]
+    Left,
+    /// Centré.
+    Center,
+    /// À droite.
+    Right,
+}
+
+impl TextAlign {
+    /// Valeur de `/Q`.
+    #[must_use]
+    pub fn q(self) -> i64 {
+        match self {
+            TextAlign::Left => 0,
+            TextAlign::Center => 1,
+            TextAlign::Right => 2,
+        }
+    }
+}
 
 /// Les quatre annotations de balisage du texte (§12.5.6.10) : elles
 /// désignent un passage par ses quadrilatères, sans toucher au contenu.
@@ -206,15 +364,92 @@ pub enum NewAnnotation {
     Square {
         /// Emplacement.
         rect: Rect,
-        /// Couleur de bordure.
-        stroke: Rgb,
-        /// Épaisseur de bordure en points.
-        width: f64,
-        /// Couleur de remplissage (aucune si `None`).
-        fill: Option<Rgb>,
+        /// Trait, remplissage, épaisseur, opacité.
+        style: ShapeStyle,
         /// Commentaire associé (`/Contents`), comme sur n'importe quelle
         /// annotation de balisage : c'est lui que les relecteurs lisent.
         contents: Option<String>,
+    },
+    /// Ellipse (`/Circle`) inscrite dans une zone.
+    Circle {
+        /// Zone.
+        rect: Rect,
+        /// Trait, remplissage, épaisseur, opacité.
+        style: ShapeStyle,
+        /// Commentaire associé.
+        contents: Option<String>,
+    },
+    /// Ligne droite (`/Line`), avec ses terminaisons : une flèche est une
+    /// ligne dont le bout est une tête.
+    Line {
+        /// Origine.
+        from: Point,
+        /// Extrémité.
+        to: Point,
+        /// Trait (le remplissage colore l'intérieur des têtes fermées).
+        style: ShapeStyle,
+        /// Terminaison à l'origine.
+        start: LineEnding,
+        /// Terminaison à l'extrémité.
+        end: LineEnding,
+        /// Commentaire associé.
+        contents: Option<String>,
+    },
+    /// Ligne brisée ouverte (`/PolyLine`).
+    PolyLine {
+        /// Sommets, au moins deux.
+        points: Vec<Point>,
+        /// Trait.
+        style: ShapeStyle,
+        /// Terminaison au premier sommet.
+        start: LineEnding,
+        /// Terminaison au dernier.
+        end: LineEnding,
+        /// Commentaire associé.
+        contents: Option<String>,
+    },
+    /// Polygone fermé (`/Polygon`).
+    Polygon {
+        /// Sommets, au moins trois.
+        points: Vec<Point>,
+        /// Trait et remplissage.
+        style: ShapeStyle,
+        /// Commentaire associé.
+        contents: Option<String>,
+    },
+    /// Dessin à main levée (`/Ink`) : un ou plusieurs traits, qui forment
+    /// **une** annotation, comme le crayon d'Acrobat.
+    Ink {
+        /// Traits, chacun une suite de points relevés sous le pointeur ;
+        /// ils sont simplifiés à l'écriture.
+        strokes: Vec<Vec<Point>>,
+        /// Trait.
+        style: ShapeStyle,
+        /// Commentaire associé.
+        contents: Option<String>,
+    },
+    /// Zone de texte (`/FreeText`) : un texte écrit sur la page, dans une
+    /// police standard, avec cadre et fond facultatifs ; avec `callout`,
+    /// une légende reliée à un point par une ligne fléchée.
+    FreeText {
+        /// Zone du texte.
+        rect: Rect,
+        /// Texte, sauts de ligne compris.
+        text: String,
+        /// Police standard.
+        font: StandardFont,
+        /// Corps en points.
+        size: f64,
+        /// Couleur du texte.
+        color: Rgb,
+        /// Cadre : couleur et épaisseur ; aucun si `None`.
+        border: Option<(Rgb, f64)>,
+        /// Fond ; transparent si `None`.
+        fill: Option<Rgb>,
+        /// Alignement des lignes.
+        align: TextAlign,
+        /// Ligne d'ancrage d'une légende.
+        callout: Option<Callout>,
     },
     /// Surlignage (`/Highlight`) d'une zone rectangulaire. C'est un
     /// [`NewAnnotation::Markup`] à une seule zone, gardé pour les appelants
@@ -739,6 +974,206 @@ fn caret_dict(doc: &Document, d: &mut Dict, x: f64, line: &Rect, contents: &str,
     set_appearance(doc, d, appearance_stream(rect, content, &[]));
 }
 
+/// Tableau de nombres `[x y x y …]` pour une suite de points (`/Vertices`,
+/// un trait de `/InkList`).
+fn points_array(points: &[Point]) -> Object {
+    Object::Array(
+        points
+            .iter()
+            .flat_map(|p| [Object::Real(p.x), Object::Real(p.y)])
+            .collect(),
+    )
+}
+
+/// `/LE [/début /fin]`.
+fn endings_array(start: LineEnding, end: LineEnding) -> Object {
+    Object::Array(vec![
+        Object::Name(Name::new(start.pdf_name())),
+        Object::Name(Name::new(end.pdf_name())),
+    ])
+}
+
+/// Flux d'apparence d'une forme : son contenu, et l'état graphique `GS0`
+/// qui porte l'opacité quand elle n'est pas pleine.
+fn shape_stream(bbox: Rect, content: String, opacity: f64) -> Object {
+    if opacity >= 1.0 {
+        return appearance_stream(bbox, content, &[]);
+    }
+    let mut gs = Dict::new();
+    gs.insert(Name::new("CA"), Object::Real(opacity));
+    gs.insert(Name::new("ca"), Object::Real(opacity));
+    let mut ext = Dict::new();
+    ext.insert(Name::new("GS0"), Object::Dict(gs));
+    let mut res = Dict::new();
+    res.insert(Name::new("ExtGState"), Object::Dict(ext));
+    appearance_stream(bbox, content, &[("Resources", Object::Dict(res))])
+}
+
+/// Dictionnaire commun aux formes : type, sujet, boîte, couleurs (`/C` du
+/// trait, `/IC` du fond), épaisseur (`/BS`), opacité (`/CA`) et apparence.
+///
+/// Les clés sémantiques sont écrites en plus de l'apparence : un lecteur
+/// qui la régénère (après un changement de couleur, par exemple) les lit.
+fn shape_dict(
+    doc: &Document,
+    d: &mut Dict,
+    (subtype, subject): (&str, &str),
+    style: &ShapeStyle,
+    contents: Option<&str>,
+    drawn: shapes::Drawn,
+) {
+    if let Some(c) = contents.filter(|c| !c.is_empty()) {
+        d.insert(Name::new("Contents"), Object::String(encode_text(c)));
+    }
+    d.insert(Name::new("Subtype"), Object::Name(Name::new(subtype)));
+    d.insert(Name::new("Subj"), Object::String(encode_text(subject)));
+    d.insert(Name::new("Rect"), rect_object(drawn.bbox));
+    // Sans trait, un tableau vide : « transparent » (§12.5.2, table 166).
+    d.insert(
+        Name::new("C"),
+        style
+            .stroke
+            .map_or_else(|| Object::Array(Vec::new()), color_array),
+    );
+    if let Some(f) = style.fill {
+        d.insert(Name::new("IC"), color_array(f));
+    }
+    let mut bs = Dict::new();
+    bs.insert(Name::new("W"), Object::Real(style.width));
+    bs.insert(Name::new("S"), Object::Name(Name::new("S")));
+    d.insert(Name::new("BS"), Object::Dict(bs));
+    if style.opacity < 1.0 {
+        d.insert(Name::new("CA"), Object::Real(style.opacity));
+    }
+    let stream = shape_stream(drawn.bbox, drawn.content, style.opacity);
+    set_appearance(doc, d, stream);
+}
+
+/// Annotation `/Line` complète : `/L`, `/LE`, et l'intention « flèche »
+/// quand un bout porte une tête.
+fn line_dict(
+    doc: &Document,
+    d: &mut Dict,
+    [from, to]: [Point; 2],
+    style: &ShapeStyle,
+    (start, end): (LineEnding, LineEnding),
+    contents: Option<&str>,
+) -> Result<()> {
+    if (to.x - from.x).hypot(to.y - from.y) < 1e-6 {
+        return Err(Error::Corrupt(
+            "une ligne demande deux points distincts".into(),
+        ));
+    }
+    let style = style.clamped();
+    let drawn = shapes::open_path(&[from, to], &style, start, end)
+        .ok_or_else(|| Error::Corrupt("ligne sans longueur".into()))?;
+    let arrow = [start, end]
+        .iter()
+        .any(|e| matches!(e, LineEnding::OpenArrow | LineEnding::ClosedArrow));
+    let subject = if arrow { "Flèche" } else { "Ligne" };
+    shape_dict(doc, d, ("Line", subject), &style, contents, drawn);
+    d.insert(Name::new("L"), points_array(&[from, to]));
+    d.insert(Name::new("LE"), endings_array(start, end));
+    if arrow {
+        d.insert(Name::new("IT"), Object::Name(Name::new("LineArrow")));
+    }
+    Ok(())
+}
+
+/// Annotation `/Ink` complète : les traits sont simplifiés une fois, et
+/// `/InkList` garde ces points — c'est ce que redessinent les lecteurs qui
+/// n'utilisent pas l'apparence.
+fn ink_dict(
+    doc: &Document,
+    d: &mut Dict,
+    strokes: &[Vec<Point>],
+    style: &ShapeStyle,
+    contents: Option<&str>,
+) -> Result<()> {
+    let style = style.clamped();
+    let simplified: Vec<Vec<Point>> = strokes
+        .iter()
+        .map(|s| shapes::simplify(s, shapes::INK_TOLERANCE))
+        .filter(|s| !s.is_empty())
+        .collect();
+    let drawn = shapes::ink(&simplified, &style)
+        .ok_or_else(|| Error::Corrupt("un dessin demande au moins un point".into()))?;
+    shape_dict(doc, d, ("Ink", "Crayon"), &style, contents, drawn);
+    d.insert(
+        Name::new("InkList"),
+        Object::Array(simplified.iter().map(|s| points_array(s)).collect()),
+    );
+    Ok(())
+}
+
+/// Annotation `/FreeText` complète : texte (`/Contents`), style (`/DA`,
+/// `/DS`, `/Q`), cadre (`/BS`), fond (`/C`, la couleur de fond pour une
+/// zone de texte, comme chez Acrobat), et pour une légende la ligne
+/// d'ancrage (`/CL`, `/LE`, `/RD`).
+fn freetext_dict(
+    doc: &Document,
+    d: &mut Dict,
+    tb: &freetext::TextBox<'_>,
+    callout: Option<&Callout>,
+) {
+    let (content, bbox) = freetext::appearance(tb, callout);
+    d.insert(Name::new("Subtype"), Object::Name(Name::new("FreeText")));
+    d.insert(Name::new("Rect"), rect_object(bbox));
+    d.insert(Name::new("Contents"), Object::String(encode_text(tb.text)));
+    d.insert(
+        Name::new("DA"),
+        Object::String(freetext::default_appearance(tb).into_bytes()),
+    );
+    d.insert(
+        Name::new("DS"),
+        Object::String(encode_text(&freetext::default_style(tb))),
+    );
+    d.insert(Name::new("Q"), Object::Integer(tb.align.q()));
+    let mut bs = Dict::new();
+    bs.insert(Name::new("W"), Object::Real(tb.border_width()));
+    d.insert(Name::new("BS"), Object::Dict(bs));
+    if let Some(f) = tb.fill {
+        d.insert(Name::new("C"), color_array(f));
+    }
+    if let Some(call) = callout {
+        d.insert(Name::new("IT"), Object::Name(Name::new("FreeTextCallout")));
+        d.insert(Name::new("Subj"), Object::String(encode_text("Légende")));
+        d.insert(
+            Name::new("CL"),
+            points_array(&freetext::callout_points(&tb.rect, call)),
+        );
+        d.insert(
+            Name::new("LE"),
+            Object::Name(Name::new(call.ending.pdf_name())),
+        );
+        d.insert(
+            Name::new("RD"),
+            Object::Array(
+                freetext::rect_differences(&bbox, &tb.rect)
+                    .into_iter()
+                    .map(Object::Real)
+                    .collect(),
+            ),
+        );
+    } else {
+        d.insert(Name::new("IT"), Object::Name(Name::new("FreeText")));
+        d.insert(
+            Name::new("Subj"),
+            Object::String(encode_text("Zone de texte")),
+        );
+    }
+    let mut res = Dict::new();
+    res.insert(
+        Name::new("Font"),
+        Object::Dict(freetext::font_resources(tb.font)),
+    );
+    set_appearance(
+        doc,
+        d,
+        appearance_stream(bbox, content, &[("Resources", Object::Dict(res))]),
+    );
+}
+
 /// Page telle qu'elle est **maintenant** dans le document, et sa référence.
 ///
 /// On relit l'objet plutôt que `page.dict` : une page collectée avant une
@@ -827,40 +1262,124 @@ pub fn add_annotation_with(
     match annot {
         NewAnnotation::Square {
             rect,
-            stroke,
-            width,
-            fill,
+            style,
             contents,
         } => {
-            if let Some(c) = contents {
-                d.insert(Name::new("Contents"), Object::String(encode_text(c)));
-            }
-            d.insert(Name::new("Subtype"), Object::Name(Name::new("Square")));
-            d.insert(Name::new("Rect"), rect_object(*rect));
-            d.insert(Name::new("C"), color_array(*stroke));
-            if let Some(f) = fill {
-                d.insert(Name::new("IC"), color_array(*f));
-            }
-            let mut bs = Dict::new();
-            bs.insert(Name::new("W"), Object::Real(*width));
-            d.insert(Name::new("BS"), Object::Dict(bs));
-            let half = width / 2.0;
-            let mut content = format!("{} {} w ", color_op(*stroke, true), fmt(*width));
-            let op = if let Some(f) = fill {
-                let _ = write!(content, "{} ", color_op(*f, false));
-                "B"
-            } else {
-                "S"
-            };
-            let _ = write!(
-                content,
-                "{} {} {} {} re {op}",
-                fmt(rect.x0 + half),
-                fmt(rect.y0 + half),
-                fmt(rect.width() - width),
-                fmt(rect.height() - width)
+            let style = style.clamped();
+            let drawn = shapes::rectangle(rect, &style);
+            shape_dict(
+                doc,
+                &mut d,
+                ("Square", "Rectangle"),
+                &style,
+                contents.as_deref(),
+                drawn,
             );
-            set_appearance(doc, &mut d, appearance_stream(*rect, content, &[]));
+        }
+        NewAnnotation::Circle {
+            rect,
+            style,
+            contents,
+        } => {
+            let style = style.clamped();
+            let drawn = shapes::ellipse(rect, &style);
+            shape_dict(
+                doc,
+                &mut d,
+                ("Circle", "Ellipse"),
+                &style,
+                contents.as_deref(),
+                drawn,
+            );
+        }
+        NewAnnotation::Line {
+            from,
+            to,
+            style,
+            start,
+            end,
+            contents,
+        } => line_dict(
+            doc,
+            &mut d,
+            [*from, *to],
+            style,
+            (*start, *end),
+            contents.as_deref(),
+        )?,
+        NewAnnotation::PolyLine {
+            points,
+            style,
+            start,
+            end,
+            contents,
+        } => {
+            let style = style.clamped();
+            let drawn = shapes::open_path(points, &style, *start, *end).ok_or_else(|| {
+                Error::Corrupt("une ligne brisée demande au moins deux points".into())
+            })?;
+            shape_dict(
+                doc,
+                &mut d,
+                ("PolyLine", "Ligne brisée"),
+                &style,
+                contents.as_deref(),
+                drawn,
+            );
+            d.insert(Name::new("Vertices"), points_array(points));
+            d.insert(Name::new("LE"), endings_array(*start, *end));
+        }
+        NewAnnotation::Polygon {
+            points,
+            style,
+            contents,
+        } => {
+            let style = style.clamped();
+            let drawn = shapes::polygon(points, &style).ok_or_else(|| {
+                Error::Corrupt("un polygone demande au moins trois sommets".into())
+            })?;
+            shape_dict(
+                doc,
+                &mut d,
+                ("Polygon", "Polygone"),
+                &style,
+                contents.as_deref(),
+                drawn,
+            );
+            d.insert(Name::new("Vertices"), points_array(points));
+        }
+        NewAnnotation::Ink {
+            strokes,
+            style,
+            contents,
+        } => ink_dict(doc, &mut d, strokes, style, contents.as_deref())?,
+        NewAnnotation::FreeText {
+            rect,
+            text,
+            font,
+            size,
+            color,
+            border,
+            fill,
+            align,
+            callout,
+        } => {
+            let size = if size.is_finite() {
+                size.clamp(1.0, 144.0)
+            } else {
+                12.0
+            };
+            let tb = freetext::TextBox {
+                rect: *rect,
+                text,
+                font: *font,
+                size,
+                color: *color,
+                border: *border,
+                fill: *fill,
+                align: *align,
+            };
+            freetext_dict(doc, &mut d, &tb, callout.as_ref());
         }
         NewAnnotation::Highlight {
             rect,
@@ -1074,7 +1593,7 @@ pub fn list_all(doc: &Document) -> Result<Vec<(usize, Vec<AnnotationInfo>)>> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::float_cmp)]
 mod tests {
     use super::*;
 
@@ -1121,9 +1640,12 @@ mod tests {
             &page,
             &NewAnnotation::Square {
                 rect: Rect::new(10.0, 10.0, 60.0, 40.0),
-                stroke: [1.0, 0.0, 0.0],
-                width: 2.0,
-                fill: Some([1.0, 1.0, 0.0]),
+                style: ShapeStyle {
+                    stroke: Some([1.0, 0.0, 0.0]),
+                    fill: Some([1.0, 1.0, 0.0]),
+                    width: 2.0,
+                    opacity: 1.0,
+                },
                 contents: Some("À revoir".into()),
             },
             Some("Élodie"),
@@ -1557,5 +2079,456 @@ mod tests {
         };
         assert!(add_annotation(&d, &page0(&d), &replace, None).is_err());
         assert!(list_annotations(&d, &page0(&d)).unwrap().is_empty());
+    }
+
+    /// Rendu d'une page à 2 px par point, et lecture d'un pixel en points
+    /// de page (origine en bas, page de 200 × 200).
+    fn rendered(d: &Document) -> impl Fn(f64, f64) -> [u8; 4] {
+        let d2 = reloaded(d);
+        let bmp = acrux_render::render_page(
+            &d2,
+            &page0(&d2),
+            2.0,
+            &acrux_render::RenderOptions::default(),
+        )
+        .bitmap;
+        move |x: f64, y: f64| {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let (px, py) = ((x * 2.0) as u32, ((200.0 - y) * 2.0) as u32);
+            let p = bmp.pixel(px, py).unwrap();
+            [p[0], p[1], p[2], p[3]]
+        }
+    }
+
+    fn style(stroke: Rgb) -> ShapeStyle {
+        ShapeStyle {
+            stroke: Some(stroke),
+            fill: None,
+            width: 2.0,
+            opacity: 1.0,
+        }
+    }
+
+    fn is_red(p: [u8; 4]) -> bool {
+        p[0] > 180 && p[1] < 90 && p[2] < 90
+    }
+
+    fn is_white(p: [u8; 4]) -> bool {
+        p.iter().take(3).all(|&c| c > 240)
+    }
+
+    /// Une ellipse rouge sans fond : le bord est rouge, le centre blanc, et
+    /// tout se relit après enregistrement.
+    #[test]
+    fn circle_aller_retour() {
+        let d = doc();
+        let rect = Rect::new(40.0, 60.0, 160.0, 140.0);
+        add_annotation(
+            &d,
+            &page0(&d),
+            &NewAnnotation::Circle {
+                rect,
+                style: style([1.0, 0.0, 0.0]),
+                contents: Some("Cercle".into()),
+            },
+            Some("Zoé"),
+        )
+        .unwrap();
+        let d2 = reloaded(&d);
+        let list = list_annotations(&d2, &page0(&d2)).unwrap();
+        assert_eq!(list[0].subtype, "Circle");
+        assert!(list[0].has_appearance);
+        assert_eq!(list[0].rect, rect);
+        assert_eq!(list[0].contents.as_deref(), Some("Cercle"));
+        let at = rendered(&d);
+        assert!(
+            is_red(at(40.8, 100.0)),
+            "bord gauche : {:?}",
+            at(40.8, 100.0)
+        );
+        assert!(
+            is_white(at(100.0, 100.0)),
+            "centre : {:?}",
+            at(100.0, 100.0)
+        );
+        // Le coin de la zone est hors de l'ellipse.
+        assert!(is_white(at(42.0, 62.0)), "coin : {:?}", at(42.0, 62.0));
+    }
+
+    /// Fond jaune à moitié transparent : le blanc de la page transparaît,
+    /// et l'état graphique de l'apparence porte l'opacité.
+    #[test]
+    fn opacite_du_fond() {
+        let d = doc();
+        add_annotation(
+            &d,
+            &page0(&d),
+            &NewAnnotation::Square {
+                rect: Rect::new(20.0, 20.0, 180.0, 180.0),
+                style: ShapeStyle {
+                    stroke: Some([1.0, 0.0, 0.0]),
+                    fill: Some([1.0, 1.0, 0.0]),
+                    width: 2.0,
+                    opacity: 0.5,
+                },
+                contents: None,
+            },
+            None,
+        )
+        .unwrap();
+        let d2 = reloaded(&d);
+        let info = &list_annotations(&d2, &page0(&d2)).unwrap()[0];
+        let dict = raw(&d2, info);
+        assert_eq!(num(&d2, &dict, "CA"), Some(0.5));
+        let ap = d2.dict_get(&dict, "AP").unwrap().unwrap();
+        let normal = d2.dict_get(ap.as_dict().unwrap(), "N").unwrap().unwrap();
+        let Object::Stream { dict: form, .. } = &*normal else {
+            panic!("flux attendu");
+        };
+        let res = d2.dict_get(form, "Resources").unwrap().unwrap();
+        let ext = d2
+            .dict_get(res.as_dict().unwrap(), "ExtGState")
+            .unwrap()
+            .unwrap();
+        let gs = d2.dict_get(ext.as_dict().unwrap(), "GS0").unwrap().unwrap();
+        assert_eq!(num(&d2, gs.as_dict().unwrap(), "ca"), Some(0.5));
+        let at = rendered(&d);
+        let px = at(100.0, 100.0);
+        assert!(
+            px[0] > 240 && px[1] > 240 && (115..=140).contains(&px[2]),
+            "jaune à demi transparent : {px:?}"
+        );
+    }
+
+    /// Une flèche : `/L`, `/LE`, une tête visible sur ses deux ailes, et
+    /// une boîte qui la contient.
+    #[test]
+    fn fleche_ouverte() {
+        let d = doc();
+        add_annotation(
+            &d,
+            &page0(&d),
+            &NewAnnotation::Line {
+                from: Point::new(20.0, 100.0),
+                to: Point::new(180.0, 100.0),
+                style: style([1.0, 0.0, 0.0]),
+                start: LineEnding::None,
+                end: LineEnding::OpenArrow,
+                contents: None,
+            },
+            None,
+        )
+        .unwrap();
+        let d2 = reloaded(&d);
+        let info = &list_annotations(&d2, &page0(&d2)).unwrap()[0];
+        assert_eq!(info.subtype, "Line");
+        assert_eq!(info.intent.as_deref(), Some("LineArrow"));
+        let dict = raw(&d2, info);
+        assert_eq!(numbers(&d2, &dict, "L"), [20.0, 100.0, 180.0, 100.0]);
+        let le = d2.dict_get(&dict, "LE").unwrap().unwrap();
+        let names: Vec<String> = le
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|o| o.as_name().map(Name::as_str))
+            .collect();
+        assert_eq!(names, ["None", "OpenArrow"]);
+        // La tête dépasse la ligne en hauteur.
+        assert!(
+            info.rect.y1 > 104.0 && info.rect.y0 < 96.0,
+            "{:?}",
+            info.rect
+        );
+        let at = rendered(&d);
+        assert!(is_red(at(100.0, 100.0)), "ligne : {:?}", at(100.0, 100.0));
+        // Aile haute de la tête : 8 pt en arrière de la pointe, 30°.
+        let wing = (0..12)
+            .map(|i| at(174.0 + f64::from(i) * 0.25, 101.0 + f64::from(i) * 0.25))
+            .any(is_red);
+        assert!(wing, "aile de la flèche introuvable");
+        assert!(is_white(at(100.0, 110.0)));
+    }
+
+    /// Une flèche fermée est un triangle plein, de la couleur de fond s'il y
+    /// en a une.
+    #[test]
+    fn fleche_fermee_remplie() {
+        let d = doc();
+        add_annotation(
+            &d,
+            &page0(&d),
+            &NewAnnotation::Line {
+                from: Point::new(20.0, 100.0),
+                to: Point::new(180.0, 100.0),
+                style: ShapeStyle {
+                    stroke: Some([1.0, 0.0, 0.0]),
+                    fill: Some([0.0, 0.0, 1.0]),
+                    width: 4.0,
+                    opacity: 1.0,
+                },
+                start: LineEnding::ClosedArrow,
+                end: LineEnding::ClosedArrow,
+                contents: None,
+            },
+            None,
+        )
+        .unwrap();
+        let at = rendered(&d);
+        // Dans le triangle de droite (longueur 16 pt), près de la base.
+        let inside = at(168.0, 101.5);
+        assert!(
+            inside[2] > 180 && inside[0] < 90,
+            "intérieur bleu attendu : {inside:?}"
+        );
+        let inside = at(32.0, 98.5);
+        assert!(
+            inside[2] > 180 && inside[0] < 90,
+            "tête de départ : {inside:?}"
+        );
+    }
+
+    /// Polygone fermé et ligne brisée : `/Vertices` de 2n nombres ; seul le
+    /// polygone trace le segment qui revient au départ.
+    #[test]
+    fn polygone_et_ligne_brisee() {
+        let tri = vec![
+            Point::new(20.0, 20.0),
+            Point::new(100.0, 180.0),
+            Point::new(180.0, 20.0),
+        ];
+        for closed in [true, false] {
+            let d = doc();
+            let annot = if closed {
+                NewAnnotation::Polygon {
+                    points: tri.clone(),
+                    style: style([1.0, 0.0, 0.0]),
+                    contents: None,
+                }
+            } else {
+                NewAnnotation::PolyLine {
+                    points: tri.clone(),
+                    style: style([1.0, 0.0, 0.0]),
+                    start: LineEnding::None,
+                    end: LineEnding::None,
+                    contents: None,
+                }
+            };
+            add_annotation(&d, &page0(&d), &annot, None).unwrap();
+            let d2 = reloaded(&d);
+            let info = &list_annotations(&d2, &page0(&d2)).unwrap()[0];
+            assert_eq!(info.subtype, if closed { "Polygon" } else { "PolyLine" });
+            assert_eq!(numbers(&d2, &raw(&d2, info), "Vertices").len(), 6);
+            let at = rendered(&d);
+            // Le bas du triangle : le segment de fermeture.
+            assert_eq!(is_red(at(100.0, 20.5)), closed, "fermeture {closed}");
+            assert!(is_red(at(60.0, 100.0)), "côté gauche");
+        }
+        let d = doc();
+        assert!(add_annotation(
+            &d,
+            &page0(&d),
+            &NewAnnotation::Polygon {
+                points: tri[..2].to_vec(),
+                style: style([1.0, 0.0, 0.0]),
+                contents: None,
+            },
+            None
+        )
+        .is_err());
+    }
+
+    /// Un trait de 500 points presque droit est simplifié, ses bouts
+    /// gardés ; deux traits font une seule annotation à deux tableaux ; un
+    /// point seul laisse une trace.
+    #[test]
+    fn encre_simplifiee() {
+        let d = doc();
+        let wobbly: Vec<Point> = (0..500)
+            .map(|i| {
+                let t = f64::from(i) / 499.0;
+                Point::new(20.0 + 160.0 * t, 60.0 + (t * 40.0).sin() * 0.05)
+            })
+            .collect();
+        add_annotation(
+            &d,
+            &page0(&d),
+            &NewAnnotation::Ink {
+                strokes: vec![wobbly.clone(), vec![Point::new(100.0, 150.0)]],
+                style: style([0.0, 0.0, 1.0]),
+                contents: None,
+            },
+            None,
+        )
+        .unwrap();
+        let d2 = reloaded(&d);
+        let info = &list_annotations(&d2, &page0(&d2)).unwrap()[0];
+        assert_eq!(info.subtype, "Ink");
+        let dict = raw(&d2, info);
+        let ink = d2.dict_get(&dict, "InkList").unwrap().unwrap();
+        let strokes = ink.as_array().unwrap();
+        assert_eq!(strokes.len(), 2);
+        let first: Vec<f64> = strokes[0]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Object::as_f64)
+            .collect();
+        assert!(first.len() < 100, "{} nombres", first.len());
+        assert_eq!(first[0], 20.0);
+        assert!((first[first.len() - 2] - 180.0).abs() < 1e-9);
+        let at = rendered(&d);
+        let blue = |p: [u8; 4]| p[2] > 180 && p[0] < 90;
+        assert!(blue(at(100.0, 60.0)), "trait : {:?}", at(100.0, 60.0));
+        assert!(blue(at(100.0, 150.0)), "point : {:?}", at(100.0, 150.0));
+    }
+
+    fn free_text(
+        text: &str,
+        border: Option<(Rgb, f64)>,
+        callout: Option<Callout>,
+    ) -> NewAnnotation {
+        NewAnnotation::FreeText {
+            rect: Rect::new(40.0, 100.0, 160.0, 140.0),
+            text: text.into(),
+            font: StandardFont::Helvetica,
+            size: 12.0,
+            color: [0.0, 0.0, 1.0],
+            border,
+            fill: None,
+            align: TextAlign::Left,
+            callout,
+        }
+    }
+
+    /// Une zone de texte : `/DA`, `/Q`, `/DS`, le texte relu (accents
+    /// compris), des pixels bleus dans la zone, le cadre rouge.
+    #[test]
+    fn zone_de_texte() {
+        let d = doc();
+        add_annotation(
+            &d,
+            &page0(&d),
+            &free_text("Élan à revoir\nWWWW", Some(([1.0, 0.0, 0.0], 1.0)), None),
+            None,
+        )
+        .unwrap();
+        let d2 = reloaded(&d);
+        let info = &list_annotations(&d2, &page0(&d2)).unwrap()[0];
+        assert_eq!(info.subtype, "FreeText");
+        assert_eq!(info.intent.as_deref(), Some("FreeText"));
+        assert_eq!(info.contents.as_deref(), Some("Élan à revoir\nWWWW"));
+        let dict = raw(&d2, info);
+        assert_eq!(
+            string(&d2, &dict, "DA").as_deref(),
+            Some("0 0 1 rg /Helv 12 Tf 1 0 0 RG")
+        );
+        assert_eq!(num(&d2, &dict, "Q"), Some(0.0));
+        assert!(string(&d2, &dict, "DS").is_some_and(|s| s.contains("Helvetica 12pt")));
+        let at = rendered(&d);
+        assert!(is_red(at(40.5, 120.0)), "cadre : {:?}", at(40.5, 120.0));
+        // Deuxième ligne : des W, bien pleins, sous la première.
+        let ink = (0..60)
+            .flat_map(|i| (0..8).map(move |j| (44.0 + f64::from(i) * 0.5, 114.0 + f64::from(j))))
+            .map(|(x, y)| at(x, y))
+            .filter(|p| p[2] > 150 && p[0] < 100)
+            .count();
+        assert!(ink > 20, "texte bleu introuvable ({ink} pixels)");
+    }
+
+    /// Une légende : l'intention, `/CL` qui part de l'ancre, `/RD`, la
+    /// flèche ouverte, et la ligne visible à mi-chemin.
+    #[test]
+    fn legende() {
+        let d = doc();
+        let call = Callout {
+            anchor: Point::new(100.0, 40.0),
+            knee: None,
+            ending: LineEnding::OpenArrow,
+        };
+        add_annotation(
+            &d,
+            &page0(&d),
+            &free_text("Voir ici", None, Some(call)),
+            None,
+        )
+        .unwrap();
+        let d2 = reloaded(&d);
+        let info = &list_annotations(&d2, &page0(&d2)).unwrap()[0];
+        assert_eq!(info.intent.as_deref(), Some("FreeTextCallout"));
+        let dict = raw(&d2, info);
+        let cl = numbers(&d2, &dict, "CL");
+        assert_eq!(cl.len(), 6, "{cl:?}");
+        assert_eq!(&cl[..2], [100.0, 40.0]);
+        // Jonction au milieu du bas de la zone, coude 12 pt dessous.
+        assert_eq!(&cl[4..], [100.0, 100.0]);
+        assert_eq!(&cl[2..4], [100.0, 88.0]);
+        let rd = numbers(&d2, &dict, "RD");
+        assert_eq!(rd.len(), 4);
+        assert!(rd.iter().all(|v| *v >= 0.0) && rd[1] > 50.0, "{rd:?}");
+        assert!(info.rect.y0 < 40.0, "{:?}", info.rect);
+        let at = rendered(&d);
+        let blue = |p: [u8; 4]| p[2] > 150 && p[0] < 100;
+        assert!(
+            (0..6).any(|i| blue(at(99.5 + f64::from(i) * 0.2, 70.0))),
+            "ligne d'ancrage : {:?}",
+            at(100.0, 70.0)
+        );
+    }
+
+    /// Un caractère hors de WinAnsi devient « ? » sans erreur, et il est
+    /// nommé d'avance ; le texte relu, lui, reste entier.
+    #[test]
+    fn zone_de_texte_hors_winansi() {
+        assert_eq!(freetext::unsupported_chars("Ω = 1"), vec!['Ω']);
+        let d = doc();
+        add_annotation(&d, &page0(&d), &free_text("Ω = 1", None, None), None).unwrap();
+        let d2 = reloaded(&d);
+        let info = &list_annotations(&d2, &page0(&d2)).unwrap()[0];
+        assert_eq!(info.contents.as_deref(), Some("Ω = 1"));
+    }
+
+    #[test]
+    fn noms_des_terminaisons() {
+        for e in LineEnding::ALL {
+            assert_eq!(LineEnding::from_name(e.pdf_name()), e);
+        }
+        assert_eq!(LineEnding::from_name("Diamond"), LineEnding::None);
+    }
+
+    /// Une ligne sans longueur ou un dessin sans point sont refusés, et le
+    /// document reste intact.
+    #[test]
+    fn formes_vides_refusees() {
+        let d = doc();
+        let p = Point::new(10.0, 10.0);
+        for annot in [
+            NewAnnotation::Line {
+                from: p,
+                to: p,
+                style: ShapeStyle::default(),
+                start: LineEnding::None,
+                end: LineEnding::OpenArrow,
+                contents: None,
+            },
+            NewAnnotation::Ink {
+                strokes: vec![Vec::new()],
+                style: ShapeStyle::default(),
+                contents: None,
+            },
+        ] {
+            assert!(add_annotation(&d, &page0(&d), &annot, None).is_err());
+        }
+        assert!(list_annotations(&d, &page0(&d)).unwrap().is_empty());
+        // Des valeurs aberrantes sont ramenées dans leurs bornes.
+        let wild = ShapeStyle {
+            stroke: Some([2.0, -1.0, f64::NAN]),
+            fill: None,
+            width: 1e9,
+            opacity: f64::NAN,
+        }
+        .clamped();
+        assert_eq!(wild.stroke, Some([1.0, 0.0, 0.0]));
+        assert_eq!(wild.width, 72.0);
+        assert_eq!(wild.opacity, 1.0);
     }
 }

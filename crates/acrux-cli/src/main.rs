@@ -116,11 +116,26 @@ fn usage() {
     eprintln!("  annots  <fichier> [pages] [-v]                  liste les annotations ; -v : identifiants (/NM)");
     eprintln!("  links   <fichier> [pages]                       liste les liens et leurs cibles");
     eprintln!("  outline <fichier>                               affiche les signets (arbre)");
-    eprintln!("  annotate <fichier> <page> <square|highlight|underline|strikeout|squiggly|caret|replace|note|link>");
-    eprintln!("          <x0> <y0> <x1> <y1> [texte] -o <sortie>");
+    eprintln!("  annotate <fichier> <page> <type> … -o <sortie>");
+    eprintln!("          square|circle|highlight|underline|strikeout|squiggly|link <x0> <y0> <x1> <y1> [texte]");
     eprintln!("                                  underline, strikeout, squiggly : balise la zone (texte = commentaire) ;");
-    eprintln!("                                  caret : signe d'insertion en x0, sur la ligne y0..y1 (texte obligatoire) ;");
-    eprintln!("                                  replace : barre la zone et propose le texte, signe au bout (texte obligatoire)");
+    eprintln!("          caret|replace <x0> <y0> <x1> <y1> <texte>");
+    eprintln!(
+        "                                  caret : signe d'insertion en x0, sur la ligne y0..y1 ;"
+    );
+    eprintln!("                                  replace : barre la zone et propose le texte, signe au bout");
+    eprintln!("          line|arrow <x1> <y1> <x2> <y2> [--head open|closed|circle|square|butt|none] [--tail …]");
+    eprintln!("          polygon|polyline <x> <y> <x> <y> <x> <y> …");
+    eprintln!("          ink --points \"x,y x,y …;x,y …\"   dessin à main levée, un « ; » entre deux traits");
+    eprintln!("                                  formes : --color r,g,b --fill r,g,b --width <pt> --opacity 0..1");
+    eprintln!("          text <x0> <y0> <x1> <y1> <texte> [--font helvetica|times|courier[-bold|-italic]]");
+    eprintln!("               [--size 12] [--align left|center|right] [--color r,g,b] [--border r,g,b] [--fill r,g,b]");
+    eprintln!(
+        "                                  zone de texte ; « \\n » dans le texte passe à la ligne"
+    );
+    eprintln!(
+        "          callout <x0> <y0> <x1> <y1> <ax> <ay> <texte>   légende fléchée vers (ax, ay)"
+    );
     eprintln!();
     eprintln!("  attachments <fichier>                           liste les pièces jointes (nom, taille, type, page)");
     eprintln!(
@@ -1359,6 +1374,7 @@ fn output_arg(rest: &[String]) -> acrux_core::Result<String> {
     ))
 }
 
+#[allow(clippy::too_many_lines)] // la liste des options à valeur, une par ligne
 fn positional(rest: &[String]) -> Vec<&String> {
     let mut out = Vec::new();
     let mut skip = false;
@@ -1448,6 +1464,12 @@ fn positional(rest: &[String]) -> Vec<&String> {
                 | "--layout"
                 | "--open-page"
                 | "--open-zoom"
+                | "--fill"
+                | "--width"
+                | "--border"
+                | "--head"
+                | "--tail"
+                | "--points"
         ) {
             skip = true;
             continue;
@@ -2062,74 +2084,335 @@ fn short_id(name: &str) -> String {
     format!("{head}…")
 }
 
+/// Usage de `annotate`, rappelé à chaque erreur de syntaxe.
+const ANNOTATE_USAGE: &str = "usage : annotate <fichier> <page> <type> … -o <sortie>
+  square|circle|highlight|underline|strikeout|squiggly|link <x0> <y0> <x1> <y1> [texte]
+  caret|replace|note <x0> <y0> <x1> <y1> <texte>
+  line|arrow <x1> <y1> <x2> <y2> [texte] [--head open|closed|circle|square|butt|none] [--tail …]
+  polygon|polyline <x> <y> <x> <y> <x> <y> … [texte]
+  ink --points \"x,y x,y …;x,y …\" [texte]
+  text <x0> <y0> <x1> <y1> <texte> [--font helvetica|times|courier[-bold]] [--size 12] [--align left|center|right]
+  callout <x0> <y0> <x1> <y1> <ax> <ay> <texte>
+  formes : --color r,g,b --fill r,g,b --width <pt> --opacity 0..1 ; texte : --color, --fill, --border r,g,b";
+
+fn annotate_error(message: &str) -> acrux_core::Error {
+    acrux_core::Error::Corrupt(if message.is_empty() {
+        ANNOTATE_USAGE.to_string()
+    } else {
+        format!("{message}\n{ANNOTATE_USAGE}")
+    })
+}
+
+/// Une valeur d'option lue en nombre, ou l'erreur qui dit laquelle.
+fn number_option(rest: &[String], name: &str) -> acrux_core::Result<Option<f64>> {
+    option_value(rest, name)
+        .map(|v| {
+            v.trim()
+                .replace(',', ".")
+                .parse::<f64>()
+                .ok()
+                .filter(|n| n.is_finite())
+                .ok_or_else(|| annotate_error(&format!("{name} : nombre attendu, reçu « {v} »")))
+        })
+        .transpose()
+}
+
+/// Terminaison de ligne nommée en ligne de commande.
+fn line_ending_arg(
+    rest: &[String],
+    name: &str,
+    default: acrux_features::annotations::LineEnding,
+) -> acrux_core::Result<acrux_features::annotations::LineEnding> {
+    use acrux_features::annotations::LineEnding;
+    let Some(v) = option_value(rest, name) else {
+        return Ok(default);
+    };
+    Ok(match v.to_ascii_lowercase().as_str() {
+        "open" | "ouverte" => LineEnding::OpenArrow,
+        "closed" | "fermee" | "fermée" => LineEnding::ClosedArrow,
+        "circle" | "rond" => LineEnding::Circle,
+        "square" | "carre" | "carré" => LineEnding::Square,
+        "butt" | "butee" | "butée" => LineEnding::Butt,
+        "none" | "aucune" => LineEnding::None,
+        _ => {
+            return Err(annotate_error(&format!(
+                "{name} : terminaison inconnue « {v} »"
+            )))
+        }
+    })
+}
+
+/// Police standard nommée en ligne de commande : `helvetica`, `times`,
+/// `courier`, avec `-bold`, `-italic` ou `-bolditalic`.
+fn standard_font_arg(rest: &[String]) -> acrux_core::Result<acrux_features::stamp::StandardFont> {
+    use acrux_features::stamp::StandardFont;
+    let Some(v) = option_value(rest, "--font") else {
+        return Ok(StandardFont::Helvetica);
+    };
+    let name = v.to_ascii_lowercase().replace(['_', ' '], "-");
+    let (family, style) = name.split_once('-').unwrap_or((name.as_str(), ""));
+    let bold = style.contains("bold") || style.contains("gras");
+    let italic = style.contains("italic") || style.contains("oblique") || style.contains("ital");
+    Ok(match (family, bold, italic) {
+        ("helvetica" | "arial" | "sans", false, false) => StandardFont::Helvetica,
+        ("helvetica" | "arial" | "sans", true, false) => StandardFont::HelveticaBold,
+        ("helvetica" | "arial" | "sans", false, true) => StandardFont::HelveticaOblique,
+        ("helvetica" | "arial" | "sans", true, true) => StandardFont::HelveticaBoldOblique,
+        ("times" | "serif", false, false) => StandardFont::TimesRoman,
+        ("times" | "serif", true, false) => StandardFont::TimesBold,
+        ("times" | "serif", false, true) => StandardFont::TimesItalic,
+        ("times" | "serif", true, true) => StandardFont::TimesBoldItalic,
+        ("courier" | "mono", false, false) => StandardFont::Courier,
+        ("courier" | "mono", true, false) => StandardFont::CourierBold,
+        ("courier" | "mono", false, true) => StandardFont::CourierOblique,
+        ("courier" | "mono", true, true) => StandardFont::CourierBoldOblique,
+        _ => return Err(annotate_error(&format!("--font : police inconnue « {v} »"))),
+    })
+}
+
+/// Traits d'encre : `x,y x,y …`, un « ; » entre deux traits.
+fn ink_points_arg(spec: &str) -> acrux_core::Result<Vec<Vec<acrux_core::Point>>> {
+    let mut strokes = Vec::new();
+    for part in spec.split(';') {
+        let mut stroke = Vec::new();
+        for pair in part.split_whitespace() {
+            let (x, y) = pair
+                .split_once(',')
+                .and_then(|(x, y)| Some((x.trim().parse().ok()?, y.trim().parse().ok()?)))
+                .filter(|(x, y): &(f64, f64)| x.is_finite() && y.is_finite())
+                .ok_or_else(|| {
+                    annotate_error(&format!("--points : « {pair} » n'est pas « x,y »"))
+                })?;
+            stroke.push(acrux_core::Point::new(x, y));
+        }
+        if !stroke.is_empty() {
+            strokes.push(stroke);
+        }
+    }
+    if strokes.is_empty() {
+        return Err(annotate_error("--points : aucun point"));
+    }
+    Ok(strokes)
+}
+
+/// Texte donné en ligne de commande : « \n » écrit tel quel y est un saut de
+/// ligne, faute de pouvoir en taper un dans la plupart des consoles.
+fn cli_text(raw: &str) -> String {
+    raw.replace("\\n", "\n")
+}
+
+#[allow(clippy::too_many_lines)] // une branche par type d'annotation
 fn cmd_annotate(path: &str, rest: &[String]) -> acrux_core::Result<()> {
-    use acrux_features::annotations::{MarkupKind, NewAnnotation, CARET_COLOR};
+    use acrux_core::Point;
+    use acrux_features::annotations::{
+        Callout, LineEnding, MarkupKind, NewAnnotation, ShapeStyle, TextAlign, CARET_COLOR,
+    };
     let out = output_arg(rest)?;
     let pos = positional(rest);
-    let usage = "usage : annotate <fichier> <page> <square|highlight|underline|strikeout|squiggly|caret|replace|note|link> <x0> <y0> <x1> <y1> [texte] -o <sortie>";
     let (Some(page_spec), Some(kind)) = (pos.first(), pos.get(1)) else {
-        return Err(acrux_core::Error::Corrupt(usage.into()));
+        return Err(annotate_error(""));
     };
-    let coord = |i: usize| -> acrux_core::Result<f64> {
-        pos.get(2 + i)
-            .and_then(|v| v.parse().ok())
-            .ok_or_else(|| acrux_core::Error::Corrupt(usage.into()))
+    let kind = kind.to_ascii_lowercase();
+    let args: Vec<&str> = pos[2..].iter().map(|s| s.as_str()).collect();
+    // Les nombres en tête, puis, s'il y en a, le texte.
+    let numbers: Vec<f64> = args
+        .iter()
+        .map_while(|a| a.parse::<f64>().ok().filter(|v| v.is_finite()))
+        .collect();
+    let text = args.get(numbers.len()).map(|t| cli_text(t));
+    let need = |n: usize| -> acrux_core::Result<()> {
+        if numbers.len() < n {
+            Err(annotate_error(&format!(
+                "{kind} : {n} coordonnées attendues, {} reçues",
+                numbers.len()
+            )))
+        } else {
+            Ok(())
+        }
     };
-    let (x0, y0, x1, y1) = (coord(0)?, coord(1)?, coord(2)?, coord(3)?);
-    let text = pos.get(6).map(ToString::to_string);
-    // Insérer ou remplacer sans dire quoi n'a pas de sens.
+    // Insérer, remplacer ou écrire sans dire quoi n'a pas de sens.
     let required = || {
         text.clone()
             .filter(|t| !t.trim().is_empty())
-            .ok_or_else(|| {
-                acrux_core::Error::Corrupt(format!("{kind} : texte obligatoire\n{usage}"))
-            })
+            .ok_or_else(|| annotate_error(&format!("{kind} : texte obligatoire")))
+    };
+    let color = option_value(rest, "--color")
+        .map(|c| parse_rgb(c))
+        .transpose()?;
+    let fill = option_value(rest, "--fill")
+        .map(|c| parse_rgb(c))
+        .transpose()?;
+    let style = ShapeStyle {
+        stroke: Some(color.unwrap_or(acrux_features::annotations::SHAPE_COLOR)),
+        fill,
+        width: number_option(rest, "--width")?.unwrap_or(2.0),
+        opacity: number_option(rest, "--opacity")?.unwrap_or(1.0),
     };
     let (doc, _) = open(path)?;
     let all_pages = collect_pages(&doc)?;
     let page_index = acrux_features::pages::parse_page_spec(page_spec, all_pages.len())?[0];
-    let zone = acrux_core::Rect::new(x0, y0, x1, y1);
-    let markup = |kind: MarkupKind| NewAnnotation::Markup {
-        kind,
-        quads: vec![zone],
-        color: kind.default_color(),
-        contents: text.clone(),
+    let zone = || -> acrux_core::Result<acrux_core::Rect> {
+        need(4)?;
+        Ok(acrux_core::Rect::new(
+            numbers[0], numbers[1], numbers[2], numbers[3],
+        ))
+    };
+    let markup = |kind: MarkupKind| -> acrux_core::Result<NewAnnotation> {
+        Ok(NewAnnotation::Markup {
+            kind,
+            quads: vec![zone()?],
+            color: color.unwrap_or_else(|| kind.default_color()),
+            contents: text.clone(),
+        })
+    };
+    let points = || -> acrux_core::Result<Vec<Point>> {
+        if numbers.len() % 2 != 0 {
+            return Err(annotate_error(&format!(
+                "{kind} : les coordonnées vont par paires x y"
+            )));
+        }
+        Ok(numbers
+            .chunks_exact(2)
+            .map(|c| Point::new(c[0], c[1]))
+            .collect())
+    };
+    let free_text = |rect: acrux_core::Rect,
+                     callout: Option<Callout>|
+     -> acrux_core::Result<NewAnnotation> {
+        let body = required()?;
+        let unsupported = acrux_features::annotations::freetext::unsupported_chars(&body);
+        if !unsupported.is_empty() {
+            let list: String = unsupported.iter().collect();
+            eprintln!("attention : caractères non représentables dans une police standard, remplacés par « ? » : {list}");
+        }
+        let align = match option_value(rest, "--align").map(|a| a.to_ascii_lowercase()) {
+            None => TextAlign::Left,
+            Some(a) => match a.as_str() {
+                "left" | "gauche" => TextAlign::Left,
+                "center" | "centre" | "centré" => TextAlign::Center,
+                "right" | "droite" => TextAlign::Right,
+                _ => return Err(annotate_error(&format!("--align : « {a} » inconnu"))),
+            },
+        };
+        let border_width = number_option(rest, "--width")?.unwrap_or(1.0);
+        let border = option_value(rest, "--border")
+            .map(|c| parse_rgb(c))
+            .transpose()?
+            .map(|c| (c, border_width))
+            // Une légende a toujours un cadre : sans lui, la ligne ne
+            // mènerait nulle part de visible.
+            .or_else(|| callout.map(|_| (color.unwrap_or([0.0, 0.0, 0.0]), 1.0)));
+        Ok(NewAnnotation::FreeText {
+            rect,
+            text: body,
+            font: standard_font_arg(rest)?,
+            size: number_option(rest, "--size")?.unwrap_or(12.0),
+            color: color.unwrap_or([0.0, 0.0, 0.0]),
+            border,
+            fill,
+            align,
+            callout,
+        })
     };
     let annot = match kind.as_str() {
-        "square" => NewAnnotation::Square {
-            rect: zone,
-            stroke: [1.0, 0.0, 0.0],
-            width: 2.0,
-            fill: None,
+        "square" | "rectangle" => NewAnnotation::Square {
+            rect: zone()?,
+            style,
             contents: text.clone(),
         },
-        "highlight" => markup(MarkupKind::Highlight),
-        "underline" => markup(MarkupKind::Underline),
-        "strikeout" => markup(MarkupKind::StrikeOut),
-        "squiggly" => markup(MarkupKind::Squiggly),
-        "caret" => NewAnnotation::Caret {
-            x: x0,
-            line: zone,
-            contents: required()?,
-            color: CARET_COLOR,
+        "circle" | "ellipse" => NewAnnotation::Circle {
+            rect: zone()?,
+            style,
+            contents: text.clone(),
         },
+        "line" | "arrow" => {
+            need(4)?;
+            let head = if kind == "arrow" {
+                LineEnding::OpenArrow
+            } else {
+                LineEnding::None
+            };
+            NewAnnotation::Line {
+                from: Point::new(numbers[0], numbers[1]),
+                to: Point::new(numbers[2], numbers[3]),
+                style,
+                start: line_ending_arg(rest, "--tail", LineEnding::None)?,
+                end: line_ending_arg(rest, "--head", head)?,
+                contents: text.clone(),
+            }
+        }
+        "polygon" => {
+            need(6)?;
+            NewAnnotation::Polygon {
+                points: points()?,
+                style,
+                contents: text.clone(),
+            }
+        }
+        "polyline" => {
+            need(4)?;
+            NewAnnotation::PolyLine {
+                points: points()?,
+                style,
+                start: line_ending_arg(rest, "--tail", LineEnding::None)?,
+                end: line_ending_arg(rest, "--head", LineEnding::None)?,
+                contents: text.clone(),
+            }
+        }
+        "ink" => {
+            let spec = option_value(rest, "--points")
+                .ok_or_else(|| annotate_error("ink : --points obligatoire"))?;
+            NewAnnotation::Ink {
+                strokes: ink_points_arg(spec)?,
+                style,
+                // Pour l'encre, pas de coordonnées : le texte est le premier
+                // argument libre.
+                contents: args.first().map(|t| cli_text(t)),
+            }
+        }
+        "text" | "freetext" => free_text(zone()?, None)?,
+        "callout" => {
+            need(6)?;
+            let call = Callout {
+                anchor: Point::new(numbers[4], numbers[5]),
+                knee: None,
+                ending: line_ending_arg(rest, "--head", LineEnding::OpenArrow)?,
+            };
+            free_text(zone()?, Some(call))?
+        }
+        "highlight" => markup(MarkupKind::Highlight)?,
+        "underline" => markup(MarkupKind::Underline)?,
+        "strikeout" => markup(MarkupKind::StrikeOut)?,
+        "squiggly" => markup(MarkupKind::Squiggly)?,
+        "caret" => {
+            let zone = zone()?;
+            NewAnnotation::Caret {
+                x: zone.x0,
+                line: zone,
+                contents: required()?,
+                color: color.unwrap_or(CARET_COLOR),
+            }
+        }
         "replace" => NewAnnotation::Replace {
-            quads: vec![zone],
+            quads: vec![zone()?],
             text: required()?,
             strike: MarkupKind::StrikeOut.default_color(),
             caret: CARET_COLOR,
         },
-        "note" => NewAnnotation::Note {
-            x: x0,
-            y: y1,
-            contents: text.clone().unwrap_or_default(),
-            color: [1.0, 0.8, 0.0],
-        },
+        "note" => {
+            need(2)?;
+            NewAnnotation::Note {
+                x: numbers[0],
+                y: numbers.get(3).copied().unwrap_or(numbers[1]),
+                contents: text.clone().unwrap_or_default(),
+                color: color.unwrap_or([1.0, 0.8, 0.0]),
+            }
+        }
         "link" => NewAnnotation::Link {
-            rect: zone,
+            rect: zone()?,
             uri: text.clone().unwrap_or_default(),
         },
-        _ => return Err(acrux_core::Error::Corrupt(usage.into())),
+        _ => return Err(annotate_error(&format!("type « {kind} » inconnu"))),
     };
     acrux_features::annotations::add_annotation(&doc, &all_pages[page_index], &annot, Some("acr"))?;
     save(&doc, &out, rest)
@@ -4503,6 +4786,66 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    /// Les traits d'encre, les terminaisons, les polices et les sauts de
+    /// ligne se lisent comme l'aide les décrit ; ce qui ne se lit pas est
+    /// refusé avec un message, jamais deviné.
+    #[test]
+    fn annotate_lit_ses_options() {
+        use acrux_features::annotations::LineEnding;
+        use acrux_features::stamp::StandardFont;
+        let strokes = ink_points_arg("10,10 40,60 80,20;100,100 140,140").unwrap();
+        assert_eq!(strokes.len(), 2);
+        assert_eq!(strokes[0].len(), 3);
+        assert_eq!(strokes[1][1], acrux_core::Point::new(140.0, 140.0));
+        assert!(ink_points_arg("10;20").is_err());
+        assert!(ink_points_arg(" ; ").is_err());
+        let rest = args(&[
+            "--head",
+            "closed",
+            "--tail",
+            "circle",
+            "--font",
+            "times-bold",
+        ]);
+        assert_eq!(
+            line_ending_arg(&rest, "--head", LineEnding::None).unwrap(),
+            LineEnding::ClosedArrow
+        );
+        assert_eq!(
+            line_ending_arg(&rest, "--tail", LineEnding::None).unwrap(),
+            LineEnding::Circle
+        );
+        assert_eq!(
+            line_ending_arg(&args(&[]), "--head", LineEnding::OpenArrow).unwrap(),
+            LineEnding::OpenArrow
+        );
+        assert!(
+            line_ending_arg(&args(&["--head", "losange"]), "--head", LineEnding::None).is_err()
+        );
+        assert_eq!(standard_font_arg(&rest).unwrap(), StandardFont::TimesBold);
+        assert_eq!(
+            standard_font_arg(&args(&["--font", "courier"])).unwrap(),
+            StandardFont::Courier
+        );
+        assert!(standard_font_arg(&args(&["--font", "comic"])).is_err());
+        assert_eq!(
+            cli_text("Ligne 1\nLigne 2"),
+            "Ligne 1
+Ligne 2"
+        );
+        // Les options à valeur ne sont pas des coordonnées.
+        let rest = args(&[
+            "1", "circle", "10", "20", "30", "40", "--width", "3", "--fill", "1,1,0",
+        ]);
+        let pos: Vec<&str> = positional(&rest).into_iter().map(String::as_str).collect();
+        assert_eq!(pos, ["1", "circle", "10", "20", "30", "40"]);
+        assert!(number_option(&args(&["--width", "épais"]), "--width").is_err());
+        assert_eq!(
+            number_option(&args(&["--opacity", "0,5"]), "--opacity").unwrap(),
+            Some(0.5)
+        );
     }
 
     #[test]

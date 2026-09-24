@@ -48,6 +48,27 @@ Le corpus réel `reels/chrome-skia-2pages-texte-tableau-svg.pdf` sert
 d'épreuve (`tests/text_markup_corpus.rs`) : un mot souligné, un autre
 remplacé, relus après enregistrement, et le texte de la page inchangé.
 
+## Dessiner et écrire (`annotations::shapes`, `annotations::freetext`)
+
+Les formes et les zones de texte ont leur géométrie dans deux sous-modules
+**purs** — des points et un style en entrée, un contenu d'apparence et sa
+boîte en sortie — que l'application appelle aussi pour dessiner l'aperçu d'un
+geste : la flèche qu'on voit en glissant est celle qui sera écrite.
+
+| Annotation | Ce qu'elle devient dans le fichier |
+| --- | --- |
+| `Square`, `Circle` | rectangle ou ellipse (quatre arcs de Bézier), trait rentré d'une demi-épaisseur ; `ShapeStyle` : `/C` du trait, `/IC` du fond, `/BS /W`, opacité `/CA` et état graphique `GS0` dans l'apparence |
+| `Line` | `/L`, `/LE` (flèche ouverte ou fermée, rond, carré, butée : `shapes::ending_shape`), `/IT /LineArrow` pour une flèche ; la boîte compte la tête |
+| `PolyLine`, `Polygon` | `/Vertices` ; terminaisons pour la ligne brisée |
+| `Ink` | traits simplifiés (Ramer-Douglas-Peucker, 0,35 pt : `shapes::simplify`), lissés en Bézier (Catmull-Rom) ; `/InkList` garde les points simplifiés, un point seul reste visible |
+| `FreeText` | zone de texte en police standard WinAnsi : `/Contents`, `/DA` (couleur, police, corps, et `RG` du cadre), `/DS`, `/Q`, `/BS`, `/C` du fond (convention d'Acrobat) ; la mise en lignes `freetext::layout` est publique, pour que la frappe se coupe comme l'écrit |
+| `FreeText` + `callout` | légende : `/IT /FreeTextCallout`, `/CL` (ancre, coude, jonction au milieu du côté qui fait face à l'ancre), `/LE`, `/RD` |
+
+Un caractère hors de WinAnsiEncoding devient « ? » ; `freetext::unsupported_chars`
+les nomme d'avance, pour prévenir. Épreuves : `tests/annotations_corpus.rs` pose
+les sept sortes sur deux pages d'un fichier réel (enregistrement incrémental et
+complet), sur une page tournée de 90°, et à côté d'annotations sans apparence.
+
 ## Les modèles 3D (`three_d`)
 
 Un PDF peut porter un objet en trois dimensions : une annotation `/3D` réserve
