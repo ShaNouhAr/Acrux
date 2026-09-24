@@ -198,6 +198,42 @@ acr media rapport.pdf --extract ./medias   # sort les fichiers incorporés
 
 Dans l'application : un clic sur l'affiche lance la lecture.
 
+## Organiser les pages (`pages`, `pages::split`)
+
+Pivoter, supprimer, réordonner, extraire, insérer et fusionner, plus ce
+qu'il faut pour organiser un document comme dans Acrobat :
+
+| Fonction | Rôle |
+| --- | --- |
+| `move_block(count, bloc, at)` | l'ordre complet après le glisser d'un **bloc** de pages vers la position `at` (0 à `count`, dans l'ordre d'origine) ; déposé dans lui-même, l'ordre ne change pas |
+| `duplicate_block(count, bloc)` | l'ordre qui duplique un bloc, ses copies juste après sa dernière page |
+| `duplicate_page_dict` | la copie d'une page, qui partage contenus et ressources mais a **ses propres annotations** (`/P` vers la copie, `/Popup`, `/Parent` et `/IRT` reportés, widgets omis) : un commentaire ne vit plus sur deux pages |
+| `insert_blank_page(doc, at, format, rotation)` | une page vierge, au format et à la rotation de la page voisine |
+| `replace_pages(dst, src, paires)` | le **contenu** de pages remplacé par celui d'un autre fichier : la page garde son objet, donc ses signets, liens, étiquettes et commentaires ; les boîtes héritées ne recadrent pas la nouvelle page |
+| `split::plan_parts` | le découpage : tranches de N pages, un fichier par signet de premier niveau, taille maximale (estimation par l'union des objets, vérifiée par une vraie écriture), groupes donnés |
+| `split::write_parts` | écrit chaque partie et la passe à un puits, sans rien garder d'une partie à l'autre |
+| `split::part_file_name`, `split::parse_size` | `rapport-01 Introduction.pdf` (titre assaini pour Windows), et « 2,5 », « 500 Ko », « 1.5M » |
+
+Copier une page d'un document à l'autre suivait **toutes** ses
+références : un lien « voir page 40 » embarquait la page 40 entière, images
+comprises, comme objet orphelin. L'`Importer` sait maintenant où vont les
+pages copiées (`map_ref`) et lesquelles restent derrière (`drop_ref`) : un
+lien vers une page extraite vise sa copie, un lien vers une page laissée de
+côté devient `null`. L'extraction garde aussi les calques
+(`/OCProperties`), sans lesquels un calque masqué réapparaissait.
+
+Le test `tests/pages_corpus.rs` fractionne chaque fichier du corpus page
+par page, recombine les parties et compare le rendu **au pixel près**.
+
+```bash
+acr split rapport.pdf --every 10 -d parties
+acr split rapport.pdf --bookmarks            # rapport-1 Introduction.pdf…
+acr split rapport.pdf --max-size 2M --force
+acr extract rapport.pdf 3-7 --each
+acr insert-blank rapport.pdf 4 -o avec-vierge.pdf
+acr replace rapport.pdf 2-3 corrections.pdf -o corrige.pdf
+```
+
 ## Tampons (`rubber_stamp`)
 
 Les tampons d'Acrobat, en annotations `/Stamp` (§12.5.6.12). Le nom `stamp`

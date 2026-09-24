@@ -21,7 +21,7 @@
 //! | `navigation` | destinations, liens, actions, signets                   | §1            |
 //! | `ocr`    | lecture du texte d'une image : seuillage, découpe en lignes et en lettres, reconnaissance par gabarits | §2 |
 //! | `outline_edit` | écriture des signets : arbre complet, ajout, retrait, déplacement, signets automatiques | §1 |
-//! | `pages`  | pivoter, supprimer, réordonner, extraire, insérer, fusionner | §5            |
+//! | `pages`  | pivoter, supprimer, réordonner (un bloc de pages), dupliquer, extraire, insérer, pages vierges, remplacer, fusionner ; fractionner (`split` : tranches, signets, taille maximale) | §5 |
 //! | `pagelabels` | étiquettes de page `/PageLabels` (i, ii, 1, 2, Annexe-A…), lecture, écriture, recherche par étiquette | §1 |
 //! | `preflight` | contrôle en amont PDF/A, PDF/X, PDF/UA, correctifs, aperçu de sortie | §10 |
 //! | `signature` | signatures numériques (§12.8) : inventaire, vérification (condensé, RSA, chaîne X.509, couverture, modifications), pose d'une signature CMS détachée | §9 |

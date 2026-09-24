@@ -4,7 +4,8 @@
 //! benchmarks) et aux utilisateurs avancés (conversion par lots).
 //!
 //! Commandes : inspection (`info`, `pages`, `dump`, `check`), modification
-//! (`rotate`, `delete`, `reorder`, `extract`, `merge`, `rewrite`), création
+//! (`rotate`, `delete`, `reorder`, `extract`, `merge`, `split`,
+//! `insert-blank`, `replace`, `rewrite`), création
 //! (`create`, `combine`), rendu,
 //! texte et conversion (`render`, `export`, `text`, `bench`), annotations (`annots`, `annotate`),
 //! pièces jointes (`attachments`, `attach`, `detach`), étiquettes de page
@@ -19,6 +20,7 @@
 //! `--password <mdp>` ouvre un document chiffré.
 
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -29,6 +31,9 @@ use acrux_document::protect::{
 use acrux_document::text::decode_text_string;
 use acrux_document::{collect_pages, writer, Document, Name, Object, ObjectRef, XrefKind};
 use acrux_features::navigation::{flatten_outline, outline, page_links, Action, PageIndex, View};
+use acrux_features::pages::split::{
+    parse_size, part_file_name, plan_parts, write_parts, SplitPlan,
+};
 
 /// Mot de passe passé par `--password`, lu par `open`.
 static PASSWORD: OnceLock<Vec<u8>> = OnceLock::new();
@@ -52,7 +57,21 @@ fn usage() {
     eprintln!("  delete  <fichier> <pages> -o <sortie>           supprime des pages");
     eprintln!("  reorder <fichier> <pages> -o <sortie>           réordonne (les pages absentes sont supprimées)");
     eprintln!("  extract <fichier> <pages> -o <sortie>           nouveau document avec ces pages");
+    eprintln!("  extract <fichier> <pages> --each [-d <dossier>] [--prefix <nom>] [--force]");
+    eprintln!("                                  un fichier par page");
     eprintln!("  merge   <fichier>... -o <sortie>                fusionne plusieurs documents");
+    eprintln!("  split   <fichier> --every N | --bookmarks | --max-size 2M | --each");
+    eprintln!("          [-d <dossier>] [--prefix <nom>] [--force]");
+    eprintln!("                                  fractionne : tranches de N pages, un fichier par signet de premier");
+    eprintln!("                                  niveau (son titre entre dans le nom), parties d'au plus 2M (K, M, G ;");
+    eprintln!("                                  sans unité : octets), ou une page par fichier ; fichiers <nom>-01.pdf…");
+    eprintln!("                                  dans le dossier du document ; rien n'est écrasé sans --force");
+    eprintln!("  insert-blank <fichier> <position> [--like <page>] -o <sortie>");
+    eprintln!("                                  page vierge en <position> (1 = en tête), au format de la page qui");
+    eprintln!("                                  occupait cette place (ou de --like)");
+    eprintln!("  replace <fichier> <pages> <source.pdf> [<pages source>] -o <sortie>");
+    eprintln!("                                  remplace le contenu de ces pages par celui des pages de la source");
+    eprintln!("                                  (les premières par défaut) ; signets, liens et commentaires restent");
     eprintln!();
     eprintln!("  create --blank [--size A4|lettre|210x297mm] [--orientation portrait|paysage] [--pages N]");
     eprintln!("         [--margin N] -o <sortie>          document vierge (A0 à A6, lettre, légal, tabloïd,");
@@ -389,6 +408,9 @@ fn main() -> ExitCode {
         (Some("reorder"), Some(f)) => cmd_reorder(f, &args[2..]),
         (Some("extract"), Some(f)) => cmd_extract(f, &args[2..]),
         (Some("merge"), Some(_)) => cmd_merge(&args[1..]),
+        (Some("split"), Some(f)) => cmd_split(f, &args[2..]),
+        (Some("insert-blank"), Some(f)) => cmd_insert_blank(f, &args[2..]),
+        (Some("replace"), Some(f)) => cmd_replace(f, &args[2..]),
         (Some("create"), Some(_)) => cmd_create(&args[1..]),
         (Some("combine"), Some(_)) => cmd_combine(&args[1..]),
         (Some("rewrite"), Some(f)) => cmd_rewrite(f, &args[2..]),
@@ -1632,6 +1654,11 @@ fn positional(rest: &[String]) -> Vec<&String> {
         if matches!(
             a.as_str(),
             "-o" | "--output"
+                | "-d"
+                | "--dir"
+                | "--every"
+                | "--max-size"
+                | "--like"
                 | "--dpi"
                 | "--user"
                 | "--owner"
@@ -1805,13 +1832,27 @@ fn cmd_reorder(path: &str, rest: &[String]) -> acrux_core::Result<()> {
 }
 
 fn cmd_extract(path: &str, rest: &[String]) -> acrux_core::Result<()> {
-    let out = output_arg(rest)?;
     let pos = positional(rest);
     let Some(spec) = pos.first() else {
         return Err(acrux_core::Error::Corrupt(
-            "usage : extract <fichier> <pages> -o <sortie>".into(),
+            "usage : extract <fichier> <pages> -o <sortie> (ou --each)".into(),
         ));
     };
+    if rest.iter().any(|a| a == "--each") {
+        // Un fichier par page : le fractionnement, sur les pages choisies.
+        let (doc, _) = open(path)?;
+        let pages = pages_arg(&doc, spec)?;
+        let plan = SplitPlan::Groups(pages.into_iter().map(|p| vec![p]).collect());
+        let (dir, stem) = split_target(path, rest);
+        return write_split(
+            &doc,
+            &plan,
+            &dir,
+            &stem,
+            rest.iter().any(|a| a == "--force"),
+        );
+    }
+    let out = output_arg(rest)?;
     let (doc, _) = open(path)?;
     let pages = pages_arg(&doc, spec)?;
     let new_doc = acrux_features::pages::extract_pages(&doc, &pages)?;
@@ -1847,6 +1888,197 @@ fn cmd_merge(rest: &[String]) -> acrux_core::Result<()> {
         collect_pages(&merged)?.len()
     );
     Ok(())
+}
+
+/// Pages d'une partie, pour le compte rendu : « page 4 », « pages 1 à 3 »,
+/// ou la liste quand elles ne se suivent pas.
+fn describe_pages(pages: &[usize]) -> String {
+    match pages {
+        [one] => format!("page {}", one + 1),
+        [first, .., last] if pages.windows(2).all(|w| w[1] == w[0] + 1) => {
+            format!("pages {} à {}", first + 1, last + 1)
+        }
+        _ => {
+            let list: Vec<String> = pages.iter().map(|p| (p + 1).to_string()).collect();
+            format!("pages {}", list.join(", "))
+        }
+    }
+}
+
+/// Dossier et préfixe des fichiers d'un fractionnement : `-d` (sinon le
+/// dossier du document) et `--prefix` (sinon le nom du document).
+fn split_target(path: &str, rest: &[String]) -> (PathBuf, String) {
+    let input = Path::new(path);
+    let dir = option_value(rest, "-d")
+        .or_else(|| option_value(rest, "--dir"))
+        .map_or_else(
+            || {
+                input
+                    .parent()
+                    .filter(|p| !p.as_os_str().is_empty())
+                    .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+            },
+            PathBuf::from,
+        );
+    let stem = option_value(rest, "--prefix").cloned().unwrap_or_else(|| {
+        input.file_stem().map_or_else(
+            || "document".to_string(),
+            |s| s.to_string_lossy().into_owned(),
+        )
+    });
+    (dir, stem)
+}
+
+/// Écrit un fractionnement dans `dir`, un fichier par partie. Tous les noms
+/// sont vérifiés **avant** la première écriture : sans `--force`, un seul
+/// fichier déjà là arrête tout, et rien n'est écrit à moitié.
+fn write_split(
+    doc: &Document,
+    plan: &SplitPlan,
+    dir: &Path,
+    stem: &str,
+    force: bool,
+) -> acrux_core::Result<()> {
+    let options = acrux_document::SaveOptions::default();
+    let planned = plan_parts(doc, plan, &options)?;
+    let total = planned.parts.len();
+    let names: Vec<PathBuf> = planned
+        .parts
+        .iter()
+        .enumerate()
+        .map(|(i, part)| dir.join(part_file_name(stem, i, total, part.title.as_deref())))
+        .collect();
+    if !force {
+        if let Some(existing) = names.iter().find(|p| p.exists()) {
+            return Err(acrux_core::Error::Io(format!(
+                "{} existe déjà : rien n'est écrit (--force pour écraser)",
+                existing.display()
+            )));
+        }
+    }
+    std::fs::create_dir_all(dir)?;
+    for warning in &planned.warnings {
+        eprintln!("attention : {warning}");
+    }
+    write_parts(doc, &planned.parts, &options, &mut |i, part, bytes| {
+        let Some(target) = names.get(i) else {
+            return Ok(());
+        };
+        std::fs::write(target, &bytes)?;
+        println!(
+            "écrit : {} ({} octets, {})",
+            target.display(),
+            bytes.len(),
+            describe_pages(&part.pages)
+        );
+        Ok(())
+    })?;
+    if doc.is_encrypted() {
+        eprintln!("note : les fichiers écrits ne sont pas chiffrés");
+    }
+    println!("{total} fichier(s) écrit(s) dans {}", dir.display());
+    Ok(())
+}
+
+fn cmd_split(path: &str, rest: &[String]) -> acrux_core::Result<()> {
+    let has = |flag: &str| rest.iter().any(|a| a == flag);
+    let plan = if let Some(n) = option_value(rest, "--every") {
+        let n: usize = n
+            .parse()
+            .map_err(|_| acrux_core::Error::Corrupt(format!("nombre de pages invalide : {n}")))?;
+        SplitPlan::EveryN(n)
+    } else if has("--bookmarks") {
+        SplitPlan::TopBookmarks
+    } else if let Some(size) = option_value(rest, "--max-size") {
+        let bytes = parse_size(size, 1)
+            .ok_or_else(|| acrux_core::Error::Corrupt(format!("taille invalide : {size}")))?;
+        SplitPlan::MaxBytes(bytes)
+    } else if has("--each") {
+        SplitPlan::EveryN(1)
+    } else {
+        return Err(acrux_core::Error::Corrupt(
+            "usage : split <fichier> --every N | --bookmarks | --max-size 2M | --each [-d <dossier>]"
+                .into(),
+        ));
+    };
+    let (doc, _) = open(path)?;
+    let (dir, stem) = split_target(path, rest);
+    write_split(&doc, &plan, &dir, &stem, has("--force"))
+}
+
+fn cmd_insert_blank(path: &str, rest: &[String]) -> acrux_core::Result<()> {
+    let out = output_arg(rest)?;
+    let pos = positional(rest);
+    let usage = || {
+        acrux_core::Error::Corrupt(
+            "usage : insert-blank <fichier> <position> [--like <page>] -o <sortie>".into(),
+        )
+    };
+    let position: usize = pos.first().and_then(|p| p.parse().ok()).ok_or_else(usage)?;
+    let (doc, _) = open(path)?;
+    let pages = collect_pages(&doc)?;
+    if position == 0 || position > pages.len() + 1 {
+        return Err(acrux_core::Error::Corrupt(format!(
+            "position hors document : {position} (1 à {})",
+            pages.len() + 1
+        )));
+    }
+    // La page voisine donne le format : celle qui occupait la place, ou la
+    // dernière quand on ajoute en fin.
+    let like = match option_value(rest, "--like") {
+        Some(v) => {
+            v.parse::<usize>()
+                .ok()
+                .filter(|&n| n >= 1 && n <= pages.len())
+                .ok_or_else(|| acrux_core::Error::Corrupt(format!("page invalide : {v}")))?
+                - 1
+        }
+        None => (position - 1).min(pages.len().saturating_sub(1)),
+    };
+    let model = pages
+        .get(like)
+        .ok_or_else(|| acrux_core::Error::Corrupt("document sans page".into()))?;
+    acrux_features::pages::insert_blank_page(
+        &doc,
+        position - 1,
+        model.media_box(&doc),
+        model.rotate(&doc),
+    )?;
+    save(&doc, &out, rest)
+}
+
+fn cmd_replace(path: &str, rest: &[String]) -> acrux_core::Result<()> {
+    let out = output_arg(rest)?;
+    let pos = positional(rest);
+    let (Some(spec), Some(source)) = (pos.first(), pos.get(1)) else {
+        return Err(acrux_core::Error::Corrupt(
+            "usage : replace <fichier> <pages> <source.pdf> [<pages source>] -o <sortie>".into(),
+        ));
+    };
+    let (doc, _) = open(path)?;
+    let targets = pages_arg(&doc, spec)?;
+    let (src, _) = open(source)?;
+    let available = collect_pages(&src)?.len();
+    let sources = match pos.get(2) {
+        Some(spec) => pages_arg(&src, spec)?,
+        None if available >= targets.len() => (0..targets.len()).collect(),
+        None => {
+            return Err(acrux_core::Error::Corrupt(format!(
+                "la source n'a que {available} page(s) pour {} à remplacer",
+                targets.len()
+            )))
+        }
+    };
+    if sources.len() != targets.len() {
+        return Err(acrux_core::Error::Corrupt(format!(
+            "{} page(s) à remplacer pour {} page(s) source",
+            targets.len(),
+            sources.len()
+        )));
+    }
+    let pairs: Vec<(usize, usize)> = targets.into_iter().zip(sources).collect();
+    acrux_features::pages::replace_pages(&doc, &src, &pairs)?;
+    save(&doc, &out, rest)
 }
 
 fn cmd_rewrite(path: &str, rest: &[String]) -> acrux_core::Result<()> {

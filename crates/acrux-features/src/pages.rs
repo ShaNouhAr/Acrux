@@ -1,17 +1,57 @@
 //! Organisation des pages (voir FONCTIONNALITES_ADOBE_ACROBAT.txt §5) :
-//! rotation, suppression, extraction, insertion, réordonnancement, fusion.
+//! rotation, suppression, extraction, insertion, remplacement, pages
+//! vierges, réordonnancement, duplication, fusion ; le fractionnement d'un
+//! document en plusieurs fichiers est dans [`split`].
 //!
 //! Toutes les opérations travaillent sur l'arbre `/Pages` du catalogue
 //! (ISO 32000-2 §7.7.3). Pour rester simples et robustes, elles
 //! reconstruisent un arbre plat (un seul nœud `/Pages` racine) : les pages
 //! elles-mêmes ne sont pas réécrites, sauf leur `/Parent` et les attributs
 //! hérités qui sont rapatriés sur chaque page pour ne rien perdre.
+//!
+//! # Les références d'une page à une autre
+//!
+//! Une page en désigne d'autres : un lien `/Dest [12 0 R /Fit]`, le `/P`
+//! d'une annotation, un signet. Copier une page d'un document à l'autre en
+//! suivant **toutes** les références embarquerait donc, par un simple lien
+//! « voir page 40 », la page 40 entière — contenus et images compris —
+//! comme objet orphelin : un extrait d'une page pesait autant que le
+//! document. L'[`Importer`] sait donc d'avance où vont les pages copiées
+//! ([`Importer::map_ref`]) et quelles pages restent derrière
+//! ([`Importer::drop_ref`]) : un lien vers une page copiée vise sa copie,
+//! un lien vers une page laissée de côté devient `null` (le lien reste, sans
+//! destination, comme le fait Acrobat).
 
-use acrux_core::{Error, Result};
+pub mod split;
+
+use std::collections::{HashMap, HashSet};
+
+use acrux_core::{Error, Rect, Result};
 use acrux_document::{collect_pages, Dict, Document, Name, Object, ObjectRef, Page};
 
 /// Attributs héritables à rapatrier sur les pages avant de réécrire l'arbre.
 const INHERITABLE: [&str; 4] = ["Resources", "MediaBox", "CropBox", "Rotate"];
+
+/// Ce qui fait le **contenu** d'une page, par opposition à ce qui s'y pose
+/// (annotations) et à ce qui la désigne (signets, liens, étiquettes) :
+/// c'est ce que [`replace_pages`] remplace.
+const CONTENT_KEYS: [&str; 15] = [
+    "Contents",
+    "Resources",
+    "MediaBox",
+    "CropBox",
+    "BleedBox",
+    "TrimBox",
+    "ArtBox",
+    "Rotate",
+    "UserUnit",
+    "Group",
+    "Thumb",
+    "VP",
+    "PieceInfo",
+    "SeparationInfo",
+    "OutputIntents",
+];
 
 /// Pages actuelles avec leurs références (les pages directes, sans référence,
 /// sont rendues indirectes).
@@ -117,7 +157,8 @@ pub fn delete_pages(doc: &Document, indices: &[usize]) -> Result<()> {
 
 /// Réordonne les pages : `order` donne, pour chaque position, l'index actuel.
 /// Une page absente de `order` est supprimée ; un index répété duplique la
-/// page (même objet partagé, comme le fait Acrobat pour « dupliquer »).
+/// page. La copie partage les contenus et les ressources de l'original, mais
+/// a ses propres annotations (voir [`duplicate_page_dict`]).
 ///
 /// # Errors
 /// Index invalide ou ordre vide.
@@ -126,7 +167,7 @@ pub fn reorder_pages(doc: &Document, order: &[usize]) -> Result<()> {
     if order.is_empty() {
         return Err(Error::Corrupt("ordre vide".into()));
     }
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     let mut new_pages = Vec::with_capacity(order.len());
     for &i in order {
         let Some((r, p)) = pages.get(i) else {
@@ -135,21 +176,114 @@ pub fn reorder_pages(doc: &Document, order: &[usize]) -> Result<()> {
         if seen.insert(*r) {
             new_pages.push((*r, p.clone()));
         } else {
-            // Duplication : une copie indirecte distincte pour garder un /Parent unique.
-            let copy = doc.add(Object::Dict(p.dict.clone()));
-            new_pages.push((copy, p.clone()));
+            // Duplication : un objet distinct pour garder un /Parent unique,
+            // et des annotations à elle.
+            let copy = doc.allocate();
+            let dict = duplicate_page_dict(doc, p, copy)?;
+            new_pages.push((
+                copy,
+                Page {
+                    index: 0,
+                    reference: Some(copy),
+                    dict,
+                },
+            ));
         }
     }
     rebuild_tree(doc, &new_pages)
 }
 
+/// Dictionnaire d'une copie de la page `p`, qui sera rangée sous `new_ref`.
+///
+/// La copie partage les contenus et les ressources de l'original (on ne les
+/// modifie jamais en place : une édition écrit un nouveau flux), mais pas
+/// ses annotations. Chacune est recopiée dans un objet neuf dont le `/P`
+/// désigne la copie : sans cela, un même commentaire vivrait sur deux pages,
+/// et le déplacer sur l'une le déplacerait sur l'autre. Les liens entre
+/// annotations de la page — une fenêtre `/Popup` et son `/Parent`, une
+/// réponse `/IRT` — sont reportés d'une copie à l'autre. Les widgets de
+/// formulaire ne sont pas copiés : un champ ne vit pas sur deux pages sans
+/// être renommé, et c'est un choix que l'utilisateur doit faire (Acrobat
+/// renomme). La copie perd aussi ses `/StructParents` : ils désigneraient
+/// dans l'arbre de structure le contenu balisé de l'original.
+///
+/// Les copies sont écrites dans `doc` ; le dictionnaire de la page, lui,
+/// est rendu à l'appelant, qui le range sous `new_ref`.
+///
+/// # Errors
+/// Annotation illisible.
+pub fn duplicate_page_dict(doc: &Document, p: &Page, new_ref: ObjectRef) -> Result<Dict> {
+    let mut dict = p.dict.clone();
+    dict.remove(&Name::new("StructParents"));
+    let annots: Vec<Object> = doc
+        .dict_get(&p.dict, "Annots")?
+        .and_then(|a| a.as_array().map(<[Object]>::to_vec))
+        .unwrap_or_default();
+    if annots.is_empty() {
+        return Ok(dict);
+    }
+    // Première passe : une copie par annotation gardée, et la table des
+    // anciennes références vers les nouvelles.
+    let mut renamed: HashMap<u32, ObjectRef> = HashMap::new();
+    let mut copies: Vec<(ObjectRef, Dict)> = Vec::new();
+    for entry in &annots {
+        let resolved = doc.resolve(entry)?;
+        let Some(a) = resolved.as_dict() else {
+            continue;
+        };
+        let widget = a
+            .get(&Name::new("Subtype"))
+            .and_then(Object::as_name)
+            .is_some_and(|n| n.0 == b"Widget");
+        if widget {
+            continue;
+        }
+        let mut copy = a.clone();
+        copy.insert(Name::new("P"), Object::Reference(new_ref));
+        copy.remove(&Name::new("StructParent"));
+        let r = doc.allocate();
+        if let Object::Reference(old) = entry {
+            renamed.insert(old.number, r);
+        }
+        copies.push((r, copy));
+    }
+    // Deuxième passe : les liens entre annotations de la page suivent leurs
+    // copies.
+    let mut list = Vec::with_capacity(copies.len());
+    for (r, mut copy) in copies {
+        for key in ["Popup", "Parent", "IRT"] {
+            let moved = match copy.get(&Name::new(key)) {
+                Some(Object::Reference(old)) => renamed.get(&old.number).copied(),
+                _ => None,
+            };
+            if let Some(n) = moved {
+                copy.insert(Name::new(key), Object::Reference(n));
+            }
+        }
+        doc.set(r, Object::Dict(copy));
+        list.push(Object::Reference(r));
+    }
+    if list.is_empty() {
+        dict.remove(&Name::new("Annots"));
+    } else {
+        dict.insert(Name::new("Annots"), Object::Array(list));
+    }
+    Ok(dict)
+}
+
 /// Copie profonde d'un objet d'un document vers un autre : les références
 /// sont suivies et réallouées, avec mémorisation pour partager les ressources
 /// communes (polices, images) et gérer les cycles.
+///
+/// Les références aux **pages** se règlent à part : voir [`Importer::map_ref`]
+/// et [`Importer::drop_ref`], et l'explication en tête du module.
 pub struct Importer<'a> {
     src: &'a Document,
     dst: &'a Document,
-    map: std::collections::HashMap<u32, ObjectRef>,
+    map: HashMap<u32, ObjectRef>,
+    /// Objets sources à ne pas copier : une référence vers eux devient
+    /// `null`.
+    dropped: HashSet<u32>,
 }
 
 impl<'a> Importer<'a> {
@@ -159,8 +293,23 @@ impl<'a> Importer<'a> {
         Self {
             src,
             dst,
-            map: std::collections::HashMap::new(),
+            map: HashMap::new(),
+            dropped: HashSet::new(),
         }
+    }
+
+    /// Annonce que l'objet source `src` a déjà sa place dans `dst`, sous
+    /// `dst_ref` : toute référence vers lui y mènera, sans le recopier.
+    /// C'est ainsi qu'un lien d'une page copiée vers une autre page copiée
+    /// vise la copie.
+    pub fn map_ref(&mut self, src: ObjectRef, dst_ref: ObjectRef) {
+        self.map.insert(src.number, dst_ref);
+    }
+
+    /// Écarte l'objet source `src` : toute référence vers lui devient
+    /// `null` au lieu de le copier. C'est le sort des pages laissées de côté.
+    pub fn drop_ref(&mut self, src: ObjectRef) {
+        self.dropped.insert(src.number);
     }
 
     /// Importe un objet (les références indirectes sont copiées récursivement).
@@ -177,6 +326,9 @@ impl<'a> Importer<'a> {
         }
         Ok(match obj {
             Object::Reference(r) => {
+                if self.dropped.contains(&r.number) {
+                    return Ok(Object::Null);
+                }
                 if let Some(m) = self.map.get(&r.number) {
                     return Ok(Object::Reference(*m));
                 }
@@ -219,6 +371,88 @@ impl<'a> Importer<'a> {
     }
 }
 
+/// Réserve dans `dst` la place des pages `wanted` de `src_pages`, et écarte
+/// toutes les autres (voir l'explication en tête du module).
+///
+/// Rend, pour chaque entrée de `wanted`, la référence réservée à sa
+/// **première** occurrence, `None` pour une répétition : une page demandée
+/// deux fois devient une copie, avec ses propres annotations.
+fn prepare_page_refs(
+    importer: &mut Importer<'_>,
+    src_pages: &[Page],
+    wanted: &[usize],
+    dst: &Document,
+) -> Vec<Option<ObjectRef>> {
+    let mut reserved: HashSet<usize> = HashSet::new();
+    let mut out = Vec::with_capacity(wanted.len());
+    for &i in wanted {
+        if !reserved.insert(i) {
+            out.push(None);
+            continue;
+        }
+        let r = dst.allocate();
+        if let Some(src_ref) = src_pages.get(i).and_then(|p| p.reference) {
+            importer.map_ref(src_ref, r);
+        }
+        out.push(Some(r));
+    }
+    for (i, p) in src_pages.iter().enumerate() {
+        if let Some(r) = p.reference.filter(|_| !reserved.contains(&i)) {
+            importer.drop_ref(r);
+        }
+    }
+    out
+}
+
+/// Copie les pages `indices` de la source de `importer` dans sa
+/// destination, sans les ranger dans son arbre : rend chaque copie avec sa
+/// référence, dans l'ordre demandé. L'importeur garde ensuite ce qu'il a
+/// copié : ce qu'on importe après avec lui (les calques) désigne les mêmes
+/// objets que les pages.
+fn import_pages(importer: &mut Importer<'_>, indices: &[usize]) -> Result<Vec<(ObjectRef, Page)>> {
+    let (src, dst) = (importer.src, importer.dst);
+    let src_pages = collect_pages(src)?;
+    if let Some(&bad) = indices.iter().find(|&&i| i >= src_pages.len()) {
+        return Err(Error::Corrupt(format!(
+            "page source {} inexistante",
+            bad + 1
+        )));
+    }
+    let reserved = prepare_page_refs(importer, &src_pages, indices, dst);
+    let mut out = Vec::with_capacity(indices.len());
+    for (&i, slot) in indices.iter().zip(reserved) {
+        let Some(p) = src_pages.get(i) else {
+            continue;
+        };
+        let Object::Dict(dict) = importer.import(&Object::Dict(p.dict.clone()))? else {
+            return Err(Error::Corrupt(format!("page source {} illisible", i + 1)));
+        };
+        let (r, dict) = if let Some(r) = slot {
+            (r, dict)
+        } else {
+            // Une répétition : les annotations importées sont celles de la
+            // première occurrence, la copie en reçoit à elle.
+            let r = dst.allocate();
+            let first = Page {
+                index: 0,
+                reference: Some(r),
+                dict,
+            };
+            (r, duplicate_page_dict(dst, &first, r)?)
+        };
+        dst.set(r, Object::Dict(dict.clone()));
+        out.push((
+            r,
+            Page {
+                index: 0,
+                reference: Some(r),
+                dict,
+            },
+        ));
+    }
+    Ok(out)
+}
+
 /// Insère dans `dst`, à la position `at` (0 = avant la première page), les
 /// pages d'index `indices` de `src`. Ressources, annotations et contenus
 /// sont copiés ; les champs de formulaire (`/AcroForm`) ne sont pas fusionnés.
@@ -231,31 +465,11 @@ pub fn insert_pages_from(
     indices: &[usize],
     at: usize,
 ) -> Result<()> {
-    let src_pages = collect_pages(src)?;
     let dst_pages = page_refs(dst)?;
     if at > dst_pages.len() {
         return Err(Error::Corrupt(format!("position {at} hors du document")));
     }
-    let mut importer = Importer::new(src, dst);
-    let mut new_pages = Vec::with_capacity(indices.len());
-    for &i in indices {
-        let Some(p) = src_pages.get(i) else {
-            return Err(Error::Corrupt(format!("page source {} inexistante", i + 1)));
-        };
-        let dict = importer.import(&Object::Dict(p.dict.clone()))?;
-        let Object::Dict(dict) = dict else {
-            unreachable!("un dictionnaire reste un dictionnaire")
-        };
-        let r = dst.add(Object::Dict(dict.clone()));
-        new_pages.push((
-            r,
-            Page {
-                index: 0,
-                reference: Some(r),
-                dict,
-            },
-        ));
-    }
+    let new_pages = import_pages(&mut Importer::new(src, dst), indices)?;
     let mut all = dst_pages;
     let tail = all.split_off(at);
     all.extend(new_pages);
@@ -264,11 +478,19 @@ pub fn insert_pages_from(
 }
 
 /// Nouveau document ne contenant que les pages d'index `indices` de `src`,
-/// dans cet ordre (extraction). Les métadonnées `/Info` sont copiées.
+/// dans cet ordre (extraction). Les métadonnées `/Info` sont copiées, et les
+/// calques (`/OCProperties`) : sans eux, un calque masqué par défaut
+/// réapparaîtrait sur la page extraite.
+///
+/// Un document chiffré s'extrait **en clair** : les flux copiés sont ceux
+/// que la lecture a déjà déchiffrés.
 ///
 /// # Errors
 /// Index invalide ou objets illisibles.
 pub fn extract_pages(src: &Document, indices: &[usize]) -> Result<Document> {
+    if indices.is_empty() {
+        return Err(Error::Corrupt("aucune page à extraire".into()));
+    }
     let (major, minor) = src.version();
     let skeleton = format!(
         "%PDF-{major}.{minor}\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\nxref\n0 3\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \ntrailer\n<< /Size 3 /Root 1 0 R >>\nstartxref\n0\n%%EOF\n"
@@ -282,31 +504,30 @@ pub fn extract_pages(src: &Document, indices: &[usize]) -> Result<Document> {
         let r = dst.add(copied);
         dst.set_trailer_entry("Info", Object::Reference(r));
     }
-    let src_pages = collect_pages(src)?;
     let mut importer = Importer::new(src, &dst);
-    let mut pages = Vec::with_capacity(indices.len());
-    for &i in indices {
-        let Some(p) = src_pages.get(i) else {
-            return Err(Error::Corrupt(format!("page {} inexistante", i + 1)));
-        };
-        let Object::Dict(dict) = importer.import(&Object::Dict(p.dict.clone()))? else {
-            unreachable!("un dictionnaire reste un dictionnaire")
-        };
-        let r = dst.add(Object::Dict(dict.clone()));
-        pages.push((
-            r,
-            Page {
-                index: 0,
-                reference: Some(r),
-                dict,
-            },
-        ));
-    }
-    if pages.is_empty() {
-        return Err(Error::Corrupt("aucune page à extraire".into()));
-    }
+    let pages = import_pages(&mut importer, indices)?;
     rebuild_tree(&dst, &pages)?;
+    copy_layers(&mut importer)?;
     Ok(dst)
+}
+
+/// Recopie les calques (`/OCProperties` du catalogue) de la source de
+/// `importer` dans sa destination. C'est l'importeur des pages qui s'en
+/// charge : les groupes que désignent les contenus copiés et ceux que
+/// masque la configuration par défaut doivent être les mêmes objets.
+fn copy_layers(importer: &mut Importer<'_>) -> Result<()> {
+    let (src, dst) = (importer.src, importer.dst);
+    let catalog = src.catalog()?;
+    let Some(layers) = catalog.get(&Name::new("OCProperties")) else {
+        return Ok(());
+    };
+    let copied = importer.import(layers)?;
+    let mut dst_catalog = dst.catalog()?;
+    dst_catalog.insert(Name::new("OCProperties"), copied);
+    let cat_ref = acrux_document::xref::trailer_ref(&dst.trailer(), "Root")
+        .ok_or_else(|| Error::Corrupt("trailer sans /Root".into()))?;
+    dst.set(cat_ref, Object::Dict(dst_catalog));
+    Ok(())
 }
 
 /// Fusionne plusieurs documents en un nouveau document (toutes leurs pages, dans l'ordre).
@@ -327,6 +548,213 @@ pub fn merge(docs: &[&Document]) -> Result<Document> {
         insert_pages_from(&out, d, &all, at)?;
     }
     Ok(out)
+}
+
+/// Un nombre PDF : entier quand il l'est, réel sinon.
+fn number(v: f64) -> Object {
+    if v.fract() == 0.0 && v.abs() < 1e9 {
+        // Valeur entière et bornée : la conversion est exacte.
+        #[allow(clippy::cast_possible_truncation)]
+        Object::Integer(v as i64)
+    } else {
+        Object::Real(v)
+    }
+}
+
+/// Un rectangle en tableau PDF `[x0 y0 x1 y1]`.
+fn rect_array(r: Rect) -> Object {
+    Object::Array(vec![number(r.x0), number(r.y0), number(r.x1), number(r.y1)])
+}
+
+/// Insère une page vierge à la position `at` (0 = avant la première page,
+/// `len` = après la dernière), du format `media` et tournée de `rotate`
+/// degrés : ceux de la page voisine, d'ordinaire, pour qu'une page ajoutée
+/// dans un document en paysage soit en paysage.
+///
+/// La page porte un flux de contenu vide : les afficheurs et `acr check`
+/// préfèrent une page qui a son `/Contents`.
+///
+/// # Errors
+/// Position hors du document, format vide ou angle qui n'est pas un
+/// multiple de 90.
+pub fn insert_blank_page(doc: &Document, at: usize, media: Rect, rotate: i32) -> Result<()> {
+    if media.is_empty() {
+        return Err(Error::Corrupt("format de page vide".into()));
+    }
+    if rotate % 90 != 0 {
+        return Err(Error::Corrupt("l'angle doit être un multiple de 90".into()));
+    }
+    let pages = page_refs(doc)?;
+    if at > pages.len() {
+        return Err(Error::Corrupt(format!(
+            "position {} hors du document",
+            at + 1
+        )));
+    }
+    let mut stream = Dict::new();
+    stream.insert(Name::new("Length"), Object::Integer(0));
+    let contents = doc.add(Object::Stream {
+        dict: stream,
+        raw: Vec::new(),
+    });
+    let mut dict = Dict::new();
+    dict.insert(Name::new("Type"), Object::Name(Name::new("Page")));
+    dict.insert(Name::new("MediaBox"), rect_array(media));
+    dict.insert(Name::new("Resources"), Object::Dict(Dict::new()));
+    dict.insert(Name::new("Contents"), Object::Reference(contents));
+    let rotate = rotate.rem_euclid(360);
+    if rotate != 0 {
+        dict.insert(Name::new("Rotate"), Object::Integer(i64::from(rotate)));
+    }
+    let r = doc.add(Object::Dict(dict.clone()));
+    let mut all = pages;
+    all.insert(
+        at,
+        (
+            r,
+            Page {
+                index: 0,
+                reference: Some(r),
+                dict,
+            },
+        ),
+    );
+    rebuild_tree(doc, &all)
+}
+
+/// Remplace le contenu de pages de `dst` par celui de pages de `src` :
+/// chaque paire `(cible, source)` donne la page de `dst` à remplacer et la
+/// page de `src` qui prend sa place.
+///
+/// La page cible **garde son objet** : les signets, liens, destinations
+/// nommées et étiquettes qui la désignent restent justes, et ses
+/// annotations restent (les commentaires faits sur l'ancienne version se
+/// retrouvent sur la nouvelle, comme dans Acrobat). Seul ce qui fait son
+/// contenu change ([`CONTENT_KEYS`]) : les anciennes boîtes sont retirées
+/// avant que les nouvelles soient posées, sinon une `/CropBox` de l'ancienne
+/// page recadrerait la nouvelle. Les attributs héritables que la source
+/// n'a pas sont posés explicitement, pour que la page ne reprenne pas ceux
+/// de ses ancêtres dans l'arbre. `/StructParents` est retiré : il désignait
+/// un contenu balisé qui n'existe plus (l'arbre de structure devient
+/// incomplet, pas faux).
+///
+/// # Errors
+/// Paire hors bornes, deux paires sur la même page cible, objets illisibles.
+pub fn replace_pages(dst: &Document, src: &Document, pairs: &[(usize, usize)]) -> Result<()> {
+    if pairs.is_empty() {
+        return Err(Error::Corrupt("aucune page à remplacer".into()));
+    }
+    let mut pages = page_refs(dst)?;
+    let src_pages = collect_pages(src)?;
+    let mut seen = HashSet::new();
+    for &(target, source) in pairs {
+        if target >= pages.len() {
+            return Err(Error::Corrupt(format!("page {} inexistante", target + 1)));
+        }
+        if source >= src_pages.len() {
+            return Err(Error::Corrupt(format!(
+                "page source {} inexistante",
+                source + 1
+            )));
+        }
+        if !seen.insert(target) {
+            return Err(Error::Corrupt(format!(
+                "la page {} est remplacée deux fois",
+                target + 1
+            )));
+        }
+    }
+    // Une page directe (sans objet à elle) vient de recevoir un objet dans
+    // `page_refs` : l'arbre doit être réécrit pour le désigner.
+    let direct = pages.iter().any(|(_, p)| p.reference.is_none());
+    let mut importer = Importer::new(src, dst);
+    for p in &src_pages {
+        if let Some(r) = p.reference {
+            importer.drop_ref(r);
+        }
+    }
+    for &(target, source) in pairs {
+        let (Some(from), Some((r, page))) = (src_pages.get(source), pages.get_mut(target)) else {
+            continue;
+        };
+        // Seul le contenu de la source est importé : ses annotations
+        // seraient autant d'objets orphelins dans `dst`.
+        let mut wanted = Dict::new();
+        for key in CONTENT_KEYS {
+            if let Some(v) = from.dict.get(&Name::new(key)) {
+                wanted.insert(Name::new(key), v.clone());
+            }
+        }
+        let Object::Dict(content) = importer.import(&Object::Dict(wanted))? else {
+            return Err(Error::Corrupt(format!(
+                "page source {} illisible",
+                source + 1
+            )));
+        };
+        let mut d = page.dict.clone();
+        for key in CONTENT_KEYS {
+            d.remove(&Name::new(key));
+        }
+        d.remove(&Name::new("StructParents"));
+        d.extend(content);
+        let media = from.media_box(src);
+        d.entry(Name::new("MediaBox"))
+            .or_insert_with(|| rect_array(media));
+        d.entry(Name::new("CropBox"))
+            .or_insert_with(|| rect_array(media));
+        d.entry(Name::new("Resources"))
+            .or_insert_with(|| Object::Dict(Dict::new()));
+        d.entry(Name::new("Rotate")).or_insert(Object::Integer(0));
+        dst.set(*r, Object::Dict(d.clone()));
+        page.dict = d;
+    }
+    if direct {
+        rebuild_tree(dst, &pages)?;
+    }
+    Ok(())
+}
+
+/// Ordre complet des pages après le déplacement d'un bloc : le glisser de
+/// plusieurs vignettes, dans l'application comme dans `acr reorder`.
+///
+/// `block` est l'ensemble des pages déplacées (dans n'importe quel ordre,
+/// doublons permis) ; `at` est la position d'insertion **dans l'ordre
+/// d'origine**, de 0 (avant la première page) à `count` (après la
+/// dernière) : c'est ce que désigne le trait d'insertion entre deux
+/// vignettes. Le bloc garde son ordre interne et s'insère là, les autres
+/// pages gardent le leur. Déposer un bloc à l'intérieur de lui-même rend
+/// l'ordre d'origine.
+#[must_use]
+pub fn move_block(count: usize, block: &[usize], at: usize) -> Vec<usize> {
+    let mut block: Vec<usize> = block.iter().copied().filter(|&b| b < count).collect();
+    block.sort_unstable();
+    block.dedup();
+    let at = at.min(count);
+    let before = block.iter().filter(|&&b| b < at).count();
+    let mut order: Vec<usize> = (0..count)
+        .filter(|p| block.binary_search(p).is_err())
+        .collect();
+    let tail = order.split_off(at - before);
+    order.extend(block);
+    order.extend(tail);
+    order
+}
+
+/// Ordre complet des pages après la duplication d'un bloc : les copies
+/// suivent, ensemble et dans leur ordre, la dernière page du bloc. C'est
+/// l'ordre qu'attend [`reorder_pages`], où un indice répété est une copie.
+#[must_use]
+pub fn duplicate_block(count: usize, block: &[usize]) -> Vec<usize> {
+    let mut block: Vec<usize> = block.iter().copied().filter(|&b| b < count).collect();
+    block.sort_unstable();
+    block.dedup();
+    let Some(&last) = block.last() else {
+        return (0..count).collect();
+    };
+    let mut order: Vec<usize> = (0..=last).collect();
+    order.extend(&block);
+    order.extend(last + 1..count);
+    order
 }
 
 /// Analyse une spécification de pages « 1,3-5,8 » (1 = première) en indices 0-based.
@@ -393,6 +821,11 @@ mod tests {
             "<< /Type /Pages /Kids [{}] /Count {n} /Rotate 90 >>",
             kids.join(" ")
         );
+        from_objects(&objects)
+    }
+
+    /// Un document dont l'objet `i + 1` est `objects[i]`.
+    fn from_objects(objects: &[String]) -> Document {
         let mut src = b"%PDF-1.4\n".to_vec();
         for (i, body) in objects.iter().enumerate() {
             src.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
@@ -410,6 +843,26 @@ mod tests {
 
     fn roundtrip(doc: &Document) -> Document {
         Document::from_bytes(doc.save_full().unwrap()).unwrap()
+    }
+
+    /// Nombre d'objets `/Type /Page` du fichier, qu'ils soient dans l'arbre
+    /// ou orphelins.
+    fn page_objects(doc: &Document) -> usize {
+        doc.object_numbers()
+            .into_iter()
+            .filter(|&number| {
+                let obj = doc.get(ObjectRef {
+                    number,
+                    generation: 0,
+                });
+                obj.is_ok_and(|o| {
+                    o.as_dict()
+                        .and_then(|d| d.get(&Name::new("Type")))
+                        .and_then(Object::as_name)
+                        .is_some_and(|n| n.0 == b"Page")
+                })
+            })
+            .count()
     }
 
     #[test]
@@ -470,6 +923,200 @@ mod tests {
         let r0 = pages[0].dict.get(&Name::new("Resources")).unwrap();
         let r1 = pages[1].dict.get(&Name::new("Resources")).unwrap();
         assert_eq!(r0, r1, "ressource partagée importée une seule fois");
+    }
+
+    /// Trois pages ; la première porte un lien vers la troisième. Extraire
+    /// la première seule ne doit pas embarquer la troisième : le lien reste,
+    /// sans destination. Extraire la première et la troisième : le lien
+    /// vise la copie de la troisième.
+    #[test]
+    fn a_link_does_not_drag_its_target_page_along() {
+        let doc = from_objects(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Annots [6 0 R] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 101 100] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 102 100] /Contents 7 0 R >>".into(),
+            "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /P 3 0 R /Dest [5 0 R /Fit] >>"
+                .into(),
+            "<< /Length 8 >>\nstream\n0 0 m S\nendstream".into(),
+        ]);
+        let link_dest = |d: &Document| -> Object {
+            let pages = collect_pages(d).unwrap();
+            let annots = d.dict_get(&pages[0].dict, "Annots").unwrap().unwrap();
+            let link = d.resolve(&annots.as_array().unwrap()[0]).unwrap();
+            let dest = d
+                .dict_get(link.as_dict().unwrap(), "Dest")
+                .unwrap()
+                .unwrap();
+            dest.as_array().unwrap()[0].clone()
+        };
+        let alone = roundtrip(&extract_pages(&doc, &[0]).unwrap());
+        assert_eq!(collect_pages(&alone).unwrap().len(), 1);
+        assert_eq!(page_objects(&alone), 1, "aucune page orpheline");
+        assert_eq!(link_dest(&alone), Object::Null);
+        let both = roundtrip(&extract_pages(&doc, &[0, 2]).unwrap());
+        let pages = collect_pages(&both).unwrap();
+        assert_eq!(page_objects(&both), 2);
+        assert_eq!(
+            link_dest(&both),
+            Object::Reference(pages[1].reference.unwrap()),
+            "le lien vise la nouvelle page"
+        );
+        // Le /P de l'annotation désigne sa propre page, pas une copie.
+        let annots = both.dict_get(&pages[0].dict, "Annots").unwrap().unwrap();
+        let link = both.resolve(&annots.as_array().unwrap()[0]).unwrap();
+        assert_eq!(
+            link.as_dict().unwrap().get(&Name::new("P")),
+            Some(&Object::Reference(pages[0].reference.unwrap()))
+        );
+        // Même règle pour l'insertion dans un autre document.
+        let target = pdf_with_pages(2);
+        insert_pages_from(&target, &doc, &[0], 2).unwrap();
+        let target = roundtrip(&target);
+        assert_eq!(page_objects(&target), 3);
+    }
+
+    /// Dupliquer une page annotée : chaque page a ses propres annotations,
+    /// le `/P` de la copie désigne la copie, et un widget n'est pas copié.
+    #[test]
+    fn a_duplicate_owns_its_annotations() {
+        let doc = from_objects(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Annots [4 0 R 5 0 R 6 0 R] >>"
+                .into(),
+            "<< /Type /Annot /Subtype /Text /Rect [0 0 10 10] /P 3 0 R /Contents (note) /Popup 5 0 R >>"
+                .into(),
+            "<< /Type /Annot /Subtype /Popup /Rect [0 0 50 50] /P 3 0 R /Parent 4 0 R >>".into(),
+            "<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] /P 3 0 R /FT /Tx /T (champ) >>"
+                .into(),
+        ]);
+        reorder_pages(&doc, &[0, 0]).unwrap();
+        let d = roundtrip(&doc);
+        let pages = collect_pages(&d).unwrap();
+        let refs = |p: &Page| -> Vec<ObjectRef> {
+            d.dict_get(&p.dict, "Annots")
+                .unwrap()
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|o| match o {
+                    Object::Reference(r) => *r,
+                    _ => panic!("annotation directe"),
+                })
+                .collect()
+        };
+        let (a, b) = (refs(&pages[0]), refs(&pages[1]));
+        assert_eq!(a.len(), 3);
+        assert_eq!(b.len(), 2, "le widget n'est pas copié");
+        assert!(b.iter().all(|r| !a.contains(r)), "objets distincts");
+        let copy_ref = pages[1].reference.unwrap();
+        let note = d.get(b[0]).unwrap();
+        let note = note.as_dict().unwrap();
+        assert_eq!(
+            note.get(&Name::new("P")),
+            Some(&Object::Reference(copy_ref))
+        );
+        assert_eq!(
+            note.get(&Name::new("Popup")),
+            Some(&Object::Reference(b[1])),
+            "la note désigne la fenêtre copiée"
+        );
+        let popup = d.get(b[1]).unwrap();
+        assert_eq!(
+            popup.as_dict().unwrap().get(&Name::new("Parent")),
+            Some(&Object::Reference(b[0]))
+        );
+    }
+
+    #[test]
+    fn blocks_move_and_duplicate() {
+        assert_eq!(move_block(5, &[1, 2], 0), vec![1, 2, 0, 3, 4]);
+        assert_eq!(move_block(5, &[1, 2], 5), vec![0, 3, 4, 1, 2]);
+        assert_eq!(
+            move_block(5, &[2, 1], 2),
+            vec![0, 1, 2, 3, 4],
+            "dans lui-même"
+        );
+        assert_eq!(
+            move_block(5, &[1, 2], 3),
+            vec![0, 1, 2, 3, 4],
+            "juste après lui"
+        );
+        assert_eq!(move_block(5, &[0, 3], 2), vec![1, 0, 3, 2, 4]);
+        assert_eq!(move_block(3, &[0], 3), vec![1, 2, 0]);
+        assert_eq!(move_block(3, &[2], 0), vec![2, 0, 1]);
+        assert_eq!(move_block(3, &[7], 1), vec![0, 1, 2], "hors bornes ignoré");
+        assert_eq!(duplicate_block(4, &[1, 2]), vec![0, 1, 2, 1, 2, 3]);
+        assert_eq!(duplicate_block(3, &[2]), vec![0, 1, 2, 2]);
+        assert_eq!(duplicate_block(3, &[]), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn blank_pages_take_the_given_format() {
+        let doc = pdf_with_pages(3);
+        let pages = collect_pages(&doc).unwrap();
+        let (media, rotate) = (pages[1].media_box(&doc), pages[1].rotate(&doc));
+        assert_eq!(rotate, 90, "hérité de l'arbre");
+        insert_blank_page(&doc, 0, media, rotate).unwrap();
+        insert_blank_page(&doc, 2, Rect::new(0.0, 0.0, 595.0, 842.0), 0).unwrap();
+        let len = collect_pages(&doc).unwrap().len();
+        insert_blank_page(&doc, len, media, 0).unwrap();
+        assert!(insert_blank_page(&doc, 99, media, 0).is_err());
+        assert!(insert_blank_page(&doc, 0, Rect::default(), 0).is_err());
+        assert!(insert_blank_page(&doc, 0, media, 45).is_err());
+        let d = roundtrip(&doc);
+        assert!(!d.was_repaired());
+        assert_eq!(
+            widths(&d),
+            vec![101.0, 100.0, 595.0, 101.0, 102.0, 101.0],
+            "vierges en 1, 3 et 6"
+        );
+        let pages = collect_pages(&d).unwrap();
+        assert_eq!(pages[0].rotate(&d), 90, "comme la voisine");
+        assert_eq!(pages[2].rotate(&d), 0);
+        assert_eq!(pages[1].rotate(&d), 90, "les autres gardent leur rotation");
+        assert!(pages[0].dict.contains_key(&Name::new("Contents")));
+    }
+
+    #[test]
+    fn replaced_pages_keep_their_object_and_annotations() {
+        let dst = from_objects(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /CropBox [0 0 50 50] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Annots [5 0 R] /StructParents 0 >>"
+                .into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>".into(),
+            "<< /Type /Annot /Subtype /Text /Rect [0 0 10 10] /P 3 0 R >>".into(),
+        ]);
+        let src = pdf_with_pages(3);
+        let before = collect_pages(&dst).unwrap()[0].reference;
+        replace_pages(&dst, &src, &[(0, 2)]).unwrap();
+        let d = roundtrip(&dst);
+        let pages = collect_pages(&d).unwrap();
+        assert_eq!(pages[0].reference, before, "même objet");
+        let width = |r: Rect| r.width().round();
+        assert_eq!(width(pages[0].media_box(&d)).to_string(), "102");
+        assert_eq!(
+            width(pages[0].crop_box(&d)).to_string(),
+            "102",
+            "la CropBox héritée ne recadre pas la nouvelle page"
+        );
+        assert_eq!(pages[0].rotate(&d), 90, "rotation de la source");
+        assert!(pages[0].dict.contains_key(&Name::new("Annots")));
+        assert!(!pages[0].dict.contains_key(&Name::new("StructParents")));
+        assert_eq!(
+            width(pages[1].crop_box(&d)).to_string(),
+            "50",
+            "l'autre page n'a pas changé"
+        );
+        assert_eq!(page_objects(&d), 2, "rien d'autre n'est importé");
+        assert!(replace_pages(&dst, &src, &[(0, 1), (0, 2)]).is_err());
+        assert!(replace_pages(&dst, &src, &[(5, 0)]).is_err());
+        assert!(replace_pages(&dst, &src, &[(0, 9)]).is_err());
+        assert!(replace_pages(&dst, &src, &[]).is_err());
     }
 
     #[test]
