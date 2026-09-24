@@ -286,7 +286,8 @@ Livrable : version 0.2, parité avec Acrobat Standard hors édition de texte.
   la palette avec sa **cible** (la page de la vignette, l'onglet du clic) ; clavier, initiales,
   éléments grisés, appuyer-glisser-relâcher, carte recalée dans la fenêtre. Propriétés du
   document (Ctrl+D), fermer les autres onglets, copier le chemin, ouvrir le dossier du fichier,
-  retirer un document récent. À faire : menus des commentaires, des champs de formulaire et du
+  retirer un document récent ; sur un formulaire, surligner les champs et effacer le formulaire.
+  À faire : menus des commentaires, d'un champ de formulaire précis et du
   mode « Modifier le PDF », plusieurs vignettes à la fois ; info-bulles détaillées,
   personnalisation de la colonne d'outils.
 
@@ -388,7 +389,7 @@ Livrable : version 0.2, parité avec Acrobat Standard hors édition de texte.
 Livrable : version 0.3, édition au moins équivalente à Acrobat Pro sur le corpus d'édition.
 
 ## Phase 6 — Formulaires et signatures
-- [~] Remplissage AcroForm : inventaire (héritage, noms qualifiés), remplissage (texte, cases, radios, listes) avec régénération des apparences (§12.7.4.3 : fond / bordure `/MK`, `/DA`, taille auto, multiligne, peigne, mot de passe, coches vectorielles), aplatissement, import / export FDF (`acrux-features/forms.rs`, `acr fields/fill/fdf-export/fdf-import`, corpus `formulaire-acroform-champs.pdf`) ; remplissage interactif dans l'application (clic sur les widgets, `EditOp::SetField`) ; calculs, validation, actions JavaScript, XFA, texte enrichi et navigation par Tab à faire
+- [~] Remplissage AcroForm : inventaire (héritage, noms qualifiés), remplissage (texte, cases, radios, listes) avec régénération des apparences (§12.7.4.3 : fond / bordure `/MK`, `/DA`, taille auto, multiligne, peigne, mot de passe, coches vectorielles), aplatissement, import / export FDF (`acrux-features/forms.rs`, `acr fields/fill/fdf-export/fdf-import`, corpus `formulaire-acroform-champs.pdf`) ; **remplissage sur place dans l'application**, comme Acrobat (`viewer/formfill.rs`, `ui/fieldedit.rs`) : curseur dans le champ, sélection, presse-papiers, multiligne, peigne et `/MaxLen`, mot de passe masqué, annulation mot par mot, aperçu dans la police et à la taille de l'apparence ; Tab / Maj+Tab dans l'ordre `/Tabs` (rangées, colonnes, `/Annots`) ; liste déroulante sous son champ (`ui/menu.rs`, qui défile), liste de choix cliquable (Ctrl+clic, Maj+clic) ; barre de formulaire (`ui/formbar.rs`) : surligner les champs, effacer (`forms::reset_fields`, `acr fill --reset`), aplatir ; champs obligatoires cernés de rouge ; apparences manquantes dessinées à l'ouverture (`forms::prepare_display`, corpus `formulaire-obligatoire-sans-apparence.pdf`) ; écriture légère qui ne redessine que la page du champ. Calculs, validation, formatage, actions JavaScript, XFA et texte enrichi à faire ; la saisie sur un widget tourné (`/MK /R`, page `/Rotate`) s'écrit à l'horizontale
 - [ ] Préparation de formulaire avec détection automatique des champs
 - [x] Remplir et signer (`acrux-features/fillsign/`, `acr fillsign`, touche `S` dans l'application) :
   signature **tracée** au pointeur — relevé nettoyé, lissé sans retard, largeur déduite de la vitesse

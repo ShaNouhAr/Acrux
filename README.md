@@ -159,8 +159,8 @@ sauf le mot visé, réencodé avec la police en place (complétée depuis la pol
 caractère manque), et le texte qui suit ne bouge pas d'un point ; `reflow` recompose un paragraphe
 entier dans sa boîte (`--page`, `--paragraph`, `--text`, `--shrink`) en conservant interligne,
 alignement et retrait de première ligne ;
-`fields` liste les champs de formulaire, `fill` les remplit (`nom=valeur`, apparences régénérées,
-`--flatten` pour aplatir ; une valeur hors WinAnsiEncoding incorpore la police qu'il faut, donc un formulaire se remplit en japonais ou en russe), `fdf-export` / `fdf-import` échangent les données au format FDF ;
+`fields` liste les champs de formulaire (un saut de ligne s'écrit `\n`), `fill` les remplit (`nom=valeur`, apparences régénérées,
+`--reset` pour effacer d'abord le formulaire, `--flatten` pour aplatir ; une valeur hors WinAnsiEncoding incorpore la police qu'il faut, donc un formulaire se remplit en japonais ou en russe), `fdf-export` / `fdf-import` échangent les données au format FDF ;
 `check-a11y` vérifie l'accessibilité au sens de **PDF/UA-1** (document balisé, langue, titre,
 texte de remplacement des figures, ordre de lecture, hiérarchie des titres, en-têtes de tableau,
 listes, contraste WCAG, texte extractible, champs sans info-bulle, contenu non balisé ; `--json`
@@ -345,7 +345,9 @@ une page par feuille, et `Ctrl+S` demande où ranger le document obtenu.
 | `S` | remplir et signer : signature, paraphe, texte tapé sur la page, stylo, marques (encre au choix) |
 | `M`, `Maj+M` | biffure : marquer (réversible), puis appliquer définitivement |
 | onglet « Fichiers » du panneau | pièces jointes : clic pour enregistrer, bouton pour en joindre une |
-| clic sur un champ de formulaire | le remplir ; `Tab` / `Entrée` : champ suivant et activation |
+| clic sur un champ de formulaire | le remplir **sur place** : on tape dans le champ, `Entrée` valide, `Échap` annule ; liste déroulante sous son champ |
+| `Tab` / `Maj+Tab` | champ suivant, précédent (ordre `/Tabs` du document) ; flèches : ligne d'une liste, bouton d'un groupe radio |
+| barre de formulaire, palette | surligner les champs, effacer le formulaire, aplatir le formulaire |
 | `Ctrl+Z` / `Ctrl+Y` (ou `Ctrl+Maj+Z`), ou les flèches de la barre d'outils | annuler, rétablir (dans un bloc en cours de saisie, étape par étape d'abord) |
 
 | Enregistrer | |

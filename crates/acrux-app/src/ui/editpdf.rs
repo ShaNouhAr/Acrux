@@ -293,6 +293,61 @@ impl Buffer {
     }
 }
 
+/// Un état du texte d'une saisie : de quoi revenir en arrière sans toucher
+/// au document. Le mode « Modifier le PDF » et la saisie dans un champ de
+/// formulaire en tiennent chacun une pile.
+#[derive(Debug, Clone)]
+pub struct Step {
+    /// Texte.
+    pub text: String,
+    /// Curseur.
+    pub caret: usize,
+    /// Autre bout de la sélection.
+    pub anchor: usize,
+}
+
+/// Nature d'un geste de frappe : deux gestes de même nature qui se suivent
+/// n'en font qu'un pour l'annulation — on défait un mot, pas une lettre.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepKind {
+    /// Rien encore.
+    None,
+    /// Des caractères ajoutés.
+    Insert,
+    /// Des caractères retirés.
+    Delete,
+}
+
+/// Nature d'un geste de frappe, et s'il **ouvre une étape** d'annulation.
+///
+/// La règle est celle d'un traitement de texte : les caractères qui se
+/// suivent forment une étape, et l'on coupe quand l'utilisateur change de
+/// geste (frapper puis effacer), qu'il déplace le curseur, ou qu'il tape un
+/// blanc ou une ponctuation — ainsi Ctrl+Z défait un mot, pas une lettre, et
+/// jamais toute une phrase.
+#[must_use]
+pub fn step_of(
+    before: &Buffer,
+    after: &Buffer,
+    last: StepKind,
+    last_caret: usize,
+) -> (StepKind, bool) {
+    let grew = after.text.chars().count() > before.text.chars().count();
+    let kind = if grew {
+        StepKind::Insert
+    } else {
+        StepKind::Delete
+    };
+    let typed_break = grew
+        && after
+            .text
+            .chars()
+            .nth(before.caret)
+            .is_some_and(|c| c.is_whitespace() || c.is_ascii_punctuation());
+    let jumped = before.caret != last_caret;
+    (kind, kind != last || jumped || typed_break)
+}
+
 /// Le sélecteur déroulé sous la barre : un seul à la fois.
 enum Popup {
     Fonts(Box<FontPicker>),
@@ -1076,6 +1131,63 @@ fn align_icon(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Un texte et son curseur, pour éprouver le découpage en étapes.
+    fn buffer(text: &str, caret: usize) -> Buffer {
+        let mut b = Buffer::new(text);
+        b.caret = caret;
+        b.anchor = caret;
+        b
+    }
+
+    /// Des lettres qui se suivent n'ouvrent qu'une étape : Ctrl+Z défait le
+    /// mot, pas la lettre.
+    #[test]
+    fn les_lettres_qui_se_suivent_font_une_etape() {
+        let before = buffer("bonjou", 6);
+        let after = buffer("bonjour", 7);
+        let (kind, opens) = step_of(&before, &after, StepKind::Insert, 6);
+        assert_eq!(kind, StepKind::Insert);
+        assert!(!opens, "une lettre de plus prolonge l'étape");
+    }
+
+    /// Un blanc ferme le mot : l'étape suivante recommence là.
+    #[test]
+    fn un_blanc_ouvre_une_etape() {
+        let before = buffer("bonjour", 7);
+        let after = buffer("bonjour ", 8);
+        let (_, opens) = step_of(&before, &after, StepKind::Insert, 7);
+        assert!(opens);
+    }
+
+    /// Effacer après avoir tapé ouvre une étape : on ne défait pas les deux
+    /// d'un coup.
+    #[test]
+    fn effacer_apres_avoir_tape_ouvre_une_etape() {
+        let before = buffer("bonjour", 7);
+        let after = buffer("bonjou", 6);
+        let (kind, opens) = step_of(&before, &after, StepKind::Insert, 7);
+        assert_eq!(kind, StepKind::Delete);
+        assert!(opens);
+    }
+
+    /// Déplacer le curseur ailleurs ouvre une étape.
+    #[test]
+    fn deplacer_le_curseur_ouvre_une_etape() {
+        let before = buffer("bonjour", 2);
+        let after = buffer("bXonjour", 3);
+        let (_, opens) = step_of(&before, &after, StepKind::Insert, 7);
+        assert!(opens, "la frappe reprend ailleurs : nouvelle étape");
+    }
+
+    /// Effacer lettre après lettre ne fait qu'une étape.
+    #[test]
+    fn les_effacements_qui_se_suivent_font_une_etape() {
+        let before = buffer("bonjou", 6);
+        let after = buffer("bonjo", 5);
+        let (_, opens) = step_of(&before, &after, StepKind::Delete, 6);
+        assert!(!opens);
+    }
 
     #[test]
     fn la_frappe_remplace_la_selection() {

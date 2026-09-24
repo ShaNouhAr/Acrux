@@ -9,6 +9,8 @@
 //! | `cursors` | pointeurs dessinés : texte ajouté, surligneur, note… |
 //! | `dialog`  | fenêtres de dialogue dessinées : question, boutons    |
 //! | `editpdf` | mode « Modifier le PDF » : saisie et barre du mode    |
+//! | `fieldedit` | saisie dans un champ posé sur la page : curseur, sélection, lignes, annulation |
+//! | `formbar` | barre d'un document à remplir : surligner les champs, effacer, aplatir |
 //! | `modebar` | barre fine d'un outil en cours : nom, consigne, sortie |
 //! | `text`    | rendu de texte d'interface avec une police système    |
 //! | `theme`   | couleurs et dimensions                                |
@@ -40,6 +42,8 @@ pub mod controls;
 pub mod cursors;
 pub mod dialog;
 pub mod editpdf;
+pub mod fieldedit;
+pub mod formbar;
 pub mod icons;
 pub mod input;
 pub mod lang;

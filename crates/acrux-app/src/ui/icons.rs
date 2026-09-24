@@ -103,6 +103,8 @@ pub enum Icon {
     ChevronUp,
     /// Croix : fermer (la carte de recherche).
     Close,
+    /// Page à deux champs (un document à remplir, la barre de formulaire).
+    Form,
 }
 
 /// Contour d'une page, motif commun à beaucoup d'icônes.
@@ -484,6 +486,15 @@ pub fn geometry(icon: Icon) -> (Path, Path) {
             polyline(&mut lines, &[(7.0, 7.0), (17.0, 17.0)]);
             polyline(&mut lines, &[(17.0, 7.0), (7.0, 17.0)]);
         }
+        Icon::Form => {
+            // Une page, et deux champs : chacun son étiquette (un trait
+            // court) et sa case à remplir.
+            page(&mut lines, 4.0, 3.5, 16.0, 17.0);
+            polyline(&mut lines, &[(7.0, 9.0), (9.5, 9.0)]);
+            page(&mut lines, 11.5, 7.0, 5.5, 4.0);
+            polyline(&mut lines, &[(7.0, 15.5), (9.5, 15.5)]);
+            page(&mut lines, 11.5, 13.5, 5.5, 4.0);
+        }
         Icon::Redact => {
             page(&mut lines, 5.0, 3.5, 14.0, 17.0);
             bar(&mut fills, 7.5, 9.5, 9.0, 5.0);
@@ -690,6 +701,7 @@ mod tests {
             Icon::ChevronDown,
             Icon::ChevronUp,
             Icon::Close,
+            Icon::Form,
         ];
         let mut raster = Rasterizer::new();
         for icon in icons {

@@ -195,6 +195,9 @@ pub struct Prefs {
     pub check_updates: bool,
     /// Jour de la dernière vérification, en jours depuis 1970.
     pub last_update_check: u64,
+    /// Surligner les champs de formulaire (bleu pâle, comme Acrobat) : la
+    /// bascule de la barre de formulaire, retenue d'une séance à l'autre.
+    pub highlight_fields: bool,
     /// Signatures enregistrées de « remplir et signer », sous leur forme
     /// texte. Plusieurs, comme dans Acrobat : on signe rarement toujours de
     /// la même façon (nom complet, initiales d'un autre prénom, paraphe
@@ -232,6 +235,7 @@ impl Default for Prefs {
             window_max: false,
             check_updates: true,
             last_update_check: 0,
+            highlight_fields: true,
             signatures: Vec::new(),
             initials: None,
             sign_nib: 0,
@@ -336,6 +340,7 @@ impl Prefs {
                         p.last_update_check = day;
                     }
                 }
+                "surligner-champs" => p.highlight_fields = value == "1" || value == "true",
                 "encre-pointe" => p.sign_nib = value.parse().unwrap_or(0).min(2),
                 "encre-epaisseur" => p.sign_weight = value.parse().unwrap_or(1).min(2),
                 "encre-couleur" => p.sign_color = value.parse().unwrap_or(0),
@@ -378,6 +383,7 @@ impl Prefs {
         let _ = writeln!(out, "langue={}", self.language);
         let _ = writeln!(out, "mises-a-jour={}", u8::from(self.check_updates));
         let _ = writeln!(out, "derniere-verification={}", self.last_update_check);
+        let _ = writeln!(out, "surligner-champs={}", u8::from(self.highlight_fields));
         for value in self.signatures.iter().take(MAX_SIGNATURES) {
             let _ = writeln!(out, "signature={value}");
         }
@@ -443,6 +449,7 @@ mod tests {
             window_max: false,
             check_updates: false,
             last_update_check: 20_350,
+            highlight_fields: false,
             signatures: vec!["typed:Élise Marchand".into()],
             initials: Some("drawn:1.0,2.0 3.0,4.0".into()),
             sign_nib: 2,

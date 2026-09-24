@@ -34,6 +34,10 @@ pub(super) enum Then {
     OwnerPassword,
     /// Vider la liste des documents récents.
     ClearRecent,
+    /// Effacer le formulaire.
+    ResetForm,
+    /// Aplatir le formulaire.
+    FlattenForm,
 }
 
 /// Forme de la question, qui dit ce que veut chaque bouton.
@@ -119,7 +123,7 @@ impl Viewer {
         }
         // Ce qui est tapé n'est pas encore au document : sans cela, on
         // fermerait un onglet réputé intact en perdant la saisie.
-        self.close_active();
+        self.flush_typing();
         let modified = self.tab_doc(index).is_some_and(|l| l.modified);
         if !modified {
             self.close_tab_now(index);
@@ -152,7 +156,7 @@ impl Viewer {
         }
         // La saisie en cours passe au document avant qu'on se demande s'il
         // est modifié — sinon elle disparaîtrait sans un mot.
-        self.close_active();
+        self.flush_typing();
         let active = self.loaded.as_ref().is_some_and(|l| l.modified);
         let others = self.others.iter().filter(|l| l.modified).count();
         let total = others + usize::from(active);
@@ -312,6 +316,18 @@ impl Viewer {
             }
             Then::InstallUpdate(url, version) => self.install_update_now(&url, &version),
             Then::ClearRecent => self.clear_recent(),
+            // Deux opérations rares qui touchent tout le formulaire, voire le
+            // contenu des pages : le chemin complet d'`apply_edit` convient.
+            Then::ResetForm => {
+                if self.apply_edit(EditOp::ResetForm) {
+                    self.set_notice(tr("formulaire effacé — Ctrl+Z pour revenir").into());
+                }
+            }
+            Then::FlattenForm => {
+                if self.apply_edit(EditOp::FlattenForm) {
+                    self.set_notice(tr("formulaire aplati — Ctrl+Z pour revenir").into());
+                }
+            }
         }
     }
 

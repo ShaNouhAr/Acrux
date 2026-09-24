@@ -29,7 +29,9 @@ use super::{
     EditOp, Frame, HashMap, Instant, Key, Matrix, Modifiers, PageBox, PageIndex, Point, Rect,
     RenderOptions, Toolbar, Viewer, WindowHandle,
 };
-use crate::ui::editpdf::{step_size, BarAction, Buffer, EditBar, EditTool};
+use crate::ui::editpdf::{
+    step_of, step_size, BarAction, Buffer, EditBar, EditTool, Step, StepKind,
+};
 use crate::ui::objects::{self as objects_ui, Handle, ViewRect};
 use acrux_features::edit_text::{
     line_at, line_unit, move_paragraph_styled, normalized, open_paragraph, open_unit,
@@ -66,30 +68,6 @@ pub(super) struct EditMode {
     /// Écriture au service d'un autre outil (« remplir et signer ») : pas de
     /// barre à soi, et c'est l'autre outil qui commande.
     pub overlay: bool,
-}
-
-/// Un état du texte d'un bloc : de quoi revenir en arrière sans toucher au
-/// document.
-#[derive(Debug, Clone)]
-pub(super) struct Step {
-    /// Texte.
-    pub text: String,
-    /// Curseur.
-    pub caret: usize,
-    /// Autre bout de la sélection.
-    pub anchor: usize,
-}
-
-/// Nature d'un geste de frappe : deux gestes de même nature qui se suivent
-/// n'en font qu'un pour l'annulation — on défait un mot, pas une lettre.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum StepKind {
-    /// Rien encore.
-    None,
-    /// Des caractères ajoutés.
-    Insert,
-    /// Des caractères retirés.
-    Delete,
 }
 
 /// Déplacement ou redimensionnement en cours.
@@ -323,6 +301,8 @@ impl Viewer {
         if self.loaded.is_none() {
             return;
         }
+        // Un champ de formulaire en saisie est validé : on change d'outil.
+        self.commit_field();
         // Le mode écrit le document sans passer par `apply_edit` : le droit
         // se vérifie donc à l'entrée.
         if self.edit.is_none() && !self.require_right(crate::render_worker::Right::Modify) {
@@ -2240,10 +2220,13 @@ impl Viewer {
     /// texte ajoutée) doit s'y ajouter, sans quoi les boutons resteraient
     /// grisés pendant qu'on y tape.
     pub(super) fn block_history(&self) -> (bool, bool) {
-        self.edit
+        let (field_undo, field_redo) = self.field_history();
+        let (undo, redo) = self
+            .edit
             .as_ref()
             .and_then(|e| e.active.as_ref())
-            .map_or((false, false), |a| (!a.undo.is_empty(), !a.redo.is_empty()))
+            .map_or((false, false), |a| (!a.undo.is_empty(), !a.redo.is_empty()));
+        (undo || field_undo, redo || field_redo)
     }
 
     /// Défait la dernière étape **dans le bloc**, sans fermer la saisie.
@@ -2251,6 +2234,11 @@ impl Viewer {
     /// Rend faux quand il n'y a plus rien à défaire ici : c'est alors à
     /// l'annulation du document de jouer.
     pub(super) fn undo_step(&mut self, window: &mut dyn WindowHandle) -> bool {
+        // La saisie d'un champ de formulaire a ses propres étapes.
+        if self.field_undo_step() {
+            window.request_redraw();
+            return true;
+        }
         let Some(a) = self.edit.as_mut().and_then(|e| e.active.as_mut()) else {
             return false;
         };
@@ -2273,6 +2261,10 @@ impl Viewer {
 
     /// Refait l'étape défaite.
     pub(super) fn redo_step(&mut self, window: &mut dyn WindowHandle) -> bool {
+        if self.field_redo_step() {
+            window.request_redraw();
+            return true;
+        }
         let Some(a) = self.edit.as_mut().and_then(|e| e.active.as_mut()) else {
             return false;
         };
@@ -2644,30 +2636,6 @@ impl Pending {
     }
 }
 
-/// Nature d'un geste de frappe, et s'il **ouvre une étape** d'annulation.
-///
-/// La règle est celle d'un traitement de texte : les caractères qui se
-/// suivent forment une étape, et l'on coupe quand l'utilisateur change de
-/// geste (frapper puis effacer), qu'il déplace le curseur, ou qu'il tape un
-/// blanc ou une ponctuation — ainsi Ctrl+Z défait un mot, pas une lettre, et
-/// jamais toute une phrase.
-fn step_of(before: &Buffer, after: &Buffer, last: StepKind, last_caret: usize) -> (StepKind, bool) {
-    let grew = after.text.chars().count() > before.text.chars().count();
-    let kind = if grew {
-        StepKind::Insert
-    } else {
-        StepKind::Delete
-    };
-    let typed_break = grew
-        && after
-            .text
-            .chars()
-            .nth(before.caret)
-            .is_some_and(|c| c.is_whitespace() || c.is_ascii_punctuation());
-    let jumped = before.caret != last_caret;
-    (kind, kind != last || jumped || typed_break)
-}
-
 /// Contour d'un rectangle de la vue, élargi d'une marge.
 fn outline(frame: &mut Frame<'_>, r: &Rect, margin: f64, width: i32, color: (u8, u8, u8)) {
     let x0 = (r.x0.min(r.x1) - margin).round() as i32;
@@ -2731,67 +2699,5 @@ fn guide_line(frame: &mut Frame<'_>, x0: f64, y0: f64, x1: f64, y1: f64, color: 
             color.1,
             color.2,
         );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Un texte et son curseur, pour éprouver le découpage en étapes.
-    fn buffer(text: &str, caret: usize) -> Buffer {
-        let mut b = Buffer::new(text);
-        b.caret = caret;
-        b.anchor = caret;
-        b
-    }
-
-    /// Des lettres qui se suivent n'ouvrent qu'une étape : Ctrl+Z défait le
-    /// mot, pas la lettre.
-    #[test]
-    fn les_lettres_qui_se_suivent_font_une_etape() {
-        let before = buffer("bonjou", 6);
-        let after = buffer("bonjour", 7);
-        let (kind, opens) = step_of(&before, &after, StepKind::Insert, 6);
-        assert_eq!(kind, StepKind::Insert);
-        assert!(!opens, "une lettre de plus prolonge l'étape");
-    }
-
-    /// Un blanc ferme le mot : l'étape suivante recommence là.
-    #[test]
-    fn un_blanc_ouvre_une_etape() {
-        let before = buffer("bonjour", 7);
-        let after = buffer("bonjour ", 8);
-        let (_, opens) = step_of(&before, &after, StepKind::Insert, 7);
-        assert!(opens);
-    }
-
-    /// Effacer après avoir tapé ouvre une étape : on ne défait pas les deux
-    /// d'un coup.
-    #[test]
-    fn effacer_apres_avoir_tape_ouvre_une_etape() {
-        let before = buffer("bonjour", 7);
-        let after = buffer("bonjou", 6);
-        let (kind, opens) = step_of(&before, &after, StepKind::Insert, 7);
-        assert_eq!(kind, StepKind::Delete);
-        assert!(opens);
-    }
-
-    /// Déplacer le curseur ailleurs ouvre une étape.
-    #[test]
-    fn deplacer_le_curseur_ouvre_une_etape() {
-        let before = buffer("bonjour", 2);
-        let after = buffer("bXonjour", 3);
-        let (_, opens) = step_of(&before, &after, StepKind::Insert, 7);
-        assert!(opens, "la frappe reprend ailleurs : nouvelle étape");
-    }
-
-    /// Effacer lettre après lettre ne fait qu'une étape.
-    #[test]
-    fn les_effacements_qui_se_suivent_font_une_etape() {
-        let before = buffer("bonjou", 6);
-        let after = buffer("bonjo", 5);
-        let (_, opens) = step_of(&before, &after, StepKind::Delete, 6);
-        assert!(!opens);
     }
 }

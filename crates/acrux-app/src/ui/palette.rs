@@ -157,6 +157,12 @@ pub enum Command {
     EditObjects,
     /// Ouvrir ou fermer l'outil « remplir et signer ».
     FillSign,
+    /// Surligner les champs de formulaire, ou cesser de les surligner.
+    ToggleFieldHighlight,
+    /// Effacer le formulaire : chaque champ reprend sa valeur par défaut.
+    ResetForm,
+    /// Aplatir le formulaire : les champs deviennent du contenu fixe.
+    FlattenForm,
     /// Marquer la sélection pour biffure.
     MarkRedaction,
     /// Appliquer les biffures.
@@ -247,6 +253,9 @@ impl Command {
             Command::CheckUpdates => "check-updates",
             Command::EditObjects => "edit-objects",
             Command::FillSign => "fill-sign",
+            Command::ToggleFieldHighlight => "highlight-fields",
+            Command::ResetForm => "reset-form",
+            Command::FlattenForm => "flatten-form",
             Command::MarkRedaction => "mark-redaction",
             Command::ApplyRedactions => "apply-redactions",
             Command::Protect => "protect",
@@ -403,6 +412,29 @@ const ENTRIES: &[Entry] = &[
         shortcut: "",
         keywords: "zone texte ajouter ecrire inserer boite",
         command: Command::AddTextBox,
+        needs_document: true,
+    },
+    // Les commandes d'un formulaire entier : la palette ne les propose que
+    // pour un document qui a des champs (voir `Viewer::open_palette`).
+    Entry {
+        label: "Surligner les champs",
+        shortcut: "",
+        keywords: "formulaire champ surligner surlignage montrer bleu",
+        command: Command::ToggleFieldHighlight,
+        needs_document: true,
+    },
+    Entry {
+        label: "Effacer le formulaire",
+        shortcut: "",
+        keywords: "formulaire champ effacer vider reinitialiser remise zero",
+        command: Command::ResetForm,
+        needs_document: true,
+    },
+    Entry {
+        label: "Aplatir le formulaire",
+        shortcut: "",
+        keywords: "formulaire champ aplatir figer fusionner definitif",
+        command: Command::FlattenForm,
         needs_document: true,
     },
     Entry {

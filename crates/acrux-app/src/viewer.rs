@@ -30,7 +30,7 @@ use acrux_core::{Matrix, Point, Rect};
 use acrux_document::{collect_pages, Document, Page};
 use acrux_features::annotations::{list_annotations, NewAnnotation};
 use acrux_features::attach::{list_attachments, read_attachment};
-use acrux_features::forms::{list_fields, Field, FieldType, FieldValue};
+use acrux_features::forms::{list_fields, Field, FieldType};
 use acrux_features::navigation::{
     flatten_outline, outline, page_links, Action, Destination, Link, PageIndex, View,
 };
@@ -75,6 +75,7 @@ use acrux_features::fillsign::ink::{InkPoint, Nib, Pen, Stroke, Weight};
 mod context;
 mod dialogs;
 mod editmode;
+mod formfill;
 mod history;
 mod protect;
 mod search;
@@ -82,6 +83,7 @@ mod status;
 mod three_d;
 mod zoom;
 use crate::ui::editpdf::EditTool;
+use crate::ui::formbar::FormBar;
 use crate::ui::modebar::ModeBar;
 use context::{ContextMenu, Target};
 use dialogs::{Asking, Then};
@@ -415,6 +417,10 @@ struct Inking {
     points: Vec<InkPoint>,
 }
 
+// Des drapeaux indépendants (modifié, fichier temporaire, réécriture
+// complète, champs à remplir, barre fermée) : autant de faits distincts sur
+// un document ouvert.
+#[allow(clippy::struct_excessive_bools)]
 struct Loaded {
     path: PathBuf,
     doc: Document,
@@ -452,8 +458,15 @@ struct Loaded {
     /// n'a pas encore de fichier à lui : le premier enregistrement demande
     /// donc où le mettre, au lieu d'écrire dans le dossier temporaire.
     temporary: bool,
-    /// Champs de formulaire (AcroForm), rechargés après chaque modification.
+    /// Champs de formulaire (AcroForm), rechargés après chaque modification
+    /// (par [`Loaded::set_fields`], qui tient `fillable` à jour).
     fields: Vec<Field>,
+    /// Au moins un champ se remplit : c'est ce qui montre la barre de
+    /// formulaire. Tenu à jour avec `fields` : `view_top` le lit à chaque
+    /// mise en page, il ne doit pas parcourir tous les champs.
+    fillable: bool,
+    /// La barre de formulaire a été fermée pour ce document.
+    form_bar_closed: bool,
     /// Commentaires (annotations porteuses de texte), pour le panneau.
     comments: Vec<CommentRow>,
     /// Calques du document et leur visibilité courante (numéro, nom, visible).
@@ -485,6 +498,22 @@ struct Loaded {
 }
 
 impl Loaded {
+    /// Remplace l'inventaire des champs, et ce qu'on en retient.
+    fn set_fields(&mut self, fields: Vec<Field>) {
+        self.fillable = fields.iter().any(|f| {
+            !f.flags.read_only
+                && matches!(
+                    f.kind,
+                    FieldType::Text
+                        | FieldType::CheckBox
+                        | FieldType::Radio
+                        | FieldType::ComboBox
+                        | FieldType::ListBox
+                )
+        });
+        self.fields = fields;
+    }
+
     /// Liens d'une page (lus au premier appel).
     fn links(&mut self, page: usize) -> &[Link] {
         let (doc, pages, index) = (&self.doc, &self.pages, &self.page_index);
@@ -526,8 +555,6 @@ enum PromptKind {
     OwnerPassword { then: OwnerThen },
     /// Texte d'une note à poser sur `page` au point `(x, y)` (espace page).
     Note { page: usize, x: f64, y: f64 },
-    /// Valeur d'un champ de formulaire.
-    Field { name: String, kind: FieldType },
     /// Commentaire à joindre à un surlignage déjà découpé en zones.
     Highlight { zones: Vec<(usize, Rect)> },
     /// Texte à répartir dans un peigne de cases (IBAN, BIC, date) de `page`.
@@ -854,8 +881,21 @@ pub struct Viewer {
     recent_hits: Vec<(i32, i32, i32, i32)>,
     /// Plein écran (barres masquées).
     fullscreen: bool,
-    /// Champ de formulaire ayant le focus clavier (indice dans `fields`).
-    focus_field: Option<usize>,
+    /// Champ de formulaire ayant le focus clavier : rang du champ dans
+    /// `fields` et rang du widget dans le champ.
+    focus_field: Option<(usize, usize)>,
+    /// Champ de formulaire en cours de saisie (voir `viewer/formfill.rs`).
+    field_edit: Option<formfill::FieldEdit>,
+    /// Liste déroulante d'un champ de formulaire, ouverte.
+    field_menu: Option<formfill::FieldMenu>,
+    /// Barre d'un document à remplir.
+    form_bar: FormBar,
+    /// Police de la saisie dans un champ, de mêmes largeurs que celle de
+    /// l'apparence, et sa famille.
+    field_font: Option<(acrux_features::forms::FontFamily, TextRenderer)>,
+    /// Dernière ligne cliquée d'une liste de choix, et son champ : le point
+    /// de départ d'un Maj+clic.
+    list_anchor: Option<(String, usize)>,
     /// Mode « Modifier le PDF », quand il est actif.
     edit: Option<EditMode>,
     /// Outil d'annotation en cours.
@@ -1007,6 +1047,11 @@ impl Viewer {
             recent_hits: Vec::new(),
             fullscreen: false,
             focus_field: None,
+            field_edit: None,
+            field_menu: None,
+            form_bar: FormBar::default(),
+            field_font: None,
+            list_anchor: None,
             panel: Panel::new(),
             last_current: usize::MAX,
             thumb_key: 0,
@@ -1107,85 +1152,6 @@ impl Viewer {
         });
     }
 
-    /// Champ de formulaire sous un point de la fenêtre : (indice du champ,
-    /// indice du widget).
-    fn widget_at(&mut self, x: i32, y: i32) -> Option<(usize, usize)> {
-        let (page, pt) = self.page_at(x, y)?;
-        let l = self.loaded.as_ref()?;
-        for (fi, f) in l.fields.iter().enumerate() {
-            for (wi, w) in f.widgets.iter().enumerate() {
-                if w.page == Some(page) && w.rect.contains(pt) {
-                    return Some((fi, wi));
-                }
-            }
-        }
-        None
-    }
-
-    /// Clic sur un widget de formulaire : bascule, sélection ou saisie.
-    fn click_widget(&mut self, fi: usize, wi: usize) {
-        let Some(l) = &self.loaded else { return };
-        let Some(field) = l.fields.get(fi) else {
-            return;
-        };
-        if field.flags.read_only {
-            return;
-        }
-        let name = field.name.clone();
-        let kind = field.kind;
-        let current = field
-            .value
-            .as_ref()
-            .map(FieldValue::to_display)
-            .unwrap_or_default();
-        match kind {
-            FieldType::CheckBox => {
-                let checked = matches!(&field.value, Some(FieldValue::State(s)) if s != "Off")
-                    || matches!(&field.value, Some(FieldValue::Bool(true)));
-                self.apply_edit(EditOp::SetField {
-                    name,
-                    value: FieldValue::Bool(!checked),
-                });
-            }
-            FieldType::Radio => {
-                let Some(state) = field.widgets.get(wi).and_then(|w| w.on_state.clone()) else {
-                    return;
-                };
-                self.apply_edit(EditOp::SetField {
-                    name,
-                    value: FieldValue::State(state),
-                });
-            }
-            FieldType::Text | FieldType::ComboBox | FieldType::ListBox => {
-                let label = if kind == FieldType::Text {
-                    format!("Valeur du champ « {name} » :")
-                } else {
-                    let opts: Vec<String> =
-                        field.options.iter().map(|o| o.export.clone()).collect();
-                    format!(
-                        "« {name} » — options : {}{} :",
-                        opts.join(", "),
-                        if field.flags.multi_select {
-                            " (séparer par |)"
-                        } else {
-                            ""
-                        }
-                    )
-                };
-                let mut input = TextInput::new(lang::tr("Valeur"));
-                input.value = current;
-                input.caret = input.value.chars().count();
-                self.prompt = Some(Prompt::new(
-                    lang::tr("Champ de formulaire"),
-                    label,
-                    input,
-                    PromptKind::Field { name, kind },
-                ));
-            }
-            FieldType::Button | FieldType::Signature | FieldType::Unknown => {}
-        }
-    }
-
     /// Lien sous un point de la fenêtre (coordonnées de vue).
     fn link_at(&mut self, x: i32, y: i32) -> Option<Link> {
         let (page, pt) = self.page_at(x, y)?;
@@ -1265,22 +1231,7 @@ impl Viewer {
     /// Clic gauche dans le document : sélection (texte sous le pointeur) ou
     /// début de déplacement.
     fn mouse_down(&mut self, x: i32, y: i32, clicks: u8, shift: bool) {
-        let now = Instant::now();
-        let series = match self.last_click {
-            Some((t, lx, ly, n))
-                if now.duration_since(t) < MULTI_CLICK
-                    && (x - lx).abs() < 4
-                    && (y - ly).abs() < 4 =>
-            {
-                if clicks >= 2 {
-                    2
-                } else {
-                    n + 1
-                }
-            }
-            _ => 1,
-        };
-        self.last_click = Some((now, x, y, series));
+        let series = self.click_series(x, y, clicks);
         let Some((pos, on_text)) = self.text_pos_at(x, y) else {
             self.selection = None;
             self.drag_last = Some((x, y));
@@ -1962,6 +1913,15 @@ impl Viewer {
             if !l.nav.can_forward() {
                 idle.push(Command::ViewForward);
             }
+            // Effacer ou aplatir un formulaire qui n'existe pas : la palette
+            // ne le propose pas.
+            if l.fields.is_empty() {
+                idle.extend([
+                    Command::ToggleFieldHighlight,
+                    Command::ResetForm,
+                    Command::FlattenForm,
+                ]);
+            }
         }
         self.palette = Some(Palette::new(self.loaded.is_some(), &recent).without(&idle));
     }
@@ -1986,8 +1946,8 @@ impl Viewer {
     /// la prennent déjà plus haut (`modal_event`) ; la liste des polices la
     /// fait défiler, le nuancier l'avale (`edit_popup_wheel`). Le menu du
     /// clic droit se referme à la molette, avant d'arriver ici
-    /// (`context_menu_event`). La liste déroulante d'un champ de formulaire
-    /// se branchera ici.
+    /// (`context_menu_event`), et la liste déroulante d'un champ de
+    /// formulaire défile avant (`field_menu_event`).
     fn overlay_wheel(&mut self, delta: f32) -> bool {
         if let Some(p) = &mut self.palette {
             p.wheel(delta);
@@ -2078,20 +2038,13 @@ impl Viewer {
                     else {
                         return;
                     };
+                    let _ = acrux_features::forms::prepare_display(&doc);
                     self.finish_open(path, doc, pages, Some(pw), window);
                     self.announce_restrictions();
                 } else {
                     prompt.error = Some(lang::tr("Mot de passe incorrect").into());
                     prompt.input.clear();
                 }
-            }
-            PromptKind::Field { name, kind } => {
-                let (name, kind) = (name.clone(), *kind);
-                self.prompt = None;
-                self.apply_edit(EditOp::SetField {
-                    name,
-                    value: FieldValue::parse(kind, &value),
-                });
             }
             PromptKind::Highlight { zones } => {
                 let zones = zones.clone();
@@ -2539,6 +2492,7 @@ impl Viewer {
     /// dialogue. La conversion elle-même est faite par le fil de rendu — une
     /// centaine de pages en PNG prendrait plusieurs secondes.
     fn export(&mut self, window: &mut dyn WindowHandle) {
+        self.flush_typing();
         // Convertir, c'est extraire le contenu : ce que la permission de
         // copie refuse, l'export le refuse aussi.
         if self.loaded.is_some() && !self.rights().copy {
@@ -2799,6 +2753,9 @@ impl Viewer {
     }
 
     fn open(&mut self, path: &Path, window: &mut dyn WindowHandle) {
+        // Ce qui est tapé dans un champ appartient au document d'avant, qui
+        // passe à l'arrière-plan : on l'y écrit d'abord.
+        self.commit_field();
         self.leave_home();
         // Une image ouverte devient un PDF, comme dans Acrobat : un TIFF de
         // scanner donne une page par feuille.
@@ -2832,6 +2789,10 @@ impl Viewer {
                         },
                     ));
                 } else {
+                    // Les apparences manquantes d'un formulaire, avant tout
+                    // le reste (voir `forms::prepare_display`) : le fil de
+                    // rendu fait de même, au même moment.
+                    let _ = acrux_features::forms::prepare_display(&doc);
                     self.finish_open(path.to_path_buf(), doc, pages, None, window);
                     self.announce_restrictions();
                 }
@@ -3005,7 +2966,9 @@ impl Viewer {
             full_save: false,
             modified: false,
             temporary: false,
-            fields,
+            fields: Vec::new(),
+            fillable: false,
+            form_bar_closed: false,
             comments,
             layers,
             attachments,
@@ -3017,12 +2980,17 @@ impl Viewer {
             nav: NavHistory::default(),
             resume: None,
         });
+        if let Some(l) = &mut self.loaded {
+            l.set_fields(fields);
+        }
         self.error = None;
         self.scroll_y = 0.0;
         self.scroll_x = 0.0;
         self.selection = None;
         self.close_search();
         self.focus_field = None;
+        self.field_edit = None;
+        self.field_menu = None;
         self.anchor = 0;
         self.title_dirty = true;
         if let Some(l) = &self.loaded {
@@ -3050,6 +3018,7 @@ impl Viewer {
             + self.tabs_height()
             + self.edit_bar_height()
             + self.mode_bar_height()
+            + self.form_bar_height()
     }
 
     /// Hauteur de la barre d'un outil d'annotation.
@@ -3066,6 +3035,7 @@ impl Viewer {
         if self.loaded.is_none() {
             return;
         }
+        self.commit_field();
         if self.annot_tool == Some(tool) {
             self.annot_tool = None;
             window.request_redraw();
@@ -3114,126 +3084,6 @@ impl Viewer {
         }
         window.set_fullscreen(self.fullscreen);
         self.clamp_scroll();
-    }
-
-    /// Champs de formulaire dans l'ordre de tabulation (page, haut → bas, gauche → droite).
-    fn tab_order(&self) -> Vec<usize> {
-        let Some(l) = &self.loaded else {
-            return Vec::new();
-        };
-        let mut order: Vec<(usize, i64, i64, usize)> = l
-            .fields
-            .iter()
-            .enumerate()
-            .filter(|(_, f)| {
-                !f.flags.read_only
-                    && !matches!(
-                        f.kind,
-                        FieldType::Button | FieldType::Signature | FieldType::Unknown
-                    )
-            })
-            .filter_map(|(i, f)| {
-                let w = f.widgets.first()?;
-                let page = w.page?;
-                Some((
-                    page,
-                    -(w.rect.y1 * 10.0) as i64,
-                    (w.rect.x0 * 10.0) as i64,
-                    i,
-                ))
-            })
-            .collect();
-        order.sort_unstable();
-        order.into_iter().map(|(_, _, _, i)| i).collect()
-    }
-
-    /// Donne le focus au champ suivant (`forward`) ou précédent, et le montre.
-    fn focus_next_field(&mut self, forward: bool) {
-        let order = self.tab_order();
-        if order.is_empty() {
-            return;
-        }
-        let pos = self
-            .focus_field
-            .and_then(|f| order.iter().position(|&i| i == f));
-        let next = match (pos, forward) {
-            (None, true) => 0,
-            (None, false) => order.len() - 1,
-            (Some(p), true) => (p + 1) % order.len(),
-            (Some(p), false) => (p + order.len() - 1) % order.len(),
-        };
-        let fi = order[next];
-        self.focus_field = Some(fi);
-        let target = self.loaded.as_ref().and_then(|l| {
-            let w = l.fields.get(fi)?.widgets.first()?;
-            Some((w.page?, w.rect))
-        });
-        if let Some((page, rect)) = target {
-            // Montre le champ si son haut ou son bas sort de la vue.
-            let layout = self.layout();
-            if let (Some(&PageBox { y, w, h, .. }), Some(l)) = (layout.get(page), &self.loaded) {
-                let p = &l.pages[page];
-                let m = base_matrix(
-                    &p.crop_box(&l.doc),
-                    self.scale(),
-                    shown_rotation(l, p),
-                    w,
-                    h,
-                );
-                let dev = m.transform_rect(&rect);
-                let top = f64::from(y) + dev.y0;
-                let bottom = f64::from(y) + dev.y1;
-                let vh = f64::from(self.view_height());
-                if top < self.scroll_y || bottom > self.scroll_y + vh {
-                    self.scroll_y = (top - vh / 3.0).max(0.0);
-                    self.clamp_scroll();
-                }
-            }
-        }
-    }
-
-    /// Active le champ ayant le focus (Entrée / Espace).
-    fn activate_focused_field(&mut self) {
-        if let Some(fi) = self.focus_field {
-            self.click_widget(fi, 0);
-        }
-    }
-
-    /// Cadre le champ de formulaire ayant le focus.
-    #[allow(clippy::many_single_char_names)] // coordonnées et matrices
-    fn paint_field_focus(&mut self, frame: &mut Frame<'_>) {
-        let Some(fi) = self.focus_field else { return };
-        let accent = self.theme.accent;
-        let layout = self.layout();
-        let scale = self.scale();
-        let origins: Vec<Option<(f64, f64)>> = (0..layout.len())
-            .map(|i| self.page_screen(&layout, i))
-            .collect();
-        let Some(l) = &self.loaded else { return };
-        let Some(field) = l.fields.get(fi) else {
-            return;
-        };
-        for w in &field.widgets {
-            let Some(page) = w.page else { continue };
-            let Some(&PageBox { w: pw, h: ph, .. }) = layout.get(page) else {
-                continue;
-            };
-            let Some(Some((ox, top))) = origins.get(page).copied() else {
-                continue;
-            };
-            let p = &l.pages[page];
-            let m = base_matrix(&p.crop_box(&l.doc), scale, shown_rotation(l, p), pw, ph);
-            let dev = m.transform_rect(&w.rect);
-            let x0 = (ox + dev.x0).round() as i32 - 2;
-            let y0 = (top + dev.y0).round() as i32 - 2;
-            let bw = dev.width().round() as i32 + 4;
-            let bh = dev.height().round() as i32 + 4;
-            let t = (2.0 * self.dpi_scale).round().max(1.0) as i32;
-            frame.fill_rect(x0, y0, bw, t, accent.0, accent.1, accent.2);
-            frame.fill_rect(x0, y0 + bh - t, bw, t, accent.0, accent.1, accent.2);
-            frame.fill_rect(x0, y0, t, bh, accent.0, accent.1, accent.2);
-            frame.fill_rect(x0 + bw - t, y0, t, bh, accent.0, accent.1, accent.2);
-        }
     }
 
     /// Bord gauche de la zone de document (à droite du panneau latéral).
@@ -3562,6 +3412,9 @@ impl Viewer {
     /// sont sautées : sans document, la barre d'outils n'a rien d'actif ; sans
     /// panneau ouvert, il n'y a pas de liste où aller.
     fn cycle_region(&mut self, forward: bool, window: &mut dyn WindowHandle) {
+        // Le clavier quitte le document : le champ en saisie est validé,
+        // sans quoi il garderait la frappe destinée à la barre ou au panneau.
+        self.commit_field();
         let info = self.toolbar_info();
         let order = [Region::Document, Region::Toolbar, Region::Panel];
         let at = order.iter().position(|r| *r == self.region).unwrap_or(0);
@@ -3886,6 +3739,15 @@ impl Viewer {
             Command::ApplyRedactions => self.apply_redactions(),
             Command::Protect => self.protect_command(),
             Command::Unprotect => self.remove_protection(),
+            Command::ToggleFieldHighlight => {
+                if self.loaded.as_ref().is_some_and(|l| !l.fields.is_empty()) {
+                    self.toggle_field_highlight();
+                } else {
+                    self.set_notice(lang::tr("ce document n'a pas de champ de formulaire").into());
+                }
+            }
+            Command::ResetForm => self.ask_reset_form(),
+            Command::FlattenForm => self.ask_flatten_form(),
         }
     }
 
@@ -3895,6 +3757,9 @@ impl Viewer {
     /// impossible, ce qui est déjà dit : l'appelant ne doit pas annoncer
     /// comme fait ce qui ne l'est pas.
     fn apply_edit(&mut self, op: EditOp) -> bool {
+        // Ce qui est tapé dans un champ passe d'abord : l'historique garde
+        // l'ordre des gestes.
+        self.commit_field();
         // Un document protégé ne se modifie que dans la limite de ses
         // permissions (le propriétaire les a toutes).
         if self.loaded.is_some() && !self.require_right(op.required_right()) {
@@ -3942,11 +3807,16 @@ impl Viewer {
         l.texts.clear();
         l.links.clear();
         l.boxes.clear();
-        l.fields = list_fields(&l.doc).unwrap_or_default();
+        l.set_fields(list_fields(&l.doc).unwrap_or_default());
         l.comments = collect_comments(&l.doc, &l.pages);
         l.attachments = collect_attachments(&l.doc);
         l.labels = collect_labels(&l.doc);
         l.modified = true;
+        // Le champ qui avait le focus peut avoir disparu (formulaire aplati).
+        let fields = &l.fields;
+        self.focus_field = self
+            .focus_field
+            .filter(|&(fi, wi)| fields.get(fi).is_some_and(|f| wi < f.widgets.len()));
         self.selection = None;
         // Le document a changé sous la recherche : ses occurrences ne
         // désignent plus rien. Elle se ferme, sa requête retenue (F3 la
@@ -3973,8 +3843,16 @@ impl Viewer {
             mode.active = None;
             mode.units.clear();
         }
+        self.field_edit = None;
+        self.field_menu = None;
         let Some(l) = &self.loaded else { return };
         let (path, password) = (l.path.clone(), l.password.clone());
+        // Le champ qui a le focus, par son nom : les rangs de l'inventaire
+        // peuvent changer avec le document.
+        let focused = self
+            .focus_field
+            .and_then(|(fi, wi)| l.fields.get(fi).map(|f| (f.name.clone(), wi)));
+        let form_bar_closed = l.form_bar_closed;
         let (scroll_x, scroll_y, anchor) = (self.scroll_x, self.scroll_y, self.anchor);
         let panel_tab = self.panel.tab;
         let doc = match Document::load(&path) {
@@ -3987,6 +3865,9 @@ impl Viewer {
         if let Some(pw) = &password {
             let _ = doc.authenticate(pw);
         }
+        // Au même moment de la vie du document qu'à l'ouverture : avant de
+        // rejouer quoi que ce soit.
+        let _ = acrux_features::forms::prepare_display(&doc);
         for op in &ops {
             if let Err(e) = op.apply(&doc) {
                 self.alert("Rejeu impossible", &format!("{e}"));
@@ -4041,6 +3922,7 @@ impl Viewer {
             l.history = ops;
             l.redo = redo;
             l.view_rotation = view_rotation;
+            l.form_bar_closed = form_bar_closed;
             let now = l.pages.len();
             let place = |page: usize| {
                 match &moved {
@@ -4067,6 +3949,12 @@ impl Viewer {
             self.scroll_y = scroll_y;
         }
         self.panel.tab = panel_tab;
+        // Le focus revient au champ qui l'avait.
+        self.focus_field = focused.and_then(|(name, wi)| {
+            let fields = &self.loaded.as_ref()?.fields;
+            let fi = fields.iter().position(|f| f.name == name)?;
+            (wi < fields[fi].widgets.len()).then_some((fi, wi))
+        });
         self.clamp_scroll();
         self.title_dirty = true;
     }
@@ -4075,7 +3963,7 @@ impl Viewer {
     fn undo(&mut self, window: &mut dyn WindowHandle) {
         // La saisie en cours n'est pas encore au document : on l'y porte,
         // sans quoi l'annulation défairait la modification d'avant.
-        self.close_active();
+        self.flush_typing();
         let Some(l) = &mut self.loaded else { return };
         let Some(op) = l.history.pop() else { return };
         let ops = l.history.clone();
@@ -4107,7 +3995,7 @@ impl Viewer {
 
     /// Rétablit la dernière modification annulée.
     fn redo_edit(&mut self, window: &mut dyn WindowHandle) {
-        self.close_active();
+        self.flush_typing();
         let Some(l) = &mut self.loaded else { return };
         let Some(op) = l.redo.pop() else { return };
         let redo = l.redo.clone();
@@ -4157,7 +4045,7 @@ impl Viewer {
     /// Enregistre (`save_as` : demande un nouveau chemin et réécrit tout).
     fn save(&mut self, save_as: bool, window: &mut dyn WindowHandle) -> bool {
         // Ce qui est tapé mais pas encore écrit doit l'être avant le fichier.
-        self.close_active();
+        self.flush_typing();
         let Some(l) = &self.loaded else { return false };
         // Un document fabriqué à partir d'une image n'a pas de fichier à lui :
         // le premier Ctrl+S demande où le ranger.
@@ -4223,6 +4111,8 @@ impl Viewer {
         if self.loaded.is_none() {
             return;
         }
+        // On imprime ce qu'on voit, saisie en cours comprise.
+        self.flush_typing();
         let Some(level) = self.print_level_or_refuse() else {
             return;
         };
@@ -4671,6 +4561,7 @@ impl Viewer {
         if self.edit.as_ref().is_some_and(|e| e.active.is_some()) {
             self.close_active();
         }
+        self.commit_field();
         let spot = self.view_spot();
         let Some(l) = &mut self.loaded else { return };
         l.view_rotation = add_rotation(l.view_rotation, degrees);
@@ -4742,7 +4633,7 @@ impl Viewer {
     fn select_tab(&mut self, index: usize) {
         // La saisie porte sur **ce** document : on l'y écrit avant d'en
         // changer.
-        self.close_active();
+        self.flush_typing();
         self.leave_home();
         self.edit = None;
         self.annot_tool = None;
@@ -4877,6 +4768,9 @@ impl Viewer {
         self.selection = None;
         self.close_search();
         self.focus_field = None;
+        self.field_edit = None;
+        self.field_menu = None;
+        self.list_anchor = None;
         self.panel = Panel::new();
         self.title_dirty = true;
     }
@@ -5224,6 +5118,7 @@ impl Viewer {
 
     /// Ouvre ou ferme l'outil « modifier ».
     fn toggle_objects(&mut self, window: &mut dyn WindowHandle) {
+        self.commit_field();
         self.leave_home();
         self.edit = None;
         self.annot_tool = None;
@@ -5524,6 +5419,7 @@ impl Viewer {
     /// fenêtre de signature — ou une signature collée au pointeur — à chaque
     /// ouverture gênait plus que cela n'aidait. On choisit dans le panneau.
     fn toggle_fillsign(&mut self, window: &mut dyn WindowHandle) {
+        self.commit_field();
         self.leave_home();
         if self.loaded.is_none() {
             return;
@@ -6812,11 +6708,15 @@ impl Viewer {
             self.context_menu = None;
         }
         self.drop_blocked_zoom_menu();
+        if self.field_menu.is_some() {
+            self.drop_blocked_field_menu();
+        }
         if self.dialog_event(&event, window)
             || self.protect_event(&event, window)
             || self.modal_event(&event, window)
             || self.zoom_menu_event(&event, window)
             || self.context_menu_event(&event, window)
+            || self.field_menu_event(&event, window)
         {
             self.swallow_space = pressing;
             if self.title_dirty {
@@ -6851,6 +6751,7 @@ impl Viewer {
                     && !self.tip_due()
                     && !self.media_playing()
                     && !self.edit_on()
+                    && self.field_edit.is_none()
                     && !self.welcome_pending()
                     && !self.animating()
                 {
@@ -6915,6 +6816,15 @@ impl Viewer {
                     }
                 }
             }
+            // Un champ de formulaire en saisie prend le clavier avant tout ce
+            // qui suit — les raccourcis sans modificateur (r, h, s, t…) y
+            // sont des lettres, Ctrl+A y sélectionne le champ. Les touches de
+            // disposition (F4, F5, F6, F11) restent à la fenêtre.
+            Event::Key(key, m)
+                if self.field_typing()
+                    && !is_global_key(key, m)
+                    && self.field_key(key, m, window) => {}
+            Event::Char(c, m) if self.field_typing() && self.field_char(c, m, window) => {}
             // Ctrl+V dans un champ de saisie — la recherche, la police ou le
             // code d'une couleur — y colle le presse-papiers ; celui d'une
             // invite (le texte d'un peigne, une note, un mot de passe) passe
@@ -7155,7 +7065,7 @@ impl Viewer {
                         't' | 'T' => self.toggle_theme(window),
                         'r' => self.rotate_current(90),
                         'R' => self.rotate_current(-90),
-                        ' ' => self.activate_focused_field(),
+                        ' ' => self.activate_focused_field(window),
                         'e' | 'E' => self.start_text_edit(window),
                         'h' => self.highlight_selection(),
                         'H' => self.highlight_with_comment(window),
@@ -7196,6 +7106,11 @@ impl Viewer {
                     window.request_redraw();
                     return;
                 }
+                // Un clic hors du champ en cours de saisie le valide, où
+                // qu'il tombe : barre, panneau, autre champ, page.
+                if self.field_edit.is_some() && !self.in_field_edit(x, y) {
+                    self.commit_field();
+                }
                 // La liste des polices déroulée prend tous les clics : une
                 // ligne choisit, ailleurs referme.
                 if self.edit_menu_open() {
@@ -7234,6 +7149,10 @@ impl Viewer {
                     // sans quoi le zoom, sous la colonne, cliquait un outil.
                     if self.prompt.is_none() {
                         self.status_click(x, y, window);
+                    }
+                } else if self.in_form_bar(y) {
+                    if self.prompt.is_none() {
+                        self.form_bar_click(x, y, window);
                     }
                 } else if y < top && self.annot_tool.is_some() && !self.edit_on() {
                     if self.mode_bar.closes(x, y) {
@@ -7328,10 +7247,8 @@ impl Viewer {
                             window.request_redraw();
                         } else if self.place_sign(x, y, window) {
                             // L'outil a posé quelque chose : ni sélection, ni lien.
-                        } else if let Some((fi, wi)) = self.widget_at(x, y) {
-                            self.selection = None;
-                            self.focus_field = Some(fi);
-                            self.click_widget(fi, wi);
+                        } else if let Some((fi, wi, pt)) = self.widget_at(x, y) {
+                            self.click_widget(fi, wi, (x, y), pt, clicks, modifiers, window);
                         } else if let Some(link) = self.link_at(x, y) {
                             self.selection = None;
                             self.follow(&link.action, window);
@@ -7432,6 +7349,7 @@ impl Viewer {
             Event::MouseUp { .. } => {
                 self.three_d_mouse_up();
                 self.edit_mouse_up();
+                self.field_mouse_up();
                 if self.panel.dragging() {
                     let action = self.panel.mouse_up();
                     self.panel_action(action, window);
@@ -7451,6 +7369,15 @@ impl Viewer {
             Event::MouseMove { x, y, dragging } if self.three_d_mouse_move(x, y, window) => {
                 let _ = dragging;
             }
+            // Un glisser commencé dans le champ en saisie y sélectionne.
+            Event::MouseMove {
+                x,
+                y,
+                dragging: true,
+            } if self.field_selecting() => {
+                let (vx, vy) = (x - self.view_left() as i32, y - self.view_top() as i32);
+                self.field_drag(vx, vy);
+            }
             Event::MouseMove { x, y, dragging } => {
                 let bar = Toolbar::height(&self.theme, self.dpi_scale as f32);
                 let mut hover_changed = self.toolbar.mouse_move(x, y);
@@ -7460,6 +7387,7 @@ impl Viewer {
                 if self.annot_tool.is_some() {
                     hover_changed |= self.mode_bar.mouse_move(x, y);
                 }
+                hover_changed |= self.form_bar_hover(x, y);
                 // Les onglets avant l'info-bulle : sans quoi leur survol ne
                 // la déclenchait jamais.
                 let tabs = self.tabs_height() as i32;
@@ -7580,9 +7508,12 @@ impl Viewer {
                         // Un modèle 3D se prend en main : la main dit qu'il y
                         // a quelque chose à saisir.
                         Cursor::Move
-                    } else if in_view
-                        && (self.widget_at(x, y).is_some() || self.link_at(x, y).is_some())
+                    } else if let Some(cursor) = in_view.then(|| self.widget_cursor(x, y)).flatten()
                     {
+                        // La barre de texte là où l'on tape, la main sur une
+                        // case, un bouton ou une liste.
+                        cursor
+                    } else if in_view && self.link_at(x, y).is_some() {
                         Cursor::Hand
                     } else if in_view && self.text_pos_at(x, y).is_some_and(|(_, on)| on) {
                         Cursor::IBeam
@@ -7617,6 +7548,34 @@ impl Viewer {
         window.request_redraw();
     }
 
+    /// Dessine la barre de l'outil d'annotation en cours, s'il y en a un.
+    fn paint_mode_bar(&mut self, frame: &mut Frame<'_>) {
+        let Some(tool) = self.annot_tool else { return };
+        let y = Toolbar::height(&self.theme, self.dpi_scale as f32)
+            + self.tabs_height() as i32
+            + self.edit_bar_height() as i32;
+        let (title, hint) = tool.describe();
+        let icon = match tool {
+            AnnotTool::Highlight => crate::ui::icons::Icon::Highlight,
+            AnnotTool::Note => crate::ui::icons::Icon::Note,
+            AnnotTool::Redact => crate::ui::icons::Icon::Redact,
+        };
+        let (theme, dpi) = (self.theme, self.dpi_scale as f32);
+        if let Some(text) = self.text.as_mut() {
+            self.mode_bar.paint(
+                frame,
+                text,
+                &mut self.raster,
+                &theme,
+                dpi,
+                y,
+                icon,
+                title,
+                hint,
+            );
+        }
+    }
+
     /// Peint toute la fenêtre.
     fn paint_all(&mut self, frame: &mut Frame<'_>) {
         self.collect_results();
@@ -7644,6 +7603,7 @@ impl Viewer {
                 self.paint_welcome(&mut view);
             } else {
                 self.paint_document(&mut view);
+                self.paint_fields(&mut view);
             }
             self.paint_3d(&mut view);
             self.paint_selection(&mut view);
@@ -7682,31 +7642,8 @@ impl Viewer {
             if self.edit_on() {
                 self.paint_edit_bar(frame);
             }
-            if let Some(tool) = self.annot_tool {
-                let y = Toolbar::height(&self.theme, self.dpi_scale as f32)
-                    + self.tabs_height() as i32
-                    + self.edit_bar_height() as i32;
-                let (title, hint) = tool.describe();
-                let icon = match tool {
-                    AnnotTool::Highlight => crate::ui::icons::Icon::Highlight,
-                    AnnotTool::Note => crate::ui::icons::Icon::Note,
-                    AnnotTool::Redact => crate::ui::icons::Icon::Redact,
-                };
-                let (theme, dpi) = (self.theme, self.dpi_scale as f32);
-                if let Some(text) = self.text.as_mut() {
-                    self.mode_bar.paint(
-                        frame,
-                        text,
-                        &mut self.raster,
-                        &theme,
-                        dpi,
-                        y,
-                        icon,
-                        title,
-                        hint,
-                    );
-                }
-            }
+            self.paint_mode_bar(frame);
+            self.paint_form_bar(frame);
             self.paint_status(frame);
         } else {
             // Plein écran, lecture : pas de barre d'état, rien à y cliquer.
@@ -7717,6 +7654,7 @@ impl Viewer {
         // cartes qui s'ouvrent par-dessus, avec lui.
         self.paint_tip(frame);
         self.paint_zoom_menu(frame);
+        self.paint_field_menu(frame);
         self.paint_capture(frame);
         self.paint_protect(frame);
         self.paint_prompt(frame);
@@ -7736,6 +7674,11 @@ impl Viewer {
             window.request_redraw();
             return;
         }
+        // Un champ qui a le focus prend ses flèches : la ligne d'une liste,
+        // le bouton d'un groupe radio, Alt+↓ pour une liste déroulante.
+        if self.focus_field.is_some() && self.field_nav_key(key, m, window) {
+            return;
+        }
         let page_h = f64::from(self.view_height());
         match key {
             // F3 est la touche « suivante » de Windows ; la colonne des
@@ -7753,8 +7696,13 @@ impl Viewer {
             Key::F(11) => self.toggle_fullscreen(window),
             // Ctrl+Tab change d'onglet ; il est pris plus tôt, quelle que
             // soit la zone (voir `handle_event`).
-            Key::Tab if !m.ctrl => self.focus_next_field(!m.shift),
-            Key::Enter => self.activate_focused_field(),
+            Key::Tab if !m.ctrl => {
+                // Comme dans Acrobat : Tab entre dans le champ suivant, son
+                // texte sélectionné, prêt à être remplacé.
+                self.focus_next_field(!m.shift);
+                self.enter_focused_field(window);
+            }
+            Key::Enter => self.activate_focused_field(window),
             Key::Delete if m.ctrl => self.delete_current(),
             Key::Down => self.glide_by(70.0),
             Key::Up => self.glide_by(-70.0),

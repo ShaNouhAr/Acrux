@@ -9,6 +9,46 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 
 ## 0.23.0 — non publiée
 
+- **Les formulaires se remplissent sur place, comme dans Acrobat.** Un clic
+  dans un champ de texte y pose le curseur : on tape directement dans la
+  page, dans la police, la taille et la couleur que le champ aura une fois
+  validé. Sélection à la souris (glisser, double et triple clic) et au
+  clavier, Ctrl+A, Ctrl+C, Ctrl+X, Ctrl+V, Retour arrière, Suppr, Ctrl+←,
+  Début, Fin ; Entrée valide, Échap annule, Ctrl+Z défait mot par mot dans
+  le champ avant de défaire dans le document. Un champ de plusieurs lignes
+  passe à la ligne avec Entrée (Ctrl+Entrée valide) ; un peigne s'arrête à
+  ses cases, `/MaxLen` borne la frappe et le collage ; un mot de passe
+  s'affiche en points et ne se copie pas. L'invite qui énumérait les
+  options en texte a disparu.
+- **Tab passe au champ suivant**, dans l'ordre que le document demande
+  (`/Tabs` : rangées, colonnes, ou l'ordre de ses annotations comme
+  Acrobat), Maj+Tab au précédent ; on entre dans un champ de texte son
+  contenu sélectionné, prêt à être remplacé. Un groupe radio ne fait qu'un
+  arrêt, et ses flèches passent d'un bouton à l'autre ; les flèches changent
+  la ligne d'une liste.
+- **Vraie liste déroulante** sous un champ à choix, ouverte sur l'option en
+  cours et cochée, au clavier comme à la souris, qui défile quand elle est
+  longue ; une flèche la signale sur chaque liste déroulante. Une liste de
+  choix se clique ligne à ligne (Ctrl+clic et Maj+clic pour une sélection
+  multiple).
+- **Barre de formulaire** à l'ouverture d'un document qui a des champs :
+  « Ce document contient des champs à remplir », la bascule **« Surligner
+  les champs »** (bleu pâle, retenue d'une séance à l'autre), **« Effacer
+  le formulaire »** (chaque champ reprend sa valeur par défaut) et
+  **« Aplatir le formulaire »** (les champs deviennent du contenu fixe),
+  tous deux confirmés et annulables par Ctrl+Z. Aussi dans la palette et au
+  clic droit sur la page. Les **champs obligatoires sont cernés de rouge**.
+- **Les champs sans apparence se voient.** Un formulaire livré avec
+  `/NeedAppearances` ou des widgets sans `/AP`, comme en produisent bien des
+  générateurs, s'affichait à moitié vide : ses apparences sont maintenant
+  dessinées à l'ouverture, et un enregistrement les inscrit dans le fichier.
+- Cocher une case, choisir un bouton radio ou une option ne fait plus
+  blanchir la page le temps d'un rendu : seule la page du champ est
+  redessinée, les autres gardent leur image, et la recherche reste ouverte.
+- `acr fill --reset` efface le formulaire avant d'écrire les valeurs ;
+  `acr fields` écrit un saut de ligne d'un champ multiligne `\n`, sur la
+  ligne du champ. Un peigne ne garde plus que ses cases (`/MaxLen`), en
+  ligne de commande comme dans l'application.
 - **Vue précédente, vue suivante.** Alt+← ramène là d'où un lien, un
   signet, « aller à la page » (Ctrl+G), Origine ou Fin, une vignette ou un
   commentaire du panneau, une occurrence de la recherche vous a fait partir ;

@@ -126,6 +126,7 @@ impl Viewer {
             || self.capture.is_some()
             || self.edit_menu_open()
             || self.zoom_menu.is_some()
+            || self.field_menu.is_some()
     }
 
     /// Vrai pendant un geste du bouton gauche ou du milieu : un clic droit
@@ -444,6 +445,7 @@ impl Viewer {
             .loaded
             .as_ref()
             .map_or((false, false), |l| (l.nav.can_back(), l.nav.can_forward()));
+        let has_form = self.loaded.as_ref().is_some_and(|l| !l.fields.is_empty());
         Menu::new(x, y)
             .item(
                 None,
@@ -502,6 +504,22 @@ impl Viewer {
                 shortcut(Command::RotateRight),
                 (Command::RotateRight, here),
                 true,
+            )
+            // Un formulaire : ce qu'on fait de tous ses champs.
+            .separator()
+            .item(
+                self.prefs.highlight_fields.then_some(Icon::Check),
+                tr("Surligner les champs"),
+                "",
+                (Command::ToggleFieldHighlight, now),
+                has_form,
+            )
+            .item(
+                None,
+                tr("Effacer le formulaire"),
+                "",
+                (Command::ResetForm, now),
+                has_form && (rights.fill_forms || rights.annotate),
             )
             .separator()
             .item(
@@ -666,7 +684,7 @@ impl Viewer {
         }
         // Ce qui est tapé mais pas encore écrit compte comme une
         // modification : on l'écrit avant d'en juger.
-        self.close_active();
+        self.flush_typing();
         let modified: Vec<bool> = (0..count)
             .map(|i| self.tab_doc(i).is_some_and(|l| l.modified))
             .collect();

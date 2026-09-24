@@ -174,6 +174,12 @@ pub enum EditOp {
         /// Valeur.
         value: FieldValue,
     },
+    /// Effacer le formulaire : chaque champ remplissable reprend sa valeur
+    /// par défaut, ou redevient vide (`forms::reset_fields`).
+    ResetForm,
+    /// Aplatir le formulaire : les champs deviennent du contenu fixe des
+    /// pages et le formulaire disparaît (`forms::flatten_fields`).
+    FlattenForm,
 }
 
 /// Droit qu'exige une modification d'un document protégé (§7.6.4.2,
@@ -220,14 +226,15 @@ impl EditOp {
             | EditOp::Mark { .. }
             | EditOp::FillSign { .. }
             | EditOp::PlacedRect { .. } => Right::Annotate,
-            EditOp::SetField { .. } => Right::FillForms,
+            EditOp::SetField { .. } | EditOp::ResetForm => Right::FillForms,
             EditOp::EditText { .. }
             | EditOp::ReplaceAll { .. }
             | EditOp::EditObject { .. }
             | EditOp::ApplyRedactions
             | EditOp::Attach { .. }
             | EditOp::Detach { .. }
-            | EditOp::Paragraph { .. } => Right::Modify,
+            | EditOp::Paragraph { .. }
+            | EditOp::FlattenForm => Right::Modify,
         }
     }
 
@@ -336,6 +343,8 @@ impl EditOp {
             .map(|_| ()),
             EditOp::Detach { name } => acrux_features::attach::remove_attachment(doc, name),
             EditOp::SetField { name, value } => set_field_value(doc, name, value.clone()),
+            EditOp::ResetForm => acrux_features::forms::reset_fields(doc).map(|_| ()),
+            EditOp::FlattenForm => acrux_features::forms::flatten_fields(doc).map(|_| ()),
             EditOp::PlacedRect { page, index, rect } => {
                 acrux_features::fillsign::set_rect(doc, *page, *index, *rect)
             }
@@ -544,6 +553,12 @@ impl RenderWorker {
                 if let Some(pw) = password {
                     let _ = doc.authenticate(&pw);
                 }
+                // Les apparences manquantes d'un formulaire, comme le fait le
+                // visualiseur au même moment de la vie du document (après
+                // l'authentification, avant toute modification) : les deux
+                // copies restent identiques, et l'historique rejoué s'applique
+                // aux mêmes objets.
+                let _ = acrux_features::forms::prepare_display(&doc);
                 let Ok(mut pages) = collect_pages(&doc) else {
                     return;
                 };
@@ -892,6 +907,8 @@ mod tests {
                 },
                 Right::Modify,
             ),
+            (EditOp::ResetForm, Right::FillForms),
+            (EditOp::FlattenForm, Right::Modify),
         ];
         for (op, right) in cases {
             assert_eq!(op.required_right(), right, "{op:?}");
@@ -917,6 +934,23 @@ mod tests {
         assert!(!Right::FillForms.allowed_by(p) && !Right::Annotate.allowed_by(p));
         p.assemble = false;
         assert!(!Right::Assemble.allowed_by(p) && Right::Modify.allowed_by(p));
+    }
+
+    /// Effacer puis aplatir le formulaire du corpus, lu en mémoire : les
+    /// champs retombent à vide, puis il n'y a plus de formulaire du tout.
+    #[test]
+    #[allow(clippy::unwrap_used)] // tests
+    fn reset_then_flatten_the_corpus_form() {
+        use acrux_features::forms::list_fields;
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/corpus/synthese/formulaire-acroform-champs.pdf");
+        let doc = Document::from_bytes(std::fs::read(path).unwrap()).unwrap();
+        EditOp::ResetForm.apply(&doc).unwrap();
+        let fields = list_fields(&doc).unwrap();
+        let nom = fields.iter().find(|f| f.name == "nom").unwrap();
+        assert_eq!(nom.value, Some(FieldValue::Text(String::new())));
+        EditOp::FlattenForm.apply(&doc).unwrap();
+        assert!(list_fields(&doc).unwrap().is_empty());
     }
 
     /// Les pages d'un document à ouverture libre qui interdit la copie ne

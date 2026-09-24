@@ -48,7 +48,8 @@ pub struct TextRenderer {
     descent: f32,
 }
 
-fn candidates() -> Vec<PathBuf> {
+/// Dossiers de polices du système, dans l'ordre où on les consulte.
+fn font_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(w) = std::env::var("WINDIR") {
         dirs.push(PathBuf::from(w).join("Fonts"));
@@ -57,13 +58,13 @@ fn candidates() -> Vec<PathBuf> {
     dirs.push(PathBuf::from("/usr/share/fonts/truetype/dejavu"));
     dirs.push(PathBuf::from("/usr/share/fonts/truetype/liberation"));
     dirs.push(PathBuf::from("/System/Library/Fonts"));
-    let names = [
-        "segoeui.ttf",
-        "arial.ttf",
-        "DejaVuSans.ttf",
-        "LiberationSans-Regular.ttf",
-        "Helvetica.ttc",
-    ];
+    dirs
+}
+
+/// Chemins à essayer pour une liste de fichiers de police : chaque nom dans
+/// chaque dossier, les noms d'abord.
+fn candidates_for(names: &[&str]) -> Vec<PathBuf> {
+    let dirs = font_dirs();
     let mut out = Vec::new();
     for d in &dirs {
         for n in names {
@@ -73,11 +74,38 @@ fn candidates() -> Vec<PathBuf> {
     out
 }
 
+fn candidates() -> Vec<PathBuf> {
+    candidates_for(&[
+        "segoeui.ttf",
+        "arial.ttf",
+        "DejaVuSans.ttf",
+        "LiberationSans-Regular.ttf",
+        "Helvetica.ttc",
+    ])
+}
+
 impl TextRenderer {
     /// Charge la première police système disponible.
     #[must_use]
     pub fn system() -> Option<Self> {
         for path in candidates() {
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
+            if let Ok(font) = TrueTypeFont::parse(&bytes) {
+                return Some(Self::from_font(font));
+            }
+        }
+        None
+    }
+
+    /// Charge la première des polices nommées qu'on trouve dans les dossiers
+    /// du système (`arial.ttf`, `times.ttf`…). Sert à dessiner un texte
+    /// dans une police de mêmes largeurs que celle d'un document — la saisie
+    /// dans un champ de formulaire, par exemple.
+    #[must_use]
+    pub fn load(names: &[&str]) -> Option<Self> {
+        for path in candidates_for(names) {
             let Ok(bytes) = std::fs::read(&path) else {
                 continue;
             };

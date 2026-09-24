@@ -30,7 +30,10 @@
 //! se place sous un bouton (au-dessus s'il manque de place, pour un bouton de
 //! la barre d'état) au lieu du pointeur, et peut réserver en tête une bande
 //! où l'appelant dessine un champ de saisie ([`Menu::header`]) — c'est la
-//! liste du zoom, où l'on choisit un niveau ou l'on tape le sien.
+//! liste du zoom, où l'on choisit un niveau ou l'on tape le sien. C'est aussi
+//! la liste d'un champ de formulaire à choix, qui peut compter des dizaines
+//! d'options : une liste plus haute que la place disponible **défile**, à la
+//! molette ([`Menu::wheel`]) comme au clavier, avec un ascenseur fin.
 
 // Coordonnées d'écran entières, mesures de texte fractionnaires, et une
 // géométrie de rectangles (x, y, w, h) lue à plat.
@@ -46,7 +49,7 @@ use acrux_graphics::Rasterizer;
 
 use crate::platform::{Frame, Key};
 use crate::ui::icons::{self, Icon};
-use crate::ui::paint::{round_rect, round_rect_outline, shadow, Rgb};
+use crate::ui::paint::{round_rect, round_rect_alpha, round_rect_outline, shadow, Rgb};
 use crate::ui::palette::fold_char;
 pub use crate::ui::pickers::Outcome;
 use crate::ui::text::TextRenderer;
@@ -138,6 +141,13 @@ pub struct Menu<T: Copy> {
     header: f32,
     /// La bande de tête, calculée par [`Menu::layout`].
     head: Rect,
+    /// Partie de la carte où les lignes se montrent : toute la hauteur des
+    /// lignes, ou moins quand la liste défile.
+    viewport: Rect,
+    /// Hauteur totale des lignes.
+    content_h: i32,
+    /// Défilement des lignes, en pixels.
+    scroll: i32,
 }
 
 impl<T: Copy> Menu<T> {
@@ -158,6 +168,9 @@ impl<T: Copy> Menu<T> {
             below: None,
             header: 0.0,
             head: (x, y, 0, 0),
+            viewport: (x, y, 0, 0),
+            content_h: 0,
+            scroll: 0,
         }
     }
 
@@ -192,6 +205,7 @@ impl<T: Copy> Menu<T> {
     pub fn highlight_where(&mut self, wanted: impl Fn(T) -> bool) {
         if let Some(i) = (0..self.entries.len()).find(|&i| self.pick(i).is_some_and(&wanted)) {
             self.highlight = Some(i);
+            self.reveal();
         }
     }
 
@@ -303,7 +317,20 @@ impl<T: Copy> Menu<T> {
         } else {
             s(PAD)
         };
-        let height = rows_top + s(PAD) + heights.iter().sum::<i32>();
+        let content_h = heights.iter().sum::<i32>();
+        let full = rows_top + s(PAD) + content_h;
+        // La place qu'a la carte : sous le bouton ou au-dessus, le plus
+        // grand des deux, ou toute la fenêtre pour un menu du pointeur. Plus
+        // haute, elle défile — en montrant toujours au moins trois lignes.
+        let room = match self.below {
+            Some((_, ay, _, ah)) => {
+                let under = win_h - s(MARGIN) - (ay + ah + s(DROP_GAP));
+                let over = ay - s(DROP_GAP) - s(MARGIN);
+                under.max(over)
+            }
+            None => win_h - 2 * s(MARGIN),
+        };
+        let height = full.min(room.max(rows_top + s(PAD) + 3 * s(ROW)));
         let (x, y) = match self.below {
             Some(anchor) => drop_down(
                 anchor,
@@ -334,9 +361,13 @@ impl<T: Copy> Menu<T> {
             self.rows.push((x + s(4.0), ry, width - s(8.0), h));
             ry += h;
         }
+        self.viewport = (x, y + rows_top, width, height - rows_top - s(PAD));
+        self.content_h = content_h;
+        self.scroll = self.scroll.clamp(0, self.max_scroll());
         self.size = size;
         self.dpi = dpi;
         self.label_x = label_x;
+        self.reveal();
     }
 
     /// Vrai si le point est sur la carte.
@@ -345,9 +376,47 @@ impl<T: Copy> Menu<T> {
         inside(self.card, x, y)
     }
 
-    /// Ligne sous un point, séparateurs compris.
+    /// Défilement le plus grand : la dernière ligne au bas de la liste.
+    fn max_scroll(&self) -> i32 {
+        (self.content_h - self.viewport.3).max(0)
+    }
+
+    /// Rectangle d'une ligne tel qu'il se montre, défilement compris.
+    fn shown(&self, r: Rect) -> Rect {
+        (r.0, r.1 - self.scroll, r.2, r.3)
+    }
+
+    /// Ligne sous un point, séparateurs compris. Une ligne sortie de la
+    /// liste par le défilement ne se clique pas.
     fn row_at(&self, x: i32, y: i32) -> Option<usize> {
-        self.rows.iter().position(|&r| inside(r, x, y))
+        if !inside(self.viewport, x, y) {
+            return None;
+        }
+        self.rows.iter().position(|&r| inside(self.shown(r), x, y))
+    }
+
+    /// Fait venir la ligne mise en avant dans la liste, si elle défile.
+    fn reveal(&mut self) {
+        let Some(&(_, ry, _, rh)) = self.highlight.and_then(|i| self.rows.get(i)) else {
+            return;
+        };
+        let (top, height) = (ry - self.viewport.1, self.viewport.3);
+        if top < self.scroll {
+            self.scroll = top;
+        } else if top + rh > self.scroll + height {
+            self.scroll = top + rh - height;
+        }
+        self.scroll = self.scroll.clamp(0, self.max_scroll());
+    }
+
+    /// Molette sur la liste : trois lignes par cran. Vrai si elle a défilé
+    /// (il faut alors repeindre) ; une liste qui tient entière ne bouge pas.
+    pub fn wheel(&mut self, delta: f32) -> bool {
+        let row = (ROW * self.dpi).round();
+        let before = self.scroll;
+        let by = (delta * row * 3.0).round() as i32;
+        self.scroll = (self.scroll - by).clamp(0, self.max_scroll());
+        self.scroll != before
     }
 
     /// Action de l'élément `index`, s'il est choisissable.
@@ -425,8 +494,14 @@ impl<T: Copy> Menu<T> {
             Key::Escape | Key::ContextMenu => return Outcome::Close,
             Key::Down => self.step(true),
             Key::Up => self.step(false),
-            Key::Home | Key::PageUp => self.highlight = self.first_active(),
-            Key::End | Key::PageDown => self.highlight = self.last_active(),
+            Key::Home | Key::PageUp => {
+                self.highlight = self.first_active();
+                self.reveal();
+            }
+            Key::End | Key::PageDown => {
+                self.highlight = self.last_active();
+                self.reveal();
+            }
             Key::Enter | Key::Space => {
                 return self
                     .highlight
@@ -458,6 +533,7 @@ impl<T: Copy> Menu<T> {
                     .find(|&i| Some(i) > self.highlight)
                     .or_else(|| several.first().copied());
                 self.highlight = next;
+                self.reveal();
                 Outcome::Stay
             }
         }
@@ -487,6 +563,7 @@ impl<T: Copy> Menu<T> {
             Some(p) if forward => active.get((p + 1) % len).copied(),
             Some(p) => active.get((p + len - 1) % len).copied(),
         };
+        self.reveal();
     }
 
     /// Dessine le menu, par-dessus tout ce qui est déjà peint. `layout`
@@ -513,8 +590,36 @@ impl<T: Copy> Menu<T> {
         let faint = mix(theme.text_dim, theme.bar);
         let size = self.size;
         let small = size * SHORTCUT_SCALE;
-        let right = (x + w - s(INSET)) as f32;
+        // Les lignes se dessinent dans la fenêtre de la liste, décalées du
+        // défilement : celles qui en sortent sont coupées à son bord.
+        let (vx, vy, vw, vh) = self.viewport;
+        let scrolled = self.max_scroll() > 0;
+        if scrolled {
+            // L'ascenseur : un trait fin sur le bord droit, à la hauteur de
+            // ce qu'on voit.
+            let thumb_h = (vh * vh / self.content_h.max(1)).max(s(16.0));
+            let thumb_y = vy + (vh - thumb_h) * self.scroll / self.max_scroll().max(1);
+            round_rect_alpha(
+                frame,
+                x + w - s(7.0),
+                thumb_y,
+                s(4.0),
+                thumb_h,
+                2.0 * dpi,
+                theme.text_dim,
+                0.6,
+            );
+        }
+        let margin = if scrolled { s(6.0) } else { 0 };
+        let right = (x + w - s(INSET) - margin - vx) as f32;
+        let mut clip = frame.sub(vx, vy, vw.max(0) as u32, vh.max(0) as u32);
+        let frame = &mut clip;
+        let (x, dy) = (x - vx, -vy - self.scroll);
         for (i, (entry, &(rx, ry, rw, rh))) in self.entries.iter().zip(&self.rows).enumerate() {
+            let (rx, ry) = (rx - vx, ry + dy);
+            if ry + rh <= 0 || ry >= vh {
+                continue;
+            }
             let item = match entry {
                 Entry::Separator => {
                     let (r, g, b) = theme.separator;
@@ -845,6 +950,39 @@ mod tests {
         assert_eq!(m.mouse_up(hx + 5, hy + 5), Outcome::Stay);
         // Sans bande, rien de réservé.
         assert_eq!(sample().head().2, 0);
+    }
+
+    /// Une liste plus haute que la fenêtre défile : la carte tient dans la
+    /// fenêtre, la molette et le clavier font venir les lignes cachées, et
+    /// un clic vise la ligne qui se montre sous le pointeur.
+    #[test]
+    fn une_longue_liste_defile() {
+        let mut m = Menu::below((100, 40, 120, 30));
+        for i in 0..60_u32 {
+            m = m.item(None, &format!("Option {i}"), "", i, true);
+        }
+        m.layout(&mut measure, 13.0, 1.0, 800, 600);
+        let (_, y, _, h) = m.card;
+        assert!(y >= 8 && y + h <= 592, "la carte tient : {:?}", m.card);
+        assert!(m.max_scroll() > 0, "elle défile");
+        let (rx, ry, rw, rh) = m.rows[0];
+        let (cx, cy) = (rx + rw / 2, ry + rh / 2);
+        assert_eq!(m.row_at(cx, cy), Some(0));
+        assert!(m.wheel(-1.0), "un cran vers le bas");
+        assert_eq!(m.row_at(cx, cy), Some(3), "trois lignes plus loin");
+        assert!(!m.wheel(1.0) || m.scroll == 0);
+        m.key(Key::End);
+        assert_eq!(m.scroll, m.max_scroll(), "Fin montre la dernière ligne");
+        let (_, ry, _, rh) = m.shown(m.rows[59]);
+        assert!(ry + rh <= m.viewport.1 + m.viewport.3);
+        assert_eq!(m.mouse_down(cx, ry + rh / 2), Outcome::Stay);
+        assert_eq!(m.mouse_up(cx, ry + rh / 2), Outcome::Pick(59));
+        // Une ligne sortie par le haut ne se clique pas.
+        assert_eq!(m.row_at(cx, m.viewport.1 - 1), None);
+        // Une liste courte ne défile pas.
+        let mut short = Menu::below((100, 40, 120, 30)).item(None, "Un", "", 1_u32, true);
+        short.layout(&mut measure, 13.0, 1.0, 800, 600);
+        assert!(!short.wheel(-1.0));
     }
 
     #[test]
