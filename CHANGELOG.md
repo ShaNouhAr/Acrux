@@ -7,6 +7,8 @@ troisième quand on ne fait que corriger.
 Chaque version est publiée par une étiquette `vX.Y.Z` poussée sur le dépôt ;
 c'est la section correspondante de ce fichier qui devient la page de version.
 
+## 0.25.0 — non publiée
+
 ## 0.24.0 — 25 septembre 2026
 
 - **Combiner des fichiers dans l'application.** « Combiner des fichiers… »
