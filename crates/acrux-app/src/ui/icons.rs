@@ -105,6 +105,19 @@ pub enum Icon {
     Close,
     /// Page à deux champs (un document à remplir, la barre de formulaire).
     Form,
+    /// Un « U » et un trait plein dessous (souligner).
+    Underline,
+    /// Un « S » barré en son milieu (barrer le texte).
+    StrikeOut,
+    /// Deux lignes de texte et une onde dessous (souligner d'un trait ondulé).
+    Squiggly,
+    /// Un signe « ^ » dans une ligne de texte ouverte (insérer du texte).
+    Insert,
+    /// Un « T » barré et un signe « ^ » (remplacer le texte).
+    Replace,
+    /// Bulle ronde à trois points (commenter) : la famille des outils de
+    /// relecture, distincte de la note posée sur la page.
+    Comment,
 }
 
 /// Contour d'une page, motif commun à beaucoup d'icônes.
@@ -161,6 +174,18 @@ fn polyline(path: &mut Path, pts: &[(f64, f64)]) {
     for &(x, y) in it {
         path.line_to(Point::new(x, y));
     }
+}
+
+/// Points d'un arc d'ellipse de centre `(cx, cy)`, d'angle `from` à `to`
+/// en degrés (y vers le bas : les angles croissent dans le sens horaire).
+fn arc(cx: f64, cy: f64, rx: f64, ry: f64, from: f64, to: f64) -> Vec<(f64, f64)> {
+    let steps = 16;
+    (0..=steps)
+        .map(|i| {
+            let a = (from + (to - from) * f64::from(i) / f64::from(steps)).to_radians();
+            (cx + rx * a.cos(), cy + ry * a.sin())
+        })
+        .collect()
 }
 
 fn magnifier(path: &mut Path) {
@@ -495,6 +520,59 @@ pub fn geometry(icon: Icon) -> (Path, Path) {
             polyline(&mut lines, &[(7.0, 15.5), (9.5, 15.5)]);
             page(&mut lines, 11.5, 13.5, 5.5, 4.0);
         }
+        Icon::Underline => {
+            // Deux montants reliés par un demi-cercle qui passe par le bas.
+            let mut u = vec![(7.5, 4.5)];
+            u.extend(arc(12.0, 11.0, 4.5, 4.5, 180.0, 0.0));
+            u.push((16.5, 4.5));
+            polyline(&mut lines, &u);
+            bar(&mut fills, 5.0, 18.5, 14.0, 2.2);
+        }
+        Icon::StrikeOut => {
+            // Deux arcs d'un seul tenant : le haut tourne vers la gauche,
+            // le bas vers la droite, ils se rejoignent au milieu.
+            let mut s = arc(12.0, 8.25, 4.5, 3.75, -30.0, -270.0);
+            s.extend(
+                arc(12.0, 15.75, 4.5, 3.75, -90.0, 150.0)
+                    .into_iter()
+                    .skip(1),
+            );
+            polyline(&mut lines, &s);
+            bar(&mut fills, 3.5, 11.1, 17.0, 1.8);
+        }
+        Icon::Squiggly => {
+            polyline(&mut lines, &[(4.5, 6.0), (19.5, 6.0)]);
+            polyline(&mut lines, &[(4.5, 11.0), (15.0, 11.0)]);
+            let wave: Vec<(f64, f64)> = (0..=8)
+                .map(|i| {
+                    let y = if i % 2 == 0 { 18.5 } else { 15.5 };
+                    (4.0 + 2.0 * f64::from(i), y)
+                })
+                .collect();
+            polyline(&mut lines, &wave);
+        }
+        Icon::Insert => {
+            // La ligne s'ouvre là où le signe pointe.
+            polyline(&mut lines, &[(3.5, 7.0), (9.5, 7.0)]);
+            polyline(&mut lines, &[(14.5, 7.0), (20.5, 7.0)]);
+            polyline(&mut lines, &[(7.5, 19.0), (12.0, 11.0), (16.5, 19.0)]);
+        }
+        Icon::Replace => {
+            polyline(&mut lines, &[(4.0, 5.0), (14.0, 5.0)]);
+            polyline(&mut lines, &[(9.0, 5.0), (9.0, 15.0)]);
+            bar(&mut fills, 2.5, 9.2, 13.0, 1.8);
+            polyline(&mut lines, &[(14.0, 20.0), (17.5, 14.0), (21.0, 20.0)]);
+        }
+        Icon::Comment => {
+            // Bulle ovale, la queue en bas à gauche, trois points dedans.
+            let mut bubble = arc(12.0, 10.5, 8.5, 6.5, 120.0, 420.0);
+            bubble.push((6.5, 20.0));
+            bubble.push((7.75, 16.13));
+            polyline(&mut lines, &bubble);
+            for x in [8.0, 12.0, 16.0] {
+                circle(&mut fills, x, 10.5, 1.3);
+            }
+        }
         Icon::Redact => {
             page(&mut lines, 5.0, 3.5, 14.0, 17.0);
             bar(&mut fills, 7.5, 9.5, 9.0, 5.0);
@@ -702,6 +780,14 @@ mod tests {
             Icon::ChevronUp,
             Icon::Close,
             Icon::Form,
+            Icon::Highlight,
+            Icon::Note,
+            Icon::Underline,
+            Icon::StrikeOut,
+            Icon::Squiggly,
+            Icon::Insert,
+            Icon::Replace,
+            Icon::Comment,
         ];
         let mut raster = Rasterizer::new();
         for icon in icons {

@@ -249,9 +249,10 @@ impl Viewer {
             Outcome::Pick((command, target)) | Outcome::Live((command, target)) => {
                 let origin = self.context_menu.take().and_then(|open| open.origin_view);
                 window.request_redraw();
-                // La note se pose au point du clic droit, pas sous
-                // l'élément du menu où le pointeur est allé la demander.
-                if command == Command::Note {
+                // La note et le signe d'insertion se posent au point du clic
+                // droit, pas sous l'élément du menu où le pointeur est allé
+                // les demander.
+                if matches!(command, Command::Note | Command::InsertText) {
                     if let Some(point) = origin {
                         self.last_mouse = Some(point);
                     }
@@ -434,6 +435,9 @@ impl Viewer {
 
     /// Le menu d'une page : ce qu'on fait d'une sélection, d'un endroit,
     /// de la vue, de la page et du document.
+    // Un élément par appel, dans l'ordre de l'affichage : le menu se lit
+    // tel qu'il s'ouvre, et le découper en morceaux le cacherait.
+    #[allow(clippy::too_many_lines)]
     fn page_menu(&self, x: i32, y: i32, page: usize) -> Menu<Action> {
         let selected = self.selection.is_some_and(|s| !s.is_empty());
         let rights = self.rights();
@@ -454,12 +458,43 @@ impl Viewer {
                 (Command::Copy, now),
                 selected && rights.copy,
             )
+            // La relecture d'une sélection : ce que propose la barre des
+            // commentaires, sans l'ouvrir. Grisé quand le document interdit
+            // de commenter — l'élément ne mentirait pas sur ce qu'il fera.
             .item(
                 Some(Icon::Highlight),
                 tr("Surligner la sélection"),
                 shortcut(Command::Highlight),
                 (Command::Highlight, now),
-                selected,
+                selected && rights.annotate,
+            )
+            .item(
+                Some(Icon::Underline),
+                tr("Souligner"),
+                shortcut(Command::Underline),
+                (Command::Underline, now),
+                selected && rights.annotate,
+            )
+            .item(
+                Some(Icon::StrikeOut),
+                tr("Barrer"),
+                shortcut(Command::StrikeOut),
+                (Command::StrikeOut, now),
+                selected && rights.annotate,
+            )
+            .item(
+                Some(Icon::Squiggly),
+                tr("Souligner d'un trait ondulé"),
+                shortcut(Command::Squiggly),
+                (Command::Squiggly, now),
+                selected && rights.annotate,
+            )
+            .item(
+                Some(Icon::Replace),
+                tr("Remplacer le texte…"),
+                shortcut(Command::ReplaceText),
+                (Command::ReplaceText, now),
+                selected && rights.annotate,
             )
             .item(
                 Some(Icon::Note),
@@ -467,6 +502,13 @@ impl Viewer {
                 shortcut(Command::Note),
                 (Command::Note, here),
                 true,
+            )
+            .item(
+                Some(Icon::Insert),
+                tr("Insérer du texte ici"),
+                shortcut(Command::InsertText),
+                (Command::InsertText, here),
+                rights.annotate,
             )
             .separator()
             .item(

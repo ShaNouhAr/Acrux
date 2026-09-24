@@ -19,6 +19,7 @@ use std::fmt::Write as _;
 use acrux_graphics::Bitmap;
 
 use crate::platform::Frame;
+use crate::ui::lang::{tr, trf};
 use crate::ui::paint::round_rect;
 use crate::ui::text::TextRenderer;
 use crate::ui::theme::Theme;
@@ -84,12 +85,22 @@ pub struct OutlineRow {
 pub struct CommentRow {
     /// Page (0 = première).
     pub page: usize,
-    /// Type lisible : « Note », « Surlignage »…
-    pub kind: String,
+    /// Type, en clé française (« Note », « Surlignage »…) : il est traduit
+    /// au dessin, si bien qu'un changement de langue se voit tout de suite.
+    pub kind: &'static str,
     /// Auteur, s'il est connu.
     pub author: Option<String>,
     /// Texte du commentaire (peut être vide).
     pub contents: String,
+    /// Rectangle de l'annotation, en coordonnées de page : cliquer la ligne
+    /// y mène.
+    pub rect: acrux_core::Rect,
+    /// Position de l'annotation dans le `/Annots` de sa page.
+    pub index: usize,
+    /// Identifiant de l'annotation (`/NM`), quand elle en a un. Avec
+    /// `index`, c'est ce qui la désigne sans ambiguïté — pour y répondre ou
+    /// lui donner un statut.
+    pub name: Option<String>,
 }
 
 /// Pièce jointe affichée dans le panneau.
@@ -589,7 +600,7 @@ impl Panel {
                         pad as f32,
                         baseline,
                         size,
-                        "Aucun commentaire",
+                        tr("Aucun commentaire"),
                         t.text_dim,
                         (w - 2 * pad) as f32,
                     );
@@ -605,10 +616,11 @@ impl Panel {
                         }
                         // Première ligne : type, auteur et page.
                         let who = c.author.clone().unwrap_or_default();
+                        let page = (c.page + 1).to_string();
                         let head = if who.is_empty() {
-                            format!("{} — page {}", c.kind, c.page + 1)
+                            trf("{} — page {}", &[tr(c.kind), &page])
                         } else {
-                            format!("{} de {who} — page {}", c.kind, c.page + 1)
+                            trf("{} de {} — page {}", &[tr(c.kind), &who, &page])
                         };
                         let base1 = y as f32 + (pad / 2) as f32 + text.ascent(size);
                         text.draw_clipped(
@@ -621,7 +633,7 @@ impl Panel {
                             (w - 1 - 2 * pad) as f32,
                         );
                         let body_text = if c.contents.trim().is_empty() {
-                            "(sans texte)".to_string()
+                            tr("(sans texte)").to_string()
                         } else {
                             c.contents.replace('\n', " ")
                         };

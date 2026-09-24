@@ -84,6 +84,14 @@ const ROWS: &[Row] = &[
     Row::Heading("Commenter"),
     Row::Tool("Surligner", Icon::Highlight, Command::HighlightTool, true),
     Row::Tool("Poser une note", Icon::Note, Command::NoteTool, true),
+    // Souligner, barrer, insérer, remplacer… : la barre des commentaires
+    // les tient tous ensemble, au-dessus de la page.
+    Row::Tool(
+        "Outils de commentaire",
+        Icon::Comment,
+        Command::CommentBar,
+        true,
+    ),
     Row::Heading("Signer"),
     Row::Tool("Remplir et signer", Icon::Sign, Command::FillSign, true),
     Row::Heading("Pages"),

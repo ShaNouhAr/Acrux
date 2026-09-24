@@ -143,8 +143,31 @@ pub enum Command {
     AddTextBox,
     /// Surligner la sélection.
     Highlight,
+    /// Souligner la sélection.
+    Underline,
+    /// Barrer la sélection.
+    StrikeOut,
+    /// Souligner la sélection d'un trait ondulé.
+    Squiggly,
+    /// Remplacer le texte sélectionné : il est barré, et le texte proposé
+    /// s'attache à un signe d'insertion.
+    ReplaceText,
+    /// Insérer du texte au pointeur : un signe d'insertion et son texte.
+    InsertText,
     /// Outil « surligner » : on glisse sur le texte, il se surligne.
     HighlightTool,
+    /// Outil « souligner ».
+    UnderlineTool,
+    /// Outil « barrer ».
+    StrikeOutTool,
+    /// Outil « souligner d'un trait ondulé ».
+    SquigglyTool,
+    /// Outil « insérer du texte » : un clic dans une ligne pose un signe.
+    InsertTextTool,
+    /// Outil « remplacer le texte ».
+    ReplaceTextTool,
+    /// Barre des commentaires : tous les outils de relecture ensemble.
+    CommentBar,
     /// Outil « note » : un clic sur la page pose une note.
     NoteTool,
     /// Outil « biffer » : on glisse sur le texte, il est marqué.
@@ -246,7 +269,18 @@ impl Command {
             Command::EditPdf => "edit-pdf",
             Command::AddTextBox => "add-text",
             Command::Highlight => "highlight",
+            Command::Underline => "underline",
+            Command::StrikeOut => "strikeout",
+            Command::Squiggly => "squiggly",
+            Command::ReplaceText => "replace-text",
+            Command::InsertText => "insert-text",
             Command::HighlightTool => "highlight-tool",
+            Command::UnderlineTool => "underline-tool",
+            Command::StrikeOutTool => "strikeout-tool",
+            Command::SquigglyTool => "squiggly-tool",
+            Command::InsertTextTool => "insert-text-tool",
+            Command::ReplaceTextTool => "replace-text-tool",
+            Command::CommentBar => "comment-bar",
             Command::NoteTool => "note-tool",
             Command::RedactTool => "redact-tool",
             Command::Note => "note",
@@ -407,6 +441,43 @@ const ENTRIES: &[Entry] = &[
         command: Command::Highlight,
         needs_document: true,
     },
+    // Le reste de la relecture, juste après le surlignage : on les cherche
+    // ensemble.
+    Entry {
+        label: "Souligner la sélection",
+        shortcut: "U",
+        keywords: "soulignement souligner trait annotation relecture correction",
+        command: Command::Underline,
+        needs_document: true,
+    },
+    Entry {
+        label: "Barrer la sélection",
+        shortcut: "",
+        keywords: "barrer rayer texte barre supprimer relecture correction",
+        command: Command::StrikeOut,
+        needs_document: true,
+    },
+    Entry {
+        label: "Souligner la sélection d'un trait ondulé",
+        shortcut: "",
+        keywords: "ondule vague vaguelette zigzag soulignement relecture",
+        command: Command::Squiggly,
+        needs_document: true,
+    },
+    Entry {
+        label: "Remplacer le texte sélectionné…",
+        shortcut: "",
+        keywords: "remplacer remplacement correction relecture proposer barrer caret",
+        command: Command::ReplaceText,
+        needs_document: true,
+    },
+    Entry {
+        label: "Insérer du texte ici",
+        shortcut: "",
+        keywords: "inserer insertion ajout caret correction relecture oubli",
+        command: Command::InsertText,
+        needs_document: true,
+    },
     Entry {
         label: "Ajouter du texte",
         shortcut: "",
@@ -526,6 +597,48 @@ const ENTRIES: &[Entry] = &[
         shortcut: "",
         keywords: "note commentaire bulle poser outil",
         command: Command::NoteTool,
+        needs_document: true,
+    },
+    Entry {
+        label: "Outils de commentaire",
+        shortcut: "",
+        keywords: "commenter commentaires relecture annoter annotations outils correction",
+        command: Command::CommentBar,
+        needs_document: true,
+    },
+    Entry {
+        label: "Outil soulignement",
+        shortcut: "",
+        keywords: "souligner soulignement outil relecture",
+        command: Command::UnderlineTool,
+        needs_document: true,
+    },
+    Entry {
+        label: "Outil texte barré",
+        shortcut: "",
+        keywords: "barrer rayer outil relecture",
+        command: Command::StrikeOutTool,
+        needs_document: true,
+    },
+    Entry {
+        label: "Outil soulignement ondulé",
+        shortcut: "",
+        keywords: "ondule vague zigzag outil relecture",
+        command: Command::SquigglyTool,
+        needs_document: true,
+    },
+    Entry {
+        label: "Outil insertion de texte",
+        shortcut: "",
+        keywords: "inserer insertion caret ajout outil relecture",
+        command: Command::InsertTextTool,
+        needs_document: true,
+    },
+    Entry {
+        label: "Outil remplacement de texte",
+        shortcut: "",
+        keywords: "remplacer remplacement correction outil relecture",
+        command: Command::ReplaceTextTool,
         needs_document: true,
     },
     Entry {
@@ -2109,6 +2222,21 @@ mod tests {
             keys(Command::CloseTab),
             Some(("Ctrl+W, Ctrl+F4", "Ctrl+W, Ctrl+F4"))
         );
+    }
+
+    #[test]
+    fn les_outils_de_relecture_se_trouvent() {
+        assert_eq!(top("souligner la"), Some(Command::Underline));
+        assert_eq!(top("barrer"), Some(Command::StrikeOut));
+        assert_eq!(top("remplacer le texte"), Some(Command::ReplaceText));
+        assert_eq!(top("inserer du texte"), Some(Command::InsertText));
+        assert_eq!(top("outils de comm"), Some(Command::CommentBar));
+        assert_eq!(top("trait ondule"), Some(Command::Squiggly));
+        let underline = ENTRIES
+            .iter()
+            .find(|e| e.command == Command::Underline)
+            .map(|e| e.shortcut);
+        assert_eq!(underline, Some("U"));
     }
 
     #[test]

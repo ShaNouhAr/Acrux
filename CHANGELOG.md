@@ -9,6 +9,49 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 
 ## 0.23.0 — non publiée
 
+- **Barre des commentaires, comme la barre « Commenter » d'Acrobat.**
+  « Outils de commentaire » (colonne de droite, palette) ouvre sous la barre
+  d'outils une rangée de boutons : surligner, souligner, barrer, souligner
+  d'un trait ondulé, insérer du texte, remplacer le texte, poser une note.
+  L'outil en cours s'allume en accent, sa consigne s'affiche à côté, et
+  chaque bouton dit son nom au survol. Recliquer l'outil ramène à la
+  sélection sans fermer la barre ; un outil choisi alors que du texte est
+  sélectionné s'applique tout de suite. Échap éteint l'outil, un second
+  Échap ferme la barre, comme « Terminer ».
+- **Souligner, barrer, souligner d'un trait ondulé** la sélection : `U`
+  souligne (`Maj+U` en y joignant un commentaire), et le clic droit sur une
+  sélection propose les quatre balisages ; tous sont dans la palette.
+- **Insérer du texte, remplacer du texte**, pour relire un document comme
+  sur papier. L'outil « Insérer » pose un signe « ^ » entre deux caractères,
+  là où l'on clique, avec le texte à ajouter ; aussi « Insérer du texte
+  ici » au clic droit. « Remplacer » barre le passage sélectionné et
+  attache le texte proposé à un signe placé au bout : les deux forment un
+  seul commentaire, qui se défait et se supprime d'un seul geste, comme dans
+  Acrobat. Valider sans rien taper barre simplement le passage (« à
+  supprimer »).
+- **Un passage de plusieurs lignes n'est plus qu'un commentaire.** Surligner
+  dix lignes posait dix annotations, remplissait le panneau de dix entrées et
+  demandait dix `Ctrl+Z` : c'est désormais une annotation par page (une zone
+  par ligne, comme Acrobat), et un seul `Ctrl+Z` pour tout le geste, même à
+  cheval sur deux pages.
+- **Le panneau des commentaires** nomme soulignements, textes barrés,
+  insertions et remplacements, dans la langue de l'interface ; un
+  remplacement n'y apparaît qu'une fois. Cliquer un commentaire mène au
+  passage commenté, et non plus en haut de sa page.
+- Chaque annotation posée par Acrux porte un **identifiant unique** (`/NM`)
+  et sa **date de création** : les autres lecteurs, Acrobat compris, peuvent
+  y répondre et la suivre. L'identifiant ne change ni d'une copie à l'autre
+  ni quand on annule puis rétablit.
+- Les soulignements ondulés et les signes d'insertion **sans apparence**
+  (fichiers d'autres logiciels) s'affichent : ils étaient, pour l'un, rendus
+  comme un soulignement droit, pour l'autre, invisibles.
+- `acr annotate` pose `underline`, `strikeout`, `squiggly`, `caret` (signe
+  d'insertion, texte obligatoire) et `replace` (barré et texte proposé,
+  groupés) ; `acr annots` indique le barré d'un remplacement (« ↳ groupé
+  avec #3 ») et, avec `-v`, l'identifiant de chaque annotation.
+- `Ctrl+Maj+E` avec un outil d'annotation allumé laissait sa barre sous
+  celle de « Modifier le PDF » : l'outil s'éteint désormais.
+
 - **Les formulaires se remplissent sur place, comme dans Acrobat.** Un clic
   dans un champ de texte y pose le curseur : on tape directement dans la
   page, dans la police, la taille et la couleur que le champ aura une fois

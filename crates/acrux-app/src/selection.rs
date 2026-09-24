@@ -331,6 +331,39 @@ impl SelectableText {
         out
     }
 
+    /// Point d'insertion au curseur `caret`, en espace page : son abscisse
+    /// et la boîte qui donne sa hauteur.
+    ///
+    /// Entre deux glyphes d'une même ligne, le point est au milieu de
+    /// l'espace qui les sépare (entre deux mots, au milieu de l'espace). En
+    /// fin de ligne, le curseur désigne aussi le début de la suivante : on
+    /// garde celle des deux qui est la plus proche de `near`, le point
+    /// cliqué. La hauteur est celle des glyphes voisins, pas celle de la
+    /// ligne : une ligne où se mêlent un titre et du corps de texte
+    /// donnerait un signe démesuré. `None` pour une page sans texte.
+    #[must_use]
+    pub fn caret_box(&self, caret: usize, near: Point) -> Option<(f64, Rect)> {
+        let prev = caret.checked_sub(1).and_then(|i| self.glyphs.get(i));
+        let next = self.glyphs.get(caret);
+        match (prev, next) {
+            (Some(p), Some(n)) if p.line == n.line => {
+                Some((f64::midpoint(p.rect.x1, n.rect.x0), p.rect.union(&n.rect)))
+            }
+            (Some(p), Some(n)) => {
+                let dp = axis_distance(near.y, p.rect.y0, p.rect.y1);
+                let dn = axis_distance(near.y, n.rect.y0, n.rect.y1);
+                if dn < dp {
+                    Some((n.rect.x0, n.rect))
+                } else {
+                    Some((p.rect.x1, p.rect))
+                }
+            }
+            (Some(p), None) => Some((p.rect.x1, p.rect)),
+            (None, Some(n)) => Some((n.rect.x0, n.rect)),
+            (None, None) => None,
+        }
+    }
+
     /// Rectangles à surligner : un par ligne, union des glyphes sélectionnés.
     #[must_use]
     pub fn rects(&self, start: usize, end: usize) -> Vec<Rect> {
@@ -494,6 +527,33 @@ mod tests {
         // À cheval sur deux lignes : refusé.
         assert_eq!(t.line_range(3, 5), None);
         assert_eq!(t.line_range(0, 0), None);
+    }
+
+    #[test]
+    fn caret_box_places_the_insertion_point() {
+        let t = SelectableText::from_page_text(&page());
+        let at = |caret: usize, x: f64, y: f64| t.caret_box(caret, Point::new(x, y));
+        // Début de ligne : devant le premier glyphe.
+        assert_eq!(
+            at(0, 1.0, 105.0),
+            Some((0.0, Rect::new(0.0, 100.0, 10.0, 110.0)))
+        );
+        // Entre deux glyphes accolés.
+        assert_eq!(at(1, 10.0, 105.0).map(|(x, _)| x), Some(10.0));
+        // Entre deux mots : au milieu de l'espace.
+        assert_eq!(at(2, 24.0, 105.0).map(|(x, _)| x), Some(25.0));
+        // Fin de la ligne 1 (cliquée à sa droite) : derrière le « d »...
+        assert_eq!(at(4, 60.0, 105.0).map(|(x, _)| x), Some(50.0));
+        // ... mais le même curseur cliqué au début de la ligne 2 : devant
+        // le « e ».
+        let (x, b) = at(4, 1.0, 85.0).unwrap();
+        assert_eq!((x, b.y0), (0.0, 80.0));
+        // Fin du texte : derrière le dernier glyphe.
+        assert_eq!(at(6, 30.0, 85.0).map(|(x, _)| x), Some(20.0));
+        assert_eq!(
+            SelectableText::default().caret_box(0, Point::new(0.0, 0.0)),
+            None
+        );
     }
 
     #[test]

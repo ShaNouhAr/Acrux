@@ -319,10 +319,13 @@ impl Viewer {
             mode.bar.tool = tool;
             return;
         }
-        // Un seul outil à la fois : les autres rendent la main.
+        // Un seul outil à la fois : les autres rendent la main — la barre
+        // des commentaires comprise, qui resterait sinon sous celle du mode
+        // (Ctrl+Maj+E l'y laissait).
         self.sign_panel = None;
         self.objects = None;
         self.selection = None;
+        self.close_annot_tools();
         warm_fonts();
         let ticking = Arc::new(AtomicBool::new(true));
         let waker = window.waker();

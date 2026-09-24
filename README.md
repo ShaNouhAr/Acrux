@@ -126,7 +126,9 @@ page, ligne, contexte ; `--case` respecte la casse, `--word` ne prend que le mot
 `text` extrait le texte dans l'ordre de lecture (paragraphes, colonnes,
 tableaux, en-têtes et pieds de page ; `--markdown` et `--html` conservent titres, gras, italique,
 listes et tableaux, `--layout` garde le texte positionné comme sur la page) ; `annots` et `annotate` listent et
-ajoutent des annotations ; `protect` chiffre en AES-256 avec une clé tirée d'un générateur
+ajoutent des annotations (carré, surlignage, `underline`, `strikeout`, `squiggly`, signe d'insertion
+`caret`, remplacement `replace` groupé, note, lien ; `annots -v` montre l'identifiant `/NM` de
+chacune et le barré qui suit un remplacement) ; `protect` chiffre en AES-256 avec une clé tirée d'un générateur
 cryptographique (mot de passe d'ouverture `--user`, mot de passe des permissions `--owner`,
 permissions `--print none|low|high`, `--no-modify`, `--no-copy`, `--no-annotate`, `--no-fill`,
 `--no-accessibility`, `--no-assemble` ; force des mots de passe affichée) et `unprotect` retire le
@@ -256,7 +258,8 @@ En anglais, on cherche dans les libellés anglais. Le reste de cette section n'e
 aide-mémoire.
 
 **Le clic droit ouvre un menu** (ou la touche « menu » du clavier, ou `Maj+F10`) : sur la page
-(copier, surligner, poser une note ici, tout sélectionner, pivoter la page, imprimer, propriétés),
+(copier, surligner, souligner, barrer, souligner d'un trait ondulé, remplacer le texte, poser une
+note ici, insérer du texte ici, tout sélectionner, pivoter la page, imprimer, propriétés),
 sur une vignette (pivoter, dupliquer, extraire, supprimer **cette** page), sur un onglet (fermer,
 fermer les autres, copier le chemin, ouvrir le dossier du fichier) et sur un document récent de
 l'accueil (ouvrir, copier le chemin, ouvrir le dossier, retirer de la liste). Chaque élément lance
@@ -337,7 +340,9 @@ une page par feuille, et `Ctrl+S` demande où ranger le document obtenu.
 | palette, clic droit sur une vignette | dupliquer la page, extraire la page dans un nouveau fichier |
 | `E` | modifier le texte sélectionné (même police, la ligne se recompose) |
 | `H`, `Maj+H` | surligner la sélection, la surligner en y joignant un commentaire |
+| `U`, `Maj+U` | souligner la sélection, la souligner en y joignant un commentaire |
 | `N` | poser une note à la position de la souris |
+| « Outils de commentaire » (colonne de droite, palette) | **barre des commentaires** : surligner, souligner, barrer, souligner d'un trait ondulé, **insérer du texte** (signe « ^ » là où l'on clique), **remplacer le texte** (passage barré et texte proposé, un seul commentaire), poser une note ; `Échap` éteint l'outil, puis ferme la barre. Un passage de plusieurs lignes fait une seule annotation par page, et se défait d'un seul `Ctrl+Z` |
 | clic sur une vidéo ou un son | lecture ; re-clic pour mettre en pause, clic sur la ligne de temps pour se déplacer |
 | `Maj+F4` | barre des outils, à droite (modifier, commenter, signer, pages, biffer) |
 | `Ctrl+Maj+E` | **modifier le PDF** : on clique dans un texte et on tape ; ailleurs, on pose une zone |

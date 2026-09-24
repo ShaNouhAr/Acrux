@@ -20,7 +20,7 @@
     clippy::manual_midpoint
 )]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -28,7 +28,9 @@ use std::time::{Duration, Instant};
 
 use acrux_core::{Matrix, Point, Rect};
 use acrux_document::{collect_pages, Document, Page};
-use acrux_features::annotations::{list_annotations, NewAnnotation};
+use acrux_features::annotations::{
+    list_annotations, AnnotMeta, MarkupKind, NewAnnotation, CARET_COLOR,
+};
 use acrux_features::attach::{list_attachments, read_attachment};
 use acrux_features::forms::{list_fields, Field, FieldType};
 use acrux_features::navigation::{
@@ -47,9 +49,10 @@ use crate::platform::{
     WindowHandle,
 };
 use crate::render_worker::ExportFormat;
-use crate::render_worker::{EditOp, RenderWorker};
+use crate::render_worker::{AnnotItem, EditOp, RenderWorker};
 use crate::selection::{SelectableText, Selection, TextPos};
 use crate::ui::anim::{ease_out, Anim, Clock};
+use crate::ui::icons::Icon;
 use crate::ui::input::TextInput;
 use crate::ui::lang::{self, Lang};
 use crate::ui::modal::{PromptAct, PromptCard, PromptContent, PromptFocus};
@@ -182,19 +185,36 @@ const TIP_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
 /// Commentaires du document : les annotations qui portent un texte ou une
 /// intention de relecture. Les liens et les champs de formulaire n'en sont
 /// pas — ils ont déjà leur place ailleurs dans l'interface.
+///
+/// Un remplacement est un groupe de deux annotations (un signe d'insertion
+/// et le texte barré qui le suit, §12.5.6.2) : il ne fait qu'**une** ligne,
+/// celle du signe, qui porte le texte proposé. Le type est une clé
+/// française, traduite au dessin : changer de langue se voit tout de suite.
 fn collect_comments(doc: &Document, pages: &[Page]) -> Vec<CommentRow> {
     let mut out = Vec::new();
     for (index, page) in pages.iter().enumerate() {
         let Ok(list) = list_annotations(doc, page) else {
             continue;
         };
+        // Les membres principaux des groupes de cette page : un signe
+        // d'insertion qui en est un propose de remplacer, pas d'ajouter.
+        let primaries: HashSet<acrux_document::ObjectRef> = list
+            .iter()
+            .filter(|a| a.is_group_member())
+            .filter_map(|a| a.in_reply_to)
+            .collect();
         for a in list {
+            if a.is_group_member() {
+                continue;
+            }
             let kind = match a.subtype.as_str() {
                 "Text" => "Note",
                 "Highlight" => "Surlignage",
                 "Underline" => "Soulignement",
                 "StrikeOut" => "Texte barré",
                 "Squiggly" => "Soulignement ondulé",
+                "Caret" if a.reference.is_some_and(|r| primaries.contains(&r)) => "Remplacement",
+                "Caret" => "Insertion",
                 "Square" | "Circle" => "Forme",
                 "Line" | "Polygon" | "PolyLine" => "Trait",
                 "Ink" => "Dessin",
@@ -206,9 +226,12 @@ fn collect_comments(doc: &Document, pages: &[Page]) -> Vec<CommentRow> {
             };
             out.push(CommentRow {
                 page: index,
-                kind: kind.to_string(),
+                kind,
                 author: a.author.clone(),
                 contents: a.contents.clone().unwrap_or_default(),
+                rect: a.rect,
+                index: a.index,
+                name: a.name.clone(),
             });
         }
     }
@@ -358,17 +381,57 @@ const MIN_PAGE_WIDTH: u32 = 420;
 enum AnnotTool {
     /// Glisser sur du texte le surligne.
     Highlight,
+    /// Glisser sur du texte le souligne.
+    Underline,
+    /// Glisser sur du texte le barre.
+    StrikeOut,
+    /// Glisser sur du texte le souligne d'un trait ondulé.
+    Squiggly,
+    /// Un clic dans une ligne de texte y pose un signe d'insertion.
+    Insert,
+    /// Glisser sur du texte le barre et propose un texte à la place.
+    Replace,
     /// Un clic pose une note.
     Note,
     /// Glisser sur du texte le marque pour biffure.
     Redact,
 }
 
+/// Les outils de la barre des commentaires, dans l'ordre de ses boutons.
+///
+/// C'est **la** liste des outils de relecture : ceux qui viendront (formes,
+/// crayon, zones de texte, tampons) s'y ajoutent, et la barre les montre
+/// sans autre changement. La biffure n'en est pas : elle efface, elle ne
+/// commente pas, et reste sous « Protéger ».
+const COMMENT_TOOLS: &[AnnotTool] = &[
+    AnnotTool::Highlight,
+    AnnotTool::Underline,
+    AnnotTool::StrikeOut,
+    AnnotTool::Squiggly,
+    AnnotTool::Insert,
+    AnnotTool::Replace,
+    AnnotTool::Note,
+];
+
 impl AnnotTool {
     /// Nom et consigne affichés dans la barre de l'outil.
     fn describe(self) -> (&'static str, &'static str) {
         match self {
             AnnotTool::Highlight => ("Surligner", "Faites glisser sur le texte à surligner."),
+            AnnotTool::Underline => ("Souligner", "Faites glisser sur le texte à souligner."),
+            AnnotTool::StrikeOut => ("Barrer", "Faites glisser sur le texte à barrer."),
+            AnnotTool::Squiggly => (
+                "Souligner d'un trait ondulé",
+                "Faites glisser sur le texte à souligner d'un trait ondulé.",
+            ),
+            AnnotTool::Insert => (
+                "Insérer du texte",
+                "Cliquez dans le texte, à l'endroit de l'insertion.",
+            ),
+            AnnotTool::Replace => (
+                "Remplacer le texte",
+                "Faites glisser sur le texte à remplacer.",
+            ),
             AnnotTool::Note => (
                 "Poser une note",
                 "Cliquez sur la page, à l'endroit de la note.",
@@ -380,13 +443,64 @@ impl AnnotTool {
         }
     }
 
-    /// Commande de la colonne d'outils qui l'allume.
+    /// Commande de la palette qui l'allume.
     fn command(self) -> Command {
         match self {
             AnnotTool::Highlight => Command::HighlightTool,
+            AnnotTool::Underline => Command::UnderlineTool,
+            AnnotTool::StrikeOut => Command::StrikeOutTool,
+            AnnotTool::Squiggly => Command::SquigglyTool,
+            AnnotTool::Insert => Command::InsertTextTool,
+            AnnotTool::Replace => Command::ReplaceTextTool,
             AnnotTool::Note => Command::NoteTool,
             AnnotTool::Redact => Command::RedactTool,
         }
+    }
+
+    /// Commande qui fait la même chose **sans** outil, sur la sélection ou
+    /// au pointeur : c'est elle qui porte le raccourci (H, U, N) que
+    /// l'info-bulle du bouton rappelle.
+    fn action(self) -> Command {
+        match self {
+            AnnotTool::Highlight => Command::Highlight,
+            AnnotTool::Underline => Command::Underline,
+            AnnotTool::StrikeOut => Command::StrikeOut,
+            AnnotTool::Squiggly => Command::Squiggly,
+            AnnotTool::Insert => Command::InsertText,
+            AnnotTool::Replace => Command::ReplaceText,
+            AnnotTool::Note => Command::Note,
+            AnnotTool::Redact => Command::MarkRedaction,
+        }
+    }
+
+    /// Balisage que pose l'outil, s'il en pose un.
+    fn markup(self) -> Option<MarkupKind> {
+        match self {
+            AnnotTool::Highlight => Some(MarkupKind::Highlight),
+            AnnotTool::Underline => Some(MarkupKind::Underline),
+            AnnotTool::StrikeOut => Some(MarkupKind::StrikeOut),
+            AnnotTool::Squiggly => Some(MarkupKind::Squiggly),
+            AnnotTool::Insert | AnnotTool::Replace | AnnotTool::Note | AnnotTool::Redact => None,
+        }
+    }
+
+    /// Icône de l'outil, dans sa barre et sur son bouton.
+    fn icon(self) -> Icon {
+        match self {
+            AnnotTool::Highlight => Icon::Highlight,
+            AnnotTool::Underline => Icon::Underline,
+            AnnotTool::StrikeOut => Icon::StrikeOut,
+            AnnotTool::Squiggly => Icon::Squiggly,
+            AnnotTool::Insert => Icon::Insert,
+            AnnotTool::Replace => Icon::Replace,
+            AnnotTool::Note => Icon::Note,
+            AnnotTool::Redact => Icon::Redact,
+        }
+    }
+
+    /// Vrai pour les outils de la barre des commentaires.
+    fn in_comment_bar(self) -> bool {
+        COMMENT_TOOLS.contains(&self)
     }
 }
 
@@ -572,8 +686,15 @@ enum PromptKind {
     OwnerPassword { then: OwnerThen },
     /// Texte d'une note à poser sur `page` au point `(x, y)` (espace page).
     Note { page: usize, x: f64, y: f64 },
-    /// Commentaire à joindre à un surlignage déjà découpé en zones.
-    Highlight { zones: Vec<(usize, Rect)> },
+    /// Commentaire à joindre à un balisage déjà découpé en zones.
+    Markup {
+        kind: MarkupKind,
+        zones: Vec<(usize, Rect)>,
+    },
+    /// Texte proposé à la place d'un passage de `page`, une zone par ligne.
+    Replace { page: usize, quads: Vec<Rect> },
+    /// Texte à insérer sur `page`, en `x`, dans la ligne `line` (espace page).
+    Insert { page: usize, x: f64, line: Rect },
     /// Texte à répartir dans un peigne de cases (IBAN, BIC, date) de `page`.
     Comb { page: usize, cells: Vec<Rect> },
     /// Texte de remplissage à poser sur `page`, dans `rect`.
@@ -917,6 +1038,11 @@ pub struct Viewer {
     edit: Option<EditMode>,
     /// Outil d'annotation en cours.
     annot_tool: Option<AnnotTool>,
+    /// Barre des commentaires ouverte. Elle survit à l'outil : l'éteindre
+    /// ramène à la sélection, et un outil choisi ensuite s'applique à ce
+    /// qui est sélectionné, comme dans Acrobat. « Terminer » ou Échap la
+    /// ferment.
+    comment_bar: bool,
     /// Barre de l'outil d'annotation.
     mode_bar: ModeBar,
     /// Barre des outils, à droite, affichée.
@@ -995,6 +1121,7 @@ impl Viewer {
             fit: prefs.fit,
             edit: None,
             annot_tool: None,
+            comment_bar: false,
             mode_bar: ModeBar::default(),
             tools_open: prefs.tools_open,
             tools: ToolsPanel::new(),
@@ -1807,7 +1934,7 @@ impl Viewer {
         if self.home {
             // Les modes d'édition n'ont pas de sens sur l'accueil.
             self.edit = None;
-            self.annot_tool = None;
+            self.close_annot_tools();
             self.sign_panel = None;
             self.capture = None;
             self.protect = None;
@@ -2063,10 +2190,35 @@ impl Viewer {
                     prompt.input.clear();
                 }
             }
-            PromptKind::Highlight { zones } => {
-                let zones = zones.clone();
+            PromptKind::Markup { kind, zones } => {
+                let (kind, zones) = (*kind, zones.clone());
                 self.prompt = None;
-                self.add_highlights(&zones, Some(&value));
+                self.add_markup(kind, &zones, Some(&value));
+            }
+            PromptKind::Replace { page, quads } => {
+                let (page, quads) = (*page, quads.clone());
+                self.prompt = None;
+                self.add_replace(page, quads, &value);
+            }
+            PromptKind::Insert { page, x, line } => {
+                let (page, x, line) = (*page, *x, *line);
+                self.prompt = None;
+                if !value.trim().is_empty() {
+                    let meta = AnnotMeta::fresh(author_name().as_deref());
+                    self.add_annotations(
+                        "Caret",
+                        vec![AnnotItem {
+                            page,
+                            annotation: NewAnnotation::Caret {
+                                x,
+                                line,
+                                contents: value,
+                                color: CARET_COLOR,
+                            },
+                            meta,
+                        }],
+                    );
+                }
             }
             PromptKind::Comb { page, cells } => {
                 let (page, cells) = (*page, cells.clone());
@@ -2109,16 +2261,16 @@ impl Viewer {
                 let (page, x, y) = (*page, *x, *y);
                 self.prompt = None;
                 if !value.trim().is_empty() {
-                    self.apply_edit(EditOp::Annotate {
+                    self.apply_edit(EditOp::annotate(
                         page,
-                        annotation: NewAnnotation::Note {
+                        NewAnnotation::Note {
                             x,
                             y,
                             contents: value,
                             color: [1.0, 0.85, 0.0],
                         },
-                        author: author_name(),
-                    });
+                        author_name().as_deref(),
+                    ));
                 }
             }
         }
@@ -2204,48 +2356,203 @@ impl Viewer {
         zones
     }
 
-    /// Pose les surlignages ; le commentaire, s'il y en a un, va sur la
-    /// première zone (c'est là que le lecteur clique).
-    fn add_highlights(&mut self, zones: &[(usize, Rect)], comment: Option<&str>) {
-        for (index, (page, rect)) in zones.iter().enumerate() {
-            let contents = if index == 0 {
-                comment
-                    .map(ToString::to_string)
-                    .filter(|c| !c.trim().is_empty())
-            } else {
-                None
-            };
-            self.apply_edit(EditOp::Annotate {
-                page: *page,
-                annotation: NewAnnotation::Highlight {
-                    rect: *rect,
-                    color: [1.0, 1.0, 0.0],
-                    contents,
-                },
-                author: author_name(),
-            });
+    /// Pose un balisage sur des zones : **une** annotation par page, une
+    /// zone par ligne, et une seule modification pour tout le geste. Un
+    /// passage de dix lignes est un seul commentaire dans le panneau, et se
+    /// défait d'un seul Ctrl+Z. Le commentaire, s'il y en a un, va à la
+    /// première page du passage : c'est là que le lecteur commence.
+    fn add_markup(&mut self, kind: MarkupKind, zones: &[(usize, Rect)], comment: Option<&str>) {
+        let mut pages: Vec<(usize, Vec<Rect>)> = Vec::new();
+        for &(page, rect) in zones {
+            match pages.iter_mut().find(|(p, _)| *p == page) {
+                Some((_, quads)) => quads.push(rect),
+                None => pages.push((page, vec![rect])),
+            }
         }
+        let comment = comment
+            .filter(|c| !c.trim().is_empty())
+            .map(ToString::to_string);
+        let author = author_name();
+        let items = pages
+            .into_iter()
+            .enumerate()
+            .map(|(i, (page, quads))| AnnotItem {
+                page,
+                annotation: NewAnnotation::Markup {
+                    kind,
+                    quads,
+                    color: kind.default_color(),
+                    contents: if i == 0 { comment.clone() } else { None },
+                },
+                // Chaque annotation a son identifiant, tiré ici et non à
+                // l'application (voir `AnnotItem`).
+                meta: AnnotMeta::fresh(author.as_deref()),
+            })
+            .collect();
+        self.add_annotations(kind.subtype(), items);
     }
 
-    /// Demande un commentaire, puis surligne la sélection avec.
-    fn highlight_with_comment(&mut self, window: &mut dyn WindowHandle) {
+    /// Pose des annotations en une seule modification, et le note au
+    /// journal. Rend faux si rien n'a été posé.
+    fn add_annotations(&mut self, what: &str, items: Vec<AnnotItem>) -> bool {
+        if items.is_empty() {
+            return false;
+        }
+        let n = items.len();
+        let done = self.apply_edit(EditOp::Annotate { items });
+        if done {
+            log_line(&format!("{n} annotation(s) {what} posée(s)"));
+        }
+        done
+    }
+
+    /// Demande un commentaire, puis balise la sélection avec.
+    fn markup_with_comment(&mut self, kind: MarkupKind, window: &mut dyn WindowHandle) {
         let zones = self.selection_zones();
         if zones.is_empty() {
+            self.set_notice(lang::tr("sélectionnez d'abord du texte").into());
             return;
         }
+        // Un titre entier par balisage : une phrase se traduit, un
+        // assemblage de morceaux non.
+        let title = match kind {
+            MarkupKind::Highlight => "Surligner et commenter",
+            MarkupKind::Underline => "Souligner et commenter",
+            MarkupKind::StrikeOut => "Barrer et commenter",
+            MarkupKind::Squiggly => "Souligner d'un trait ondulé et commenter",
+        };
         self.prompt = Some(Prompt::new(
-            lang::tr("Surligner et commenter"),
+            lang::tr(title),
             lang::tr("Commentaire :").into(),
             TextInput::new(lang::tr("Votre remarque")),
-            PromptKind::Highlight { zones },
+            PromptKind::Markup { kind, zones },
         ));
         window.request_redraw();
     }
 
-    /// Surligne la sélection courante (annotations `/Highlight`, une par ligne).
-    fn highlight_selection(&mut self) {
+    /// Balise la sélection courante : une annotation par page, une zone
+    /// par ligne.
+    fn markup_selection(&mut self, kind: MarkupKind) {
         let zones = self.selection_zones();
-        self.add_highlights(&zones, None);
+        if zones.is_empty() {
+            self.set_notice(lang::tr("sélectionnez d'abord du texte").into());
+            return;
+        }
+        self.add_markup(kind, &zones, None);
+    }
+
+    /// Ouvre l'invite « Remplacer le texte » pour la sélection.
+    ///
+    /// Un remplacement tient sur une page : le signe et le barré forment un
+    /// groupe, et un groupe ne franchit pas une page (§12.5.6.2).
+    fn start_replace(&mut self) {
+        let zones = self.selection_zones();
+        let Some(&(page, _)) = zones.first() else {
+            self.set_notice(lang::tr("sélectionnez d'abord du texte").into());
+            return;
+        };
+        if zones.iter().any(|(p, _)| *p != page) {
+            self.alert(
+                lang::tr("Remplacement impossible"),
+                lang::tr("Sélectionnez du texte sur une seule page."),
+            );
+            return;
+        }
+        // Avant la saisie : un refus après la frappe ferait perdre le texte.
+        if !self.require_right(crate::render_worker::Right::Annotate) {
+            return;
+        }
+        let quads = zones.into_iter().map(|(_, r)| r).collect();
+        // Le passage remplacé, rappelé dans le libellé quand il est court :
+        // on sait ce qu'on remplace sans aller le relire derrière la carte.
+        let current = self.selected_text();
+        let label = if !current.contains('\n') && (1..=40).contains(&current.chars().count()) {
+            lang::trf("Remplacer « {} » par :", &[current.trim()])
+        } else {
+            lang::tr("Remplacer par :").into()
+        };
+        self.prompt = Some(Prompt::new(
+            lang::tr("Remplacer le texte"),
+            label,
+            TextInput::new(lang::tr("Nouveau texte")),
+            PromptKind::Replace { page, quads },
+        ));
+    }
+
+    /// Pose un remplacement : le passage barré et, au bout, le texte
+    /// proposé. Sans texte, c'est un simple barré — « supprimer ce
+    /// passage », en langage de relecture.
+    fn add_replace(&mut self, page: usize, quads: Vec<Rect>, text: &str) {
+        let strike = MarkupKind::StrikeOut.default_color();
+        let (what, annotation) = if text.trim().is_empty() {
+            (
+                "StrikeOut",
+                NewAnnotation::Markup {
+                    kind: MarkupKind::StrikeOut,
+                    quads,
+                    color: strike,
+                    contents: None,
+                },
+            )
+        } else {
+            (
+                "Replace",
+                NewAnnotation::Replace {
+                    quads,
+                    text: text.to_string(),
+                    strike,
+                    caret: CARET_COLOR,
+                },
+            )
+        };
+        let meta = AnnotMeta::fresh(author_name().as_deref());
+        self.add_annotations(
+            what,
+            vec![AnnotItem {
+                page,
+                annotation,
+                meta,
+            }],
+        );
+    }
+
+    /// Ouvre l'invite « Insérer du texte » au point `(x, y)` de la vue.
+    ///
+    /// Le point doit tomber dans une ligne de texte : le signe se pose entre
+    /// deux caractères, au plus près du clic, à la hauteur de la ligne.
+    fn start_insert(&mut self, x: i32, y: i32) {
+        // Une page sans texte (un scan) n'a pas d'interstice où insérer.
+        let Some((pos, true)) = self.text_pos_at(x, y) else {
+            self.set_notice(lang::tr("cliquez dans une ligne de texte").into());
+            return;
+        };
+        let Some((_, near)) = self.page_at(x, y) else {
+            return;
+        };
+        let Some((cx, line)) = self
+            .loaded
+            .as_mut()
+            .and_then(|l| l.text(pos.page).1.caret_box(pos.caret, near))
+        else {
+            return;
+        };
+        if !self.require_right(crate::render_worker::Right::Annotate) {
+            return;
+        }
+        self.selection = None;
+        self.prompt = Some(Prompt::new(
+            lang::tr("Insérer du texte"),
+            lang::trf(
+                "Texte à insérer (page {}) :",
+                &[&(pos.page + 1).to_string()],
+            ),
+            TextInput::new(lang::tr("Texte à ajouter")),
+            PromptKind::Insert {
+                page: pos.page,
+                x: cx,
+                line,
+            },
+        ));
     }
 
     /// Marque la sélection pour biffure (annotations `/Redact`, visibles en
@@ -2562,6 +2869,7 @@ impl Viewer {
         let tip = self
             .search_tip()
             .or_else(|| self.toolbar.hover_tip(&info))
+            .or_else(|| self.mode_bar_tip())
             .or_else(|| self.tab_tip())
             .or_else(|| self.recent_tip())
             .or_else(|| self.status_tip());
@@ -2589,6 +2897,27 @@ impl Viewer {
                 });
         }
         window.request_redraw();
+    }
+
+    /// Info-bulle d'un bouton de la barre des commentaires : le nom de
+    /// l'outil, que l'icône seule ne dit pas, et le raccourci de la même
+    /// action sans outil (H pour surligner la sélection).
+    fn mode_bar_tip(&self) -> Option<(String, (i32, i32, i32, i32))> {
+        if !self.comment_bar || self.mode_bar_height() == 0 {
+            return None;
+        }
+        let (index, rect) = self.mode_bar.hover_tip()?;
+        let tool = *COMMENT_TOOLS.get(index)?;
+        let label = lang::tr(tool.describe().0);
+        let keys = crate::ui::palette::describe(tool.action()).map_or("", |(_, k)| k);
+        Some((
+            if keys.is_empty() {
+                label.to_string()
+            } else {
+                format!("{label}  ({keys})")
+            },
+            rect,
+        ))
     }
 
     /// Info-bulle d'un onglet : le **chemin complet** du document, que
@@ -3038,9 +3367,10 @@ impl Viewer {
             + self.form_bar_height()
     }
 
-    /// Hauteur de la barre d'un outil d'annotation.
+    /// Hauteur de la barre d'un outil d'annotation, ou de la barre des
+    /// commentaires.
     fn mode_bar_height(&self) -> u32 {
-        if self.annot_tool.is_some() && !self.fullscreen && !self.reading {
+        if (self.annot_tool.is_some() || self.comment_bar) && !self.fullscreen && !self.reading {
             ModeBar::height(self.dpi_scale as f32).max(0) as u32
         } else {
             0
@@ -3048,6 +3378,10 @@ impl Viewer {
     }
 
     /// Allume un outil d'annotation, ou l'éteint s'il l'était déjà.
+    ///
+    /// Un outil de commentaire ouvre la barre des commentaires ; l'éteindre
+    /// la laisse ouverte, prête pour le suivant. La biffure garde sa barre à
+    /// elle.
     fn toggle_annot_tool(&mut self, tool: AnnotTool, window: &mut dyn WindowHandle) {
         if self.loaded.is_none() {
             return;
@@ -3055,6 +3389,7 @@ impl Viewer {
         self.commit_field();
         if self.annot_tool == Some(tool) {
             self.annot_tool = None;
+            log_line(&format!("outil : {tool:?} éteint"));
             window.request_redraw();
             return;
         }
@@ -3067,10 +3402,51 @@ impl Viewer {
         self.sign_panel = None;
         self.objects = None;
         self.annot_tool = Some(tool);
+        self.comment_bar = tool.in_comment_bar();
+        log_line(&format!("outil : {tool:?}"));
+        self.clamp_scroll();
         // Du texte déjà sélectionné est traité tout de suite : choisir
         // « surligner » après avoir sélectionné fait ce qu'on attend.
         self.apply_annot_tool();
         window.request_redraw();
+    }
+
+    /// Ouvre la barre des commentaires sans outil — on sélectionne, puis on
+    /// choisit ce qu'on en fait —, ou la ferme si elle l'est déjà.
+    fn toggle_comment_bar(&mut self, window: &mut dyn WindowHandle) {
+        if self.comment_bar {
+            self.close_annot_tools();
+            log_line("barre des commentaires : fermée");
+            window.request_redraw();
+            return;
+        }
+        if self.loaded.is_none() || self.showing_home() {
+            return;
+        }
+        self.commit_field();
+        if !self.require_right(crate::render_worker::Right::Annotate) {
+            window.request_redraw();
+            return;
+        }
+        self.edit = None;
+        self.sign_panel = None;
+        self.objects = None;
+        // La biffure n'est pas un commentaire : elle s'éteint.
+        if self.annot_tool.is_some_and(|t| !t.in_comment_bar()) {
+            self.annot_tool = None;
+        }
+        self.comment_bar = true;
+        log_line("barre des commentaires : ouverte");
+        self.clamp_scroll();
+        window.request_redraw();
+    }
+
+    /// Éteint l'outil d'annotation et ferme la barre des commentaires :
+    /// toute sortie des outils passe par ici, sans quoi la barre resterait
+    /// sous celle d'un autre mode.
+    fn close_annot_tools(&mut self) {
+        self.annot_tool = None;
+        self.comment_bar = false;
     }
 
     /// Applique l'outil courant à la sélection, s'il y en a une.
@@ -3079,15 +3455,19 @@ impl Viewer {
             return;
         }
         match self.annot_tool {
-            Some(AnnotTool::Highlight) => {
-                self.highlight_selection();
-                self.selection = None;
-            }
+            // L'invite s'ouvre sur la sélection, qui reste visible derrière.
+            Some(AnnotTool::Replace) => self.start_replace(),
             Some(AnnotTool::Redact) => {
                 self.mark_redaction();
                 self.selection = None;
             }
-            _ => {}
+            Some(tool) => {
+                if let Some(kind) = tool.markup() {
+                    self.markup_selection(kind);
+                    self.selection = None;
+                }
+            }
+            None => {}
         }
     }
 
@@ -3289,8 +3669,18 @@ impl Viewer {
             has_document: self.loaded.is_some() && !self.showing_home(),
             // Les deux outils qui restent ouverts se signalent comme tels :
             // sans cela, rien ne dirait lequel est en cours.
-            active: if let Some(tool) = self.annot_tool {
+            // La colonne a ses lignes pour surligner, poser une note et
+            // biffer ; les autres outils de commentaire s'allument sous
+            // « Commenter », qui ouvre leur barre.
+            active: if let Some(tool) = self.annot_tool.filter(|t| {
+                matches!(
+                    t,
+                    AnnotTool::Highlight | AnnotTool::Note | AnnotTool::Redact
+                )
+            }) {
                 Some(tool.command())
+            } else if self.comment_bar {
+                Some(Command::CommentBar)
             } else if let Some(tool) = self.edit_tool() {
                 Some(match tool {
                     EditTool::Select => Command::EditPdf,
@@ -3619,9 +4009,20 @@ impl Viewer {
                     .loaded
                     .as_ref()
                     .and_then(|l| l.comments.get(index))
-                    .map(|c| c.page);
-                if let Some(page) = target {
-                    self.navigate(|v| v.scroll_to_page(page));
+                    .map(|c| (c.page, c.rect, c.index, c.name.clone()));
+                if let Some((page, rect, at, name)) = target {
+                    log_line(&format!(
+                        "panneau : commentaire #{} de la page {} ({})",
+                        at + 1,
+                        page + 1,
+                        name.as_deref().unwrap_or("sans identifiant")
+                    ));
+                    // Au passage commenté, pas en haut de sa page : sur une
+                    // page longue, on ne le trouverait pas.
+                    self.navigate(|v| {
+                        v.scroll_to_page(page);
+                        v.reveal_page_rect(page, rect);
+                    });
                 }
             }
             PanelAction::Follow(id) => {
@@ -3737,17 +4138,32 @@ impl Viewer {
             Command::Redo => self.redo_any(window),
             Command::EditText => self.start_text_edit(window),
             Command::EditPdf => {
-                self.annot_tool = None;
+                self.close_annot_tools();
                 self.enter_edit(EditTool::Select, window);
             }
             Command::HighlightTool => self.toggle_annot_tool(AnnotTool::Highlight, window),
+            Command::UnderlineTool => self.toggle_annot_tool(AnnotTool::Underline, window),
+            Command::StrikeOutTool => self.toggle_annot_tool(AnnotTool::StrikeOut, window),
+            Command::SquigglyTool => self.toggle_annot_tool(AnnotTool::Squiggly, window),
+            Command::InsertTextTool => self.toggle_annot_tool(AnnotTool::Insert, window),
+            Command::ReplaceTextTool => self.toggle_annot_tool(AnnotTool::Replace, window),
             Command::NoteTool => self.toggle_annot_tool(AnnotTool::Note, window),
             Command::RedactTool => self.toggle_annot_tool(AnnotTool::Redact, window),
+            Command::CommentBar => self.toggle_comment_bar(window),
             Command::AddTextBox => {
-                self.annot_tool = None;
+                self.close_annot_tools();
                 self.enter_edit(EditTool::AddText, window);
             }
-            Command::Highlight => self.highlight_selection(),
+            Command::Highlight => self.markup_selection(MarkupKind::Highlight),
+            Command::Underline => self.markup_selection(MarkupKind::Underline),
+            Command::StrikeOut => self.markup_selection(MarkupKind::StrikeOut),
+            Command::Squiggly => self.markup_selection(MarkupKind::Squiggly),
+            Command::ReplaceText => self.start_replace(),
+            Command::InsertText => {
+                if let Some((x, y)) = self.last_mouse {
+                    self.start_insert(x, y);
+                }
+            }
             Command::Note => self.start_note(),
             Command::CheckUpdates => self.install_update(window),
             Command::EditObjects => self.toggle_objects(window),
@@ -4653,7 +5069,7 @@ impl Viewer {
         self.flush_typing();
         self.leave_home();
         self.edit = None;
-        self.annot_tool = None;
+        self.close_annot_tools();
         if index == self.active_tab || index >= self.tab_count() {
             return;
         }
@@ -4743,7 +5159,7 @@ impl Viewer {
             return;
         }
         self.edit = None;
-        self.annot_tool = None;
+        self.close_annot_tools();
         self.loaded = None;
         if self.others.is_empty() {
             self.active_tab = 0;
@@ -5138,7 +5554,7 @@ impl Viewer {
         self.commit_field();
         self.leave_home();
         self.edit = None;
-        self.annot_tool = None;
+        self.close_annot_tools();
         if self.objects.is_some() {
             self.objects = None;
             self.set_notice("modification des objets : terminé".into());
@@ -5197,6 +5613,22 @@ impl Viewer {
             w: x1 - x0,
             h: y1 - y0,
         })
+    }
+
+    /// Fait défiler la vue pour qu'un rectangle d'une page se voie en
+    /// entier ; s'il est déjà visible, rien ne bouge.
+    fn reveal_page_rect(&mut self, page: usize, rect: Rect) {
+        if self.view_mode.is_paged() && self.anchor != page {
+            self.scroll_to_page(page);
+        }
+        let Some(r) = self.page_rect_to_view(page, rect) else {
+            return;
+        };
+        let vh = f64::from(self.view_height());
+        if r.y < 0.0 || r.y + r.h > vh {
+            self.scroll_y = (self.scroll_y + r.y - vh / 3.0).max(0.0);
+            self.clamp_scroll();
+        }
     }
 
     /// Objet sous un point de la vue : le plus petit qui le contient, donc le
@@ -5442,7 +5874,7 @@ impl Viewer {
             return;
         }
         self.edit = None;
-        self.annot_tool = None;
+        self.close_annot_tools();
         if self.sign_panel.is_some() {
             self.sign_panel = None;
             self.capture = None;
@@ -6900,10 +7332,20 @@ impl Viewer {
             {
                 window.request_redraw();
             }
+            // Échap éteint l'outil de commentaire d'abord, puis ferme la
+            // barre des commentaires : on revient à la sélection avant de
+            // quitter la relecture.
             Event::Key(Key::Escape, _)
-                if self.annot_tool.is_some() && self.prompt.is_none() && self.palette.is_none() =>
+                if (self.annot_tool.is_some() || self.comment_bar)
+                    && self.prompt.is_none()
+                    && self.palette.is_none() =>
             {
-                self.annot_tool = None;
+                if self.annot_tool.is_some() && self.comment_bar {
+                    self.annot_tool = None;
+                } else {
+                    self.close_annot_tools();
+                }
+                window.request_redraw();
             }
             Event::Key(key, m)
                 if self.edit_on() && self.prompt.is_none() && self.edit_key(key, m, window) => {}
@@ -7079,8 +7521,10 @@ impl Viewer {
                         'R' => self.rotate_current(-90),
                         ' ' => self.activate_focused_field(window),
                         'e' | 'E' => self.start_text_edit(window),
-                        'h' => self.highlight_selection(),
-                        'H' => self.highlight_with_comment(window),
+                        'h' => self.markup_selection(MarkupKind::Highlight),
+                        'H' => self.markup_with_comment(MarkupKind::Highlight, window),
+                        'u' => self.markup_selection(MarkupKind::Underline),
+                        'U' => self.markup_with_comment(MarkupKind::Underline, window),
                         'm' => self.mark_redaction(),
                         'M' => self.apply_redactions(),
                         'n' | 'N' => self.start_note(),
@@ -7166,9 +7610,20 @@ impl Viewer {
                     if self.prompt.is_none() {
                         self.form_bar_click(x, y, window);
                     }
-                } else if y < top && self.annot_tool.is_some() && !self.edit_on() {
-                    if self.mode_bar.closes(x, y) {
-                        self.annot_tool = None;
+                } else if y < top
+                    && (self.annot_tool.is_some() || self.comment_bar)
+                    && !self.edit_on()
+                {
+                    if self.prompt.is_none() {
+                        if self.mode_bar.closes(x, y) {
+                            self.close_annot_tools();
+                        } else if let Some(&tool) = self
+                            .mode_bar
+                            .tool_at(x, y)
+                            .and_then(|i| COMMENT_TOOLS.get(i))
+                        {
+                            self.toggle_annot_tool(tool, window);
+                        }
                     }
                 } else if y < top && self.edit_on() && !self.edit_overlay() {
                     // Barre du mode « Modifier le PDF ».
@@ -7240,6 +7695,8 @@ impl Viewer {
                         } else if self.annot_tool == Some(AnnotTool::Note) {
                             self.last_mouse = Some((x, y));
                             self.start_note();
+                        } else if self.annot_tool == Some(AnnotTool::Insert) {
+                            self.start_insert(x, y);
                         } else if self.three_d_mouse_down(x, y, clicks, modifiers.shift, window) {
                             // Un modèle 3D a pris le clic.
                         } else if self.media_mouse_down(x, y, window) {
@@ -7402,7 +7859,7 @@ impl Viewer {
                 if let Some(mode) = &mut self.edit {
                     hover_changed |= mode.bar.mouse_move(x, y, dragging).is_some();
                 }
-                if self.annot_tool.is_some() {
+                if self.annot_tool.is_some() || self.comment_bar {
                     hover_changed |= self.mode_bar.mouse_move(x, y);
                 }
                 hover_changed |= self.form_bar_hover(x, y);
@@ -7517,10 +7974,13 @@ impl Viewer {
                     } else if in_view && sign_item.is_some() {
                         Cursor::Place
                     } else if in_view && self.annot_tool.is_some() {
+                        // Souligner, barrer, remplacer, insérer : on vise du
+                        // texte, la barre de texte le dit.
                         match self.annot_tool {
                             Some(AnnotTool::Note) => Cursor::Note,
                             Some(AnnotTool::Redact) => Cursor::Redact,
-                            _ => Cursor::Highlight,
+                            Some(AnnotTool::Highlight) => Cursor::Highlight,
+                            _ => Cursor::IBeam,
                         }
                     } else if in_view && self.model_at(x, y).is_some() {
                         // Un modèle 3D se prend en main : la main dit qu'il y
@@ -7566,20 +8026,42 @@ impl Viewer {
         window.request_redraw();
     }
 
-    /// Dessine la barre de l'outil d'annotation en cours, s'il y en a un.
+    /// Dessine la barre des commentaires, ou celle de l'outil d'annotation
+    /// en cours, s'il y en a une.
     fn paint_mode_bar(&mut self, frame: &mut Frame<'_>) {
-        let Some(tool) = self.annot_tool else { return };
+        if self.mode_bar_height() == 0 {
+            return;
+        }
         let y = Toolbar::height(&self.theme, self.dpi_scale as f32)
             + self.tabs_height() as i32
             + self.edit_bar_height() as i32;
-        let (title, hint) = tool.describe();
-        let icon = match tool {
-            AnnotTool::Highlight => crate::ui::icons::Icon::Highlight,
-            AnnotTool::Note => crate::ui::icons::Icon::Note,
-            AnnotTool::Redact => crate::ui::icons::Icon::Redact,
-        };
         let (theme, dpi) = (self.theme, self.dpi_scale as f32);
-        if let Some(text) = self.text.as_mut() {
+        let Some(text) = self.text.as_mut() else {
+            return;
+        };
+        if self.comment_bar {
+            let icons: Vec<Icon> = COMMENT_TOOLS.iter().map(|t| t.icon()).collect();
+            let active = self
+                .annot_tool
+                .and_then(|t| COMMENT_TOOLS.iter().position(|c| *c == t));
+            let hint = self
+                .annot_tool
+                .map_or("Sélectionnez du texte, puis choisissez un outil.", |t| {
+                    t.describe().1
+                });
+            self.mode_bar.paint_tools(
+                frame,
+                text,
+                &mut self.raster,
+                &theme,
+                dpi,
+                y,
+                &icons,
+                active,
+                hint,
+            );
+        } else if let Some(tool) = self.annot_tool {
+            let (title, hint) = tool.describe();
             self.mode_bar.paint(
                 frame,
                 text,
@@ -7587,7 +8069,7 @@ impl Viewer {
                 &theme,
                 dpi,
                 y,
-                icon,
+                tool.icon(),
                 title,
                 hint,
             );
@@ -7914,6 +8396,88 @@ mod tests {
         let capped = width_at(Some(protect::LOW_PRINT_DPI));
         assert!((4900..=5000).contains(&free), "{free}");
         assert!((1230..=1250).contains(&capped), "{capped}");
+    }
+
+    /// Le panneau montre un remplacement une seule fois, sous son nom, et
+    /// distingue l'insertion seule ; un lien n'est pas un commentaire.
+    #[test]
+    fn comments_name_and_group_the_review_marks() {
+        use acrux_features::annotations::add_annotation;
+        let Ok(doc) =
+            acrux_features::create::new_document(&acrux_features::create::PageSetup::default())
+        else {
+            panic!("document A4");
+        };
+        let page = || collect_pages(&doc).map(|mut p| p.remove(0));
+        let line = Rect::new(72.0, 700.0, 200.0, 712.0);
+        let annots = [
+            NewAnnotation::Replace {
+                quads: vec![line],
+                text: "nouveau".into(),
+                strike: MarkupKind::StrikeOut.default_color(),
+                caret: CARET_COLOR,
+            },
+            NewAnnotation::Caret {
+                x: 100.0,
+                line: Rect::new(72.0, 650.0, 80.0, 662.0),
+                contents: "ajout".into(),
+                color: CARET_COLOR,
+            },
+            NewAnnotation::Markup {
+                kind: MarkupKind::Underline,
+                quads: vec![Rect::new(72.0, 600.0, 200.0, 612.0)],
+                color: MarkupKind::Underline.default_color(),
+                contents: None,
+            },
+            NewAnnotation::Link {
+                rect: line,
+                uri: "https://example.org".into(),
+            },
+        ];
+        for a in &annots {
+            let Ok(p) = page() else { panic!("page") };
+            assert!(
+                add_annotation(&doc, &p, a, Some("Zoé")).is_ok(),
+                "annotation {a:?}"
+            );
+        }
+        let Ok(pages) = collect_pages(&doc) else {
+            panic!("pages")
+        };
+        let rows = collect_comments(&doc, &pages);
+        let kinds: Vec<&str> = rows.iter().map(|r| r.kind).collect();
+        assert_eq!(kinds, ["Remplacement", "Insertion", "Soulignement"]);
+        assert_eq!(rows[0].contents, "nouveau");
+        assert_eq!(rows[0].index, 0);
+        // Le barré groupé est sauté : l'insertion vient juste après lui.
+        assert_eq!(rows[1].index, 2);
+        assert!(rows.iter().all(|r| r.name.is_some()));
+    }
+
+    /// Chaque outil de la barre des commentaires a son nom, sa consigne,
+    /// son icône et des commandes que la palette connaît.
+    #[test]
+    fn every_comment_tool_is_described() {
+        for tool in COMMENT_TOOLS {
+            let (name, hint) = tool.describe();
+            assert!(!name.is_empty() && !hint.is_empty(), "{tool:?}");
+            assert!(
+                crate::ui::palette::describe(tool.command()).is_some(),
+                "{tool:?} : outil absent de la palette"
+            );
+            assert!(
+                crate::ui::palette::describe(tool.action()).is_some(),
+                "{tool:?} : action absente de la palette"
+            );
+            assert!(tool.in_comment_bar());
+        }
+        assert!(!AnnotTool::Redact.in_comment_bar());
+        // Les quatre balisages et eux seuls posent un balisage.
+        let markups = COMMENT_TOOLS
+            .iter()
+            .filter(|t| t.markup().is_some())
+            .count();
+        assert_eq!(markups, 4);
     }
 
     #[test]

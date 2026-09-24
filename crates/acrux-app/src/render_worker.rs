@@ -9,7 +9,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::JoinHandle;
 
 use acrux_document::{collect_pages, Document};
-use acrux_features::annotations::{add_annotation, NewAnnotation};
+use acrux_features::annotations::{add_annotation_with, AnnotMeta, NewAnnotation};
 use acrux_features::edit_text::{apply_edits, TextEdit, TextRange};
 use acrux_features::export::{
     export_docx, export_html, export_markdown, export_pages_jpeg, export_pages_png,
@@ -56,14 +56,12 @@ pub enum EditOp {
         /// Indices de pages.
         pages: Vec<usize>,
     },
-    /// Ajouter une annotation à une page.
+    /// Poser des annotations : un geste de l'utilisateur, une opération —
+    /// et donc une seule annulation, même quand le passage balisé court sur
+    /// plusieurs pages.
     Annotate {
-        /// Indice de page.
-        page: usize,
-        /// Annotation.
-        annotation: NewAnnotation,
-        /// Auteur (`/T`).
-        author: Option<String>,
+        /// Annotations, dans l'ordre où elles sont posées.
+        items: Vec<AnnotItem>,
     },
     /// Remplacer un fragment de texte d'une ligne par un autre.
     EditText {
@@ -182,6 +180,23 @@ pub enum EditOp {
     FlattenForm,
 }
 
+/// Une annotation à poser, avec son identité.
+///
+/// L'identité (`/NM`, dates) est tirée quand le visualiseur **décide** de
+/// poser l'annotation, puis gardée ici : l'opération est appliquée deux fois
+/// (au document affiché et à la copie du fil de rendu), et rejouée à chaque
+/// annulation. Tirée à l'application, elle différerait d'une copie à l'autre
+/// et changerait à chaque Ctrl+Z.
+#[derive(Debug, Clone)]
+pub struct AnnotItem {
+    /// Indice de page.
+    pub page: usize,
+    /// Annotation.
+    pub annotation: NewAnnotation,
+    /// Auteur, identifiant, date.
+    pub meta: AnnotMeta,
+}
+
 /// Droit qu'exige une modification d'un document protégé (§7.6.4.2,
 /// table 22). Le propriétaire les a tous ; l'utilisateur, ceux que les
 /// permissions lui laissent.
@@ -212,6 +227,18 @@ impl Right {
 }
 
 impl EditOp {
+    /// Une seule annotation, avec une identité neuve.
+    #[must_use]
+    pub fn annotate(page: usize, annotation: NewAnnotation, author: Option<&str>) -> EditOp {
+        EditOp::Annotate {
+            items: vec![AnnotItem {
+                page,
+                annotation,
+                meta: AnnotMeta::fresh(author),
+            }],
+        }
+    }
+
     /// Droit que la modification exige d'un document protégé. C'est le
     /// point unique où le visualiseur décide si un utilisateur qui n'a que
     /// le mot de passe d'ouverture peut la faire.
@@ -249,16 +276,18 @@ impl EditOp {
                 acrux_features::pages::rotate_pages(doc, pages, *degrees)
             }
             EditOp::Delete { pages } => acrux_features::pages::delete_pages(doc, pages),
-            EditOp::Annotate {
-                page,
-                annotation,
-                author,
-            } => {
+            EditOp::Annotate { items } => {
+                // Les pages une seule fois : `add_annotation_with` relit la
+                // page avant chaque ajout, deux annotations sur la même
+                // page ne se perdent donc pas l'une l'autre.
                 let pages = collect_pages(doc)?;
-                let p = pages
-                    .get(*page)
-                    .ok_or_else(|| acrux_core::Error::Corrupt("page absente".into()))?;
-                add_annotation(doc, p, annotation, author.as_deref()).map(|_| ())
+                for item in items {
+                    let p = pages
+                        .get(item.page)
+                        .ok_or_else(|| acrux_core::Error::Corrupt("page absente".into()))?;
+                    add_annotation_with(doc, p, &item.annotation, &item.meta)?;
+                }
+                Ok(())
             }
             EditOp::EditText {
                 page,
@@ -839,16 +868,16 @@ mod tests {
             ),
             (EditOp::Reorder { order: vec![1, 0] }, Right::Assemble),
             (
-                EditOp::Annotate {
-                    page: 0,
-                    annotation: NewAnnotation::Note {
+                EditOp::annotate(
+                    0,
+                    NewAnnotation::Note {
                         x: 0.0,
                         y: 0.0,
                         contents: "note".into(),
                         color: [1.0, 0.85, 0.0],
                     },
-                    author: None,
-                },
+                    None,
+                ),
                 Right::Annotate,
             ),
             (EditOp::Mark { marks: Vec::new() }, Right::Annotate),
@@ -934,6 +963,51 @@ mod tests {
         assert!(!Right::FillForms.allowed_by(p) && !Right::Annotate.allowed_by(p));
         p.assemble = false;
         assert!(!Right::Assemble.allowed_by(p) && Right::Modify.allowed_by(p));
+    }
+
+    /// Un geste qui balise trois lignes sur deux pages : trois annotations
+    /// posées, deux sur la même page sans que la première se perde ; et la
+    /// même opération appliquée à deux copies donne les mêmes identifiants.
+    #[test]
+    #[allow(clippy::unwrap_used)] // tests
+    fn un_geste_plusieurs_pages_une_operation() {
+        use acrux_features::annotations::{list_annotations, MarkupKind};
+        use acrux_features::create::{new_document, PageSetup};
+        // Deux pages blanches.
+        let blank = new_document(&PageSetup::default()).unwrap();
+        let bytes = acrux_features::pages::merge(&[&blank, &blank])
+            .unwrap()
+            .save_full()
+            .unwrap();
+        let item = |page: usize, y: f64| AnnotItem {
+            page,
+            annotation: NewAnnotation::Markup {
+                kind: MarkupKind::Underline,
+                quads: vec![acrux_core::Rect::new(50.0, y, 200.0, y + 12.0)],
+                color: MarkupKind::Underline.default_color(),
+                contents: None,
+            },
+            meta: AnnotMeta::fresh(Some("Essai")),
+        };
+        let op = EditOp::Annotate {
+            items: vec![item(0, 700.0), item(0, 600.0), item(1, 700.0)],
+        };
+        let names = |doc: &Document| -> Vec<Option<String>> {
+            let pages = collect_pages(doc).unwrap();
+            pages
+                .iter()
+                .flat_map(|p| list_annotations(doc, p).unwrap())
+                .map(|a| a.name)
+                .collect()
+        };
+        let a = Document::from_bytes(bytes.clone()).unwrap();
+        let b = Document::from_bytes(bytes).unwrap();
+        op.apply(&a).unwrap();
+        op.apply(&b).unwrap();
+        let (na, nb) = (names(&a), names(&b));
+        assert_eq!(na.len(), 3, "{na:?}");
+        assert_eq!(na, nb, "mêmes identifiants sur les deux copies");
+        assert!(na.iter().all(Option::is_some));
     }
 
     /// Effacer puis aplatir le formulaire du corpus, lu en mémoire : les
