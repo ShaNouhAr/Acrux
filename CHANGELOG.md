@@ -38,8 +38,12 @@ c'est la section correspondante de ce fichier qui devient la page de version.
   sur un écran à 150 %. Le zoom est désormais plafonné pour qu'une page rendue
   tienne dans 256 Mo (environ 570 % pour de l'A4 sur un écran à 150 %, bien
   plus pour un petit format), et la barre d'état le dit quand on bute dessus.
-  Le cache des pages rendues est aussi borné en octets, plus seulement en
-  nombre d'images.
+  Le plafond tient aussi pour un zoom venu d'ailleurs — les réglages
+  enregistrés, un autre onglet aux pages plus petites, un écran plus dense —
+  et pour l'ajustement à la largeur d'une page très haute. Le cache des pages
+  rendues est aussi borné en octets (96 Mo au-delà des pages affichées), plus
+  seulement en nombre d'images : revenu à 100 %, l'image d'une page vue à
+  400 % ne reste plus en mémoire.
 - « Afficher la page entière » s'appelle « Ajuster à la page », à côté
   d'« Ajuster à la largeur ».
 - Le harnais invisible gagne `Wheel … -Ctrl` (Ctrl+molette), les fractions de

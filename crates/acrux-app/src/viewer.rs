@@ -310,7 +310,14 @@ const PANEL_WIDTH: u32 = 240;
 /// Poids du cache des pages rendues au-delà duquel on l'élague, même s'il
 /// compte moins de douze images : à 400 %, une seule page pèse déjà plus de
 /// cent mégaoctets.
-const CACHE_BYTES: usize = 256 * 1024 * 1024;
+///
+/// Bien moins que le plafond d'une page (256 Mo, voir `viewer/zoom.rs`) :
+/// l'élagage ne touche jamais aux pages proches de la vue ni à l'aperçu
+/// d'une page qui attend son rendu, il ne jette que les pages lointaines et
+/// les échelles passées. À 256 Mo, l'image d'une page vue à 400 % ou au
+/// plafond du zoom restait en mémoire, inutile, une fois revenu à 100 % —
+/// jusqu'à un quart de gigaoctet gardé pour rien sur une machine modeste.
+const CACHE_BYTES: usize = 96 * 1024 * 1024;
 
 /// Documents récents montrés sur l'écran d'accueil.
 const MAX_WELCOME: usize = 8;
@@ -4690,37 +4697,49 @@ impl Viewer {
     }
 
     /// Échelle de rendu en pixels par point.
+    ///
+    /// Toujours bornée par le plafond de mémoire du zoom (voir
+    /// `viewer/zoom.rs`) : `zoom_at` le fait respecter à chaque zoom
+    /// demandé, mais un zoom fixe peut venir d'ailleurs — les réglages
+    /// enregistrés (jusqu'à 1600 %), un autre onglet dont les pages étaient
+    /// petites, un écran plus dense — et l'ajustement à la largeur d'une page
+    /// très haute grandit sans limite. Sans cette borne, chacun de ces
+    /// chemins rendait d'un bloc une page de plusieurs gigaoctets.
     fn scale(&self) -> f64 {
         let cent_pour_cent = self.dpi_scale * (96.0 / 72.0);
         let base = self.zoom * cent_pour_cent;
-        if self.fit == Fit::Fixed {
-            return base;
-        }
         let Some(l) = &self.loaded else { return base };
         // La plus grande page décide : autrement le document se remettrait à
-        // l'échelle à chaque page tournée.
-        let (max_w, max_h) = l
-            .pages
-            .iter()
-            .take(50)
-            .map(|p| {
+        // l'échelle à chaque page tournée. La plus grande en surface fixe le
+        // plafond, comme dans `max_zoom`.
+        let ((max_w, max_h), largest) = l.pages.iter().take(50).fold(
+            ((1.0_f64, 1.0_f64), (1.0_f64, 1.0_f64)),
+            |((w, h), big), p| {
                 let b = p.crop_box(&l.doc);
-                match p.rotate(&l.doc) {
+                let (bw, bh) = (b.width().abs(), b.height().abs());
+                let big = if bw * bh > big.0 * big.1 {
+                    (bw, bh)
+                } else {
+                    big
+                };
+                let (pw, ph) = match p.rotate(&l.doc) {
                     90 | 270 => (b.height(), b.width()),
                     _ => (b.width(), b.height()),
-                }
-            })
-            .fold((1.0_f64, 1.0_f64), |(w, h), (pw, ph)| {
-                (w.max(pw), h.max(ph))
-            });
+                };
+                ((w.max(pw), h.max(ph)), big)
+            },
+        );
+        let ceiling = zoom::scale_ceiling(largest.0, largest.1, self.dpi_scale);
+        if self.fit == Fit::Fixed {
+            return base.min(ceiling);
+        }
         // En deux pages, la largeur disponible se partage entre les deux
         // colonnes et la gouttière qui les sépare.
         let cols = if self.view_mode.is_two_up() { 2.0 } else { 1.0 };
         let gaps = f64::from(GAP) * (cols + 1.0);
         let avail_w = (f64::from(self.view_width()).max(64.0) - gaps).max(32.0);
         let largeur = (avail_w / (max_w * cols)).max(0.05);
-        match self.fit {
-            Fit::Width => largeur,
+        let fitted = match self.fit {
             Fit::Page => {
                 let avail_h =
                     (f64::from(self.view_height()).max(64.0) - f64::from(GAP) * 2.0).max(32.0);
@@ -4728,8 +4747,10 @@ impl Viewer {
             }
             // Automatique : la largeur, mais jamais d'agrandissement. Une page
             // plus étroite que la fenêtre s'affiche à sa taille réelle.
-            _ => largeur.min(cent_pour_cent),
-        }
+            Fit::Automatic => largeur.min(cent_pour_cent),
+            Fit::Width | Fit::Fixed => largeur,
+        };
+        fitted.min(ceiling)
     }
 
     /// Positions des pages : (y, largeur, hauteur) en pixels.

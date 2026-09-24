@@ -142,6 +142,12 @@ fn zoom_ceiling(w: f64, h: f64, dpi_scale: f64) -> f64 {
     (pixels_per_point / (dpi_scale * (96.0 / 72.0))).clamp(0.25, MAX_ZOOM)
 }
 
+/// Le même plafond, en échelle de rendu (pixels par point) : la borne que
+/// `Viewer::scale` applique à tout zoom, d'où qu'il vienne.
+pub(super) fn scale_ceiling(w: f64, h: f64, dpi_scale: f64) -> f64 {
+    zoom_ceiling(w, h, dpi_scale) * dpi_scale * (96.0 / 72.0)
+}
+
 impl Viewer {
     /// Centre de la vue, en coordonnées de la vue.
     pub(super) fn view_center(&self) -> (f64, f64) {
@@ -199,7 +205,10 @@ impl Viewer {
     /// barre d'état dit pourquoi.
     pub(super) fn zoom_at(&mut self, zoom: f64, point: (f64, f64)) {
         let max = self.max_zoom();
-        if zoom > max + 1e-6 {
+        // Comparés au pourcent affiché : taper « 575 » quand le plafond est
+        // à 574,9 % ne demande rien de plus que ce que la barre montre, et
+        // se faire dire « limité à 575 % » laissait croire à un refus.
+        if (zoom * 100.0).round() > (max * 100.0).round() {
             // `max` est borné à 16 : l'arrondi tient dans un u32.
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let percent = (max * 100.0).round() as u32;
@@ -562,5 +571,22 @@ mod tests {
         assert!((zoom_ceiling(252.0, 144.0, 1.0) - MAX_ZOOM).abs() < 1e-9);
         // Une affiche A0 garde au moins un quart.
         assert!(zoom_ceiling(2384.0 * 4.0, 3370.0 * 4.0, 2.0) >= 0.25);
+    }
+
+    /// Le plafond en pixels par point ne dépend pas de l'écran : un zoom
+    /// fixe venu d'un écran moins dense (ou d'un autre document) ne peut pas
+    /// rendre une page plus lourde que le budget.
+    #[test]
+    fn le_plafond_d_echelle_tient_le_budget_sur_tout_ecran() {
+        for dpi in [1.0, 1.5, 2.0, 3.0] {
+            let s = scale_ceiling(595.0, 842.0, dpi);
+            let px = 595.0 * 842.0 * s * s;
+            assert!(px <= MAX_PAGE_PIXELS * 1.0001, "{dpi} : {px}");
+            assert!(px >= MAX_PAGE_PIXELS * 0.99, "{dpi} : {px}");
+        }
+        // Une page très haute ajustée à la largeur : 200 × 14 400 points,
+        // la plus haute que permette la norme.
+        let s = scale_ceiling(200.0, 14_400.0, 2.0);
+        assert!(200.0 * 14_400.0 * s * s <= MAX_PAGE_PIXELS * 1.0001);
     }
 }
