@@ -1597,7 +1597,7 @@ impl Viewer {
                     Event::Char(..) | Event::Wheel { .. } | Event::Nav { .. } => Outcome::Stay,
                     Event::Resize { .. }
                     | Event::DpiChanged(_)
-                    | Event::FileDropped(_)
+                    | Event::FilesDropped { .. }
                     | Event::Close => {
                         self.draw_popup = None;
                         return false;
@@ -1655,7 +1655,7 @@ impl Viewer {
                     Event::Char(..) | Event::Nav { .. } => Outcome::Close,
                     Event::Resize { .. }
                     | Event::DpiChanged(_)
-                    | Event::FileDropped(_)
+                    | Event::FilesDropped { .. }
                     | Event::Close => {
                         self.draw_popup = None;
                         return false;

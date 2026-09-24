@@ -292,6 +292,13 @@ const WM_DROPFILES: UINT = 0x0233;
 const WM_DPICHANGED: UINT = 0x02E0;
 /// Message privé (`WM_APP + 1`) envoyé par les fils de travail pour réveiller la fenêtre.
 const WM_APP_WAKE: UINT = 0x8000 + 1;
+/// Message privé (`WM_APP + 2`) du harnais invisible : « des fichiers sont
+/// déposés au point porté par `lParam` », la liste étant dans le fichier que
+/// nomme `ACRUX_DROP_LIST`. Il n'est écouté qu'en mode invisible : une autre
+/// application ne peut pas s'en servir pour faire ouvrir des fichiers.
+const WM_APP_TEST_DROP: UINT = 0x8000 + 2;
+/// Sélection multiple du dialogue d'ouverture.
+const OFN_ALLOWMULTISELECT: DWORD = 0x0000_0200;
 const VK_SHIFT: i32 = 0x10;
 const VK_CONTROL: i32 = 0x11;
 const VK_MENU: i32 = 0x12;
@@ -683,6 +690,7 @@ extern "system" {
 extern "system" {
     fn DragAcceptFiles(hwnd: HWND, accept: BOOL);
     fn DragQueryFileW(drop: *mut c_void, index: UINT, file: *mut u16, len: UINT) -> UINT;
+    fn DragQueryPoint(drop: *mut c_void, point: *mut POINT) -> BOOL;
     fn DragFinish(drop: *mut c_void);
     fn ShellExecuteW(
         hwnd: HWND,
@@ -963,6 +971,26 @@ impl WindowHandle for Handle<'_> {
             return None;
         }
         file_dialog(self.state.hwnd, false, "", IMAGE_TYPES, "Choisir une image")
+    }
+
+    fn open_files_dialog(&mut self, title: &str) -> Vec<PathBuf> {
+        // Réponse imposée : des chemins séparés par « | », « - » pour
+        // annuler.
+        if let Ok(value) = std::env::var("ACRUX_OPEN_FILES") {
+            if value.trim() == "-" {
+                return Vec::new();
+            }
+            return value
+                .split('|')
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .map(PathBuf::from)
+                .collect();
+        }
+        if headless_skips("choix de fichiers") {
+            return Vec::new();
+        }
+        file_dialog_multi(self.state.hwnd, COMBINE_TYPES, title)
     }
 
     fn open_url(&mut self, url: &str) {
@@ -1285,6 +1313,92 @@ const OPEN_TYPES: &[(&str, &str)] = &[
 /// Ce qu'accepte le choix d'une image (« Ajouter une image », tampon).
 const IMAGE_TYPES: &[(&str, &str)] = &[("Images", "png;jpg;jpeg;bmp;gif;tif;tiff")];
 
+/// Ce qu'accepte « Combiner des fichiers » : PDF, images, textes.
+const COMBINE_TYPES: &[(&str, &str)] = &[
+    (
+        "Documents PDF, images et textes",
+        "pdf;png;jpg;jpeg;bmp;gif;tif;tiff;txt;md",
+    ),
+    ("Documents PDF", "pdf"),
+    ("Images", "png;jpg;jpeg;bmp;gif;tif;tiff"),
+    ("Textes et Markdown", "txt;md"),
+];
+
+/// Filtre Win32 d'un dialogue de fichiers : une suite de paires terminées
+/// par un zéro, le tout clos par un zéro supplémentaire
+/// (« libellé\0motif\0…\0 »).
+fn filter_spec(types: &[(&str, &str)]) -> Vec<u16> {
+    let mut spec = String::new();
+    for (label, ext) in types {
+        // Un motif peut réunir plusieurs extensions : « pdf;png » donne
+        // « *.pdf;*.png ».
+        let patterns: Vec<String> = ext.split(';').map(|e| format!("*.{e}")).collect();
+        let (shown, matched) = (patterns.join(", "), patterns.join(";"));
+        let _ = write!(spec, "{label} ({shown})\0{matched}\0");
+    }
+    spec.push_str("Tous les fichiers\0*.*\0");
+    wide(&spec)
+}
+
+/// Dialogue « Ouvrir » à sélection multiple : les fichiers choisis, dans
+/// l'ordre ; vide si l'on annule.
+fn file_dialog_multi(hwnd: HWND, types: &[(&str, &str)], title: &str) -> Vec<PathBuf> {
+    // Une sélection de plusieurs fichiers rend le dossier puis chaque nom :
+    // de quoi tenir des centaines de noms.
+    let mut buffer = vec![0u16; 65_536];
+    let filter = filter_spec(types);
+    let title = wide(title);
+    let mut ofn = OPENFILENAMEW {
+        lStructSize: std::mem::size_of::<OPENFILENAMEW>() as DWORD,
+        hwndOwner: hwnd,
+        hInstance: null_mut(),
+        lpstrFilter: filter.as_ptr(),
+        lpstrCustomFilter: null_mut(),
+        nMaxCustFilter: 0,
+        nFilterIndex: 1,
+        lpstrFile: buffer.as_mut_ptr(),
+        nMaxFile: buffer.len() as DWORD,
+        lpstrFileTitle: null_mut(),
+        nMaxFileTitle: 0,
+        lpstrInitialDir: null(),
+        lpstrTitle: title.as_ptr(),
+        Flags: OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_ALLOWMULTISELECT,
+        nFileOffset: 0,
+        nFileExtension: 0,
+        lpstrDefExt: null(),
+        lCustData: 0,
+        lpfnHook: null(),
+        lpTemplateName: null(),
+        pvReserved: null_mut(),
+        dwReserved: 0,
+        FlagsEx: 0,
+    };
+    // SAFETY : `ofn` et `buffer` vivent jusqu'à la fin de l'appel ; les
+    // chaînes passées sont terminées par 0 et restent vivantes.
+    let ok = unsafe { GetOpenFileNameW(&raw mut ofn) };
+    if ok == 0 {
+        return Vec::new();
+    }
+    parse_multi_select(&buffer)
+}
+
+/// Découpe la réponse d'un dialogue « Ouvrir » à sélection multiple. Un
+/// seul fichier choisi : son chemin complet, suivi de deux zéros. Plusieurs :
+/// le dossier, puis chaque nom, séparés par un zéro et clos par deux
+/// (« dossier\0a.pdf\0b.png\0\0 »).
+fn parse_multi_select(buffer: &[u16]) -> Vec<PathBuf> {
+    let parts: Vec<String> = buffer
+        .split(|&c| c == 0)
+        .take_while(|part| !part.is_empty())
+        .map(String::from_utf16_lossy)
+        .collect();
+    match parts.as_slice() {
+        [] => Vec::new(),
+        [single] => vec![PathBuf::from(single)],
+        [dir, names @ ..] => names.iter().map(|n| Path::new(dir).join(n)).collect(),
+    }
+}
+
 /// Dialogue standard « Ouvrir » ou « Enregistrer sous ». `title` le nomme ;
 /// vide à l'ouverture, c'est « Ouvrir un document ».
 fn file_dialog(
@@ -1299,18 +1413,7 @@ fn file_dialog(
         let name: Vec<u16> = suggested.encode_utf16().take(buffer.len() - 1).collect();
         buffer[..name.len()].copy_from_slice(&name);
     }
-    // Un filtre Win32 est une suite de paires terminées par un zéro, le tout
-    // clos par un zéro supplémentaire : « libellé\0motif\0…\0 ».
-    let mut spec = String::new();
-    for (label, ext) in types {
-        // Un motif peut réunir plusieurs extensions : « pdf;png » donne
-        // « *.pdf;*.png ».
-        let patterns: Vec<String> = ext.split(';').map(|e| format!("*.{e}")).collect();
-        let (shown, matched) = (patterns.join(", "), patterns.join(";"));
-        let _ = write!(spec, "{label} ({shown})\0{matched}\0");
-    }
-    spec.push_str("Tous les fichiers\0*.*\0");
-    let filter = wide(&spec);
+    let filter = filter_spec(types);
     let title = wide(if save || !title.is_empty() {
         title
     } else {
@@ -2045,13 +2148,60 @@ fn handle_message(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRES
         WM_DROPFILES => {
             let drop = wparam as *mut c_void;
             let mut buffer = vec![0u16; 32768];
-            // SAFETY : `drop` est le HDROP fourni par le système pour ce message ;
-            // le tampon a la taille annoncée ; DragFinish libère la ressource.
-            let len = unsafe { DragQueryFileW(drop, 0, buffer.as_mut_ptr(), buffer.len() as UINT) };
-            unsafe { DragFinish(drop) };
-            if len > 0 {
-                let path = PathBuf::from(String::from_utf16_lossy(&buffer[..len as usize]));
-                deliver(state, Event::FileDropped(path));
+            // SAFETY : `drop` est le HDROP fourni par le système pour ce
+            // message ; l'index 0xFFFFFFFF demande le nombre de fichiers.
+            let count = unsafe { DragQueryFileW(drop, 0xFFFF_FFFF, null_mut(), 0) };
+            let mut paths = Vec::with_capacity(count as usize);
+            for index in 0..count {
+                // SAFETY : même HDROP ; le tampon a la taille annoncée.
+                let len = unsafe {
+                    DragQueryFileW(drop, index, buffer.as_mut_ptr(), buffer.len() as UINT)
+                };
+                if len > 0 {
+                    let len = (len as usize).min(buffer.len());
+                    paths.push(PathBuf::from(String::from_utf16_lossy(&buffer[..len])));
+                }
+            }
+            let mut point = POINT { x: 0, y: 0 };
+            // SAFETY : même HDROP ; `point` vit pendant l'appel. Le point est
+            // en coordonnées client, comme ceux de la souris ; DragFinish
+            // libère ensuite la ressource.
+            unsafe {
+                DragQueryPoint(drop, &raw mut point);
+                DragFinish(drop);
+            }
+            if !paths.is_empty() {
+                deliver(
+                    state,
+                    Event::FilesDropped {
+                        paths,
+                        x: point.x,
+                        y: point.y,
+                    },
+                );
+            }
+            0
+        }
+        WM_APP_TEST_DROP if headless() => {
+            // Le dépôt du harnais : la liste des chemins est dans un fichier,
+            // un par ligne ; le point est porté comme par un clic.
+            let paths: Vec<PathBuf> = std::env::var_os("ACRUX_DROP_LIST")
+                .and_then(|list| std::fs::read_to_string(list).ok())
+                .unwrap_or_default()
+                .lines()
+                .map(|l| l.trim().trim_start_matches('\u{FEFF}'))
+                .filter(|l| !l.is_empty())
+                .map(PathBuf::from)
+                .collect();
+            if !paths.is_empty() {
+                deliver(
+                    state,
+                    Event::FilesDropped {
+                        paths,
+                        x: low_i16(lparam),
+                        y: high_i16(lparam),
+                    },
+                );
             }
             0
         }
@@ -2373,6 +2523,34 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Le tampon d'un dialogue à sélection multiple.
+    fn buffer(text: &str) -> Vec<u16> {
+        let mut out: Vec<u16> = text.encode_utf16().collect();
+        out.extend([0, 0, 0]);
+        out
+    }
+
+    #[test]
+    fn la_selection_multiple_se_decoupe() {
+        // Un seul fichier : son chemin complet.
+        assert_eq!(
+            parse_multi_select(&buffer("C:\\docs\\a.pdf")),
+            [PathBuf::from("C:\\docs\\a.pdf")]
+        );
+        // Plusieurs : le dossier, puis chaque nom, dans l'ordre.
+        assert_eq!(
+            parse_multi_select(&buffer("C:\\docs\0a.pdf\0b é.png\0c.tif")),
+            [
+                PathBuf::from("C:\\docs\\a.pdf"),
+                PathBuf::from("C:\\docs\\b é.png"),
+                PathBuf::from("C:\\docs\\c.tif"),
+            ]
+        );
+        // Rien de choisi.
+        assert!(parse_multi_select(&[0, 0]).is_empty());
+        assert!(parse_multi_select(&[]).is_empty());
+    }
 
     #[test]
     fn plus_et_moins_du_pave_et_de_la_rangee_principale() {

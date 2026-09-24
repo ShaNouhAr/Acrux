@@ -152,6 +152,12 @@ const ROWS: &[Row] = &[
         Command::NewBlank,
         false,
     ),
+    Row::Tool(
+        "Combiner des fichiers",
+        Icon::PageDuplicate,
+        Command::Combine,
+        false,
+    ),
     Row::Tool("Exporter", Icon::Export, Command::Export, true),
     Row::Tool(
         "Joindre un fichier",

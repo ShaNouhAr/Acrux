@@ -1464,7 +1464,10 @@ impl Viewer {
                 window.request_redraw();
                 open.menu.char(c)
             }
-            Event::Resize { .. } | Event::DpiChanged(_) | Event::FileDropped(_) | Event::Close => {
+            Event::Resize { .. }
+            | Event::DpiChanged(_)
+            | Event::FilesDropped { .. }
+            | Event::Close => {
                 self.field_menu = None;
                 return false;
             }

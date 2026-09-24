@@ -45,6 +45,23 @@ une image… » du sélecteur de tampons), comme `ACRUX_OPEN_FILE` à l'ouvertur
 Le journal note `tampon : …` (sélecteur, choix, `tampon posé page N …`) et `image : …`
 (`image posée page N en (x, y), L × H pt`).
 
+`ACRUX_OPEN_FILES` répond au dialogue d'ouverture **à sélection multiple** (« Ajouter des
+fichiers… » de la fenêtre « Combiner des fichiers ») : des chemins séparés par `|`, ou `-` pour
+annuler. Le journal note `combinaison : …` (fenêtre ouverte, fichiers ajoutés, lancée, puis
+`combinaison : 3 fichiers, 4 pages`) et, pour une insertion, `insertion : feuille pour « … »` puis
+`pages : Insert « source.pdf » [1] at = 3`.
+
+`DropFiles` dépose des fichiers comme l'Explorateur, au point donné en coordonnées de la capture :
+
+```powershell
+DropFiles @("C:/temp/a.pdf", "C:/temp/b.png") 700 500   # un onglet chacun, le premier actif
+DropFiles @("C:/temp/b.png") 180 330                    # sur une vignette : insertion
+```
+
+La liste va dans le fichier que nomme `ACRUX_DROP_LIST` (`Start-App` le règle dans le dossier de
+l'essai), puis un message privé (`WM_APP + 2`) porte le point ; l'application ne l'écoute qu'en
+mode invisible. Le journal note l'événement reçu (`FilesDropped { paths: […], x, y }`).
+
 Les captures sont des PPM bruts ; `tools/ppm2png.py` les convertit en PNG pour les regarder :
 `python tools/ppm2png.py capture.ppm capture.png [pas] [x,y,largeur,hauteur]` (le pas sous-échantillonne,
 le rectangle recadre).

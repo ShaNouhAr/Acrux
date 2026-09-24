@@ -27,8 +27,8 @@
 //! seul avis arrive à la fin, par le canal des avis du fil.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use acrux_document::{collect_pages, Document};
 use acrux_features::navigation::Action;
 use acrux_features::pages::split::{parse_size, SplitPlan};
 use acrux_features::pages::{duplicate_block, move_block};
@@ -37,7 +37,7 @@ use super::context::Target;
 use super::dialogs::Then;
 use super::{log_line, EditOp, Prompt, PromptKind, Region, Viewer};
 use crate::platform::WindowHandle;
-use crate::render_worker::Right;
+use crate::render_worker::{InsertSource, Right};
 use crate::ui::input::TextInput;
 use crate::ui::lang::{tr, trf};
 use crate::ui::panel::{PanelTab, SelectMode};
@@ -324,7 +324,7 @@ impl Viewer {
     }
 
     /// Montre la vignette d'une page dans le panneau.
-    fn reveal_thumbnail(&mut self, page: usize) {
+    pub(super) fn reveal_thumbnail(&mut self, page: usize) {
         let (_, _, sizes) = self.thumb_geometry();
         self.panel.reveal_page(page, &sizes, self.dpi_scale as f32);
     }
@@ -414,10 +414,11 @@ impl Viewer {
     }
 
     /// « Remplacer des pages… » : les pages visées prennent le contenu des
-    /// premières pages d'un autre fichier. Le fichier est lu ici, pour
-    /// refuser tout de suite — et le dire — ce qui échouerait plus tard :
-    /// un mot de passe inconnu, des permissions qui interdisent la copie,
-    /// trop peu de pages.
+    /// premières pages d'un autre fichier — un PDF, ou une image. Le fichier
+    /// est lu ici, une fois, et gardé en mémoire dans l'opération (voir
+    /// `InsertSource`) ; c'est aussi ce qui refuse tout de suite — et le
+    /// dit — ce qui échouerait plus tard : un mot de passe inconnu, des
+    /// permissions qui interdisent la copie, trop peu de pages.
     pub(super) fn replace_pages_command(&mut self, window: &mut dyn WindowHandle) {
         if self.loaded.is_none() || !self.require_right(Right::Assemble) {
             return;
@@ -431,34 +432,23 @@ impl Viewer {
         };
         let password = self.password_of_open(&path);
         let title = tr("Remplacement impossible");
-        let src = match Document::load(&path) {
-            Ok(d) => d,
-            Err(e) => {
-                self.alert(title, &format!("{}\n\n{e}", path.display()));
+        let (mut source, available) = match super::insert::load_insert_source(&path, password) {
+            Ok(super::insert::SourceLoad::Ready(source, count)) => (source, count),
+            Ok(super::insert::SourceLoad::Locked) => {
+                self.alert(
+                    title,
+                    tr("Ce fichier est protégé par un mot de passe : ouvrez-le d'abord dans un onglet pour le saisir, puis recommencez."),
+                );
+                return;
+            }
+            Err(message) => {
+                self.alert(title, &message);
                 return;
             }
         };
-        if let Some(pw) = &password {
-            let _ = src.authenticate(pw);
-        }
-        if src.needs_password() {
-            self.alert(
-                title,
-                tr("Ce fichier est protégé par un mot de passe : ouvrez-le d'abord dans un onglet pour le saisir, puis recommencez."),
-            );
-            return;
-        }
-        let restricted = src.security().is_some_and(|h| {
-            !h.is_owner() && !acrux_document::protect::Permissions::from_p(h.permissions()).copy
-        });
-        if restricted {
-            self.alert(
-                title,
-                tr("Les permissions de ce fichier interdisent d'en extraire les pages."),
-            );
-            return;
-        }
-        let available = collect_pages(&src).map_or(0, |p| p.len());
+        // Seul le contenu des pages remplace : les champs de la source
+        // n'ont pas de widget à eux dans la page gardée.
+        source.forms = false;
         if available < targets.len() {
             self.alert(
                 title,
@@ -495,8 +485,7 @@ impl Viewer {
             &message,
             tr("Remplacer"),
             Then::ReplacePages {
-                path,
-                password,
+                source: Arc::new(source),
                 pairs,
             },
         );
@@ -505,16 +494,11 @@ impl Viewer {
     /// La réponse à « Remplacer ? ».
     pub(super) fn replace_pages_now(
         &mut self,
-        path: PathBuf,
-        password: Option<Vec<u8>>,
+        source: Arc<InsertSource>,
         pairs: Vec<(usize, usize)>,
     ) {
         let count = pairs.len();
-        if self.apply_edit(EditOp::Replace {
-            path,
-            password,
-            pairs,
-        }) {
+        if self.apply_edit(EditOp::Replace { source, pairs }) {
             self.set_notice(trf(
                 "{} page(s) remplacée(s) — Ctrl+Z pour revenir",
                 &[&count.to_string()],

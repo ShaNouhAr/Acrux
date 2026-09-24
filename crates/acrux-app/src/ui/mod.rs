@@ -7,6 +7,7 @@
 //! | `anim`    | valeurs animées et horloge : panneaux, fondus, défilement |
 //! | `annotbar` | barre de propriétés d'une annotation sélectionnée : couleur, fond, épaisseur, opacité, texte, répondre, supprimer |
 //! | `bubble`  | bulle d'un commentaire : auteur, date, statut, texte, réponses, champ « Répondre » |
+//! | `combine` | fenêtre « Combiner des fichiers » : liste réordonnable (glisser, Ctrl+↑/↓), ajout, retrait, signets, formulaires |
 //! | `controls` | contrôles composés : creux, segments, pastilles, cases, jauge |
 //! | `cursors` | pointeurs dessinés : texte ajouté, surligneur, note… |
 //! | `dialog`  | fenêtres de dialogue dessinées : question, boutons    |
@@ -20,6 +21,7 @@
 //! | `menu`    | menu contextuel du clic droit et listes déroulantes : éléments, raccourcis, clavier |
 //! | `modal`   | modèle commun des cartes modales : carte, fondu, rangée de boutons, invite |
 //! | `input`   | champ de saisie sur une ligne, avec sélection (Ctrl+A, Maj+flèches) |
+//! | `insertpages` | feuille « Insérer des pages » : pages de la source, position (début, avant, après, fin) |
 //! | `icons`   | icônes vectorielles rasterisées à la demande          |
 //! | `toolbar` | barre d'outils (boutons, champ de page, zoom, annuler / rétablir, bascules) |
 //! | `panel`   | panneau latéral (vignettes et leur sélection multiple, signets, commentaires triés, filtrés, cherchés, avec leurs réponses et statuts) |
@@ -43,6 +45,7 @@
 pub mod anim;
 pub mod annotbar;
 pub mod bubble;
+pub mod combine;
 pub mod controls;
 pub mod cursors;
 pub mod dialog;
@@ -51,6 +54,7 @@ pub mod fieldedit;
 pub mod formbar;
 pub mod icons;
 pub mod input;
+pub mod insertpages;
 pub mod lang;
 pub mod menu;
 pub mod modal;

@@ -9,6 +9,51 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 
 ## 0.23.0 — non publiée
 
+- **Combiner des fichiers dans l'application.** « Combiner des fichiers… »
+  (accueil, palette, colonne d'outils) ouvre une liste : « Ajouter des
+  fichiers… » en choisit plusieurs d'un coup, ou on les dépose dessus — PDF,
+  images, textes et Markdown. On change l'ordre en faisant glisser une ligne,
+  par `Ctrl+↑` / `Ctrl+↓` ou « Monter » / « Descendre », on retire une ligne
+  par sa croix ou `Suppr`. Deux cases : **un signet par fichier** et
+  **conserver les formulaires**. Le document ouvert y est déjà, avec ses
+  modifications pas encore enregistrées ; le mot de passe d'un PDF protégé
+  se demande au moment de combiner. La combinaison se fait en arrière-plan,
+  et le résultat s'ouvre dans un nouvel onglet, sur ses signets, prêt à être
+  enregistré (`Ctrl+S` demande où).
+- **Les images BMP, GIF et TIFF se combinent** comme le PNG et le JPEG — un
+  TIFF de scanner donne une page par feuille —, dans l'application comme
+  avec `acr combine`. Elles passaient pour du texte, et la combinaison
+  échouait. Un PDF précédé d'octets parasites reste un PDF.
+- **Insérer des pages : lesquelles, et où.** `Ctrl+I` (ou « Insérer des
+  pages » sur une vignette) ouvre une feuille : les pages du fichier choisi
+  (« 1-3, 5 », vide pour toutes, vérifiées pendant qu'on tape) et la
+  position — au début, avant ou après la page N, à la fin. On peut insérer
+  une **image**. Les pages insérées sont gardées en mémoire : `Ctrl+Z` puis
+  `Ctrl+Y` marchent même si le fichier source a changé ou disparu entre-temps
+  (« Rejeu impossible » auparavant) ; il en va de même pour « Remplacer des
+  pages », qui accepte aussi une image.
+- **Déposer plusieurs fichiers** sur la fenêtre ouvre un onglet chacun, le
+  premier au premier plan ; deux fichiers protégés demandent leur mot de
+  passe l'un après l'autre. Déposés **sur les vignettes**, ils s'insèrent là
+  où l'on vise, entre deux pages ; sur la fenêtre « Combiner », ils
+  rejoignent sa liste. Un dossier ou un fichier d'un autre format est
+  signalé, pas ouvert.
+- **Les formulaires suivent leurs pages** dans une combinaison et une
+  insertion : les champs restent des champs. Un champ dont le nom existe déjà
+  est renommé (`nom_2`) — deux copies d'un même formulaire ne se remplissent
+  plus l'une l'autre —, et une signature ne suit pas (le champ reste, vide),
+  comme dans Acrobat.
+- Les **liens internes** d'un document combiné, inséré ou extrait mènent à
+  leur propre copie, destinations nommées comprises : un lien « voir la
+  page 3 » de la seconde copie d'un document visait la première, ou plus
+  rien.
+- **`acr insert`** insère les pages d'un PDF, ou une image, à la position
+  voulue (`--pages 1-3,5`, `--at debut|fin|N`) ; `acr combine --no-forms`
+  laisse les champs de formulaire de côté.
+- Un document fabriqué (image ouverte, combinaison, nouveau PDF) reste « à
+  enregistrer » après un `Ctrl+Z` et n'entre plus dans les documents récents ;
+  deux Acrux ouverts ne s'écrasent plus leur « Sans titre.pdf ».
+
 - **Organiser les pages, plusieurs à la fois.** Dans le panneau des
   vignettes, `Ctrl+clic` ajoute ou retire une page de la sélection,
   `Maj+clic` (ou `Maj+↑` / `Maj+↓`) prend une plage, `Ctrl+A` — le pointeur

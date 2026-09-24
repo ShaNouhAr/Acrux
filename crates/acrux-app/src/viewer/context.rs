@@ -110,6 +110,8 @@ impl Viewer {
             || self.prompt.is_some()
             || self.settings.is_some()
             || self.protect.is_some()
+            || self.combine.is_some()
+            || self.insert_sheet.is_some()
             || !self.dialogs.is_empty()
             || self.capture.is_some()
             || self.edit_menu_open()
@@ -199,7 +201,10 @@ impl Viewer {
                 window.request_redraw();
                 open.menu.char(c)
             }
-            Event::Resize { .. } | Event::DpiChanged(_) | Event::FileDropped(_) | Event::Close => {
+            Event::Resize { .. }
+            | Event::DpiChanged(_)
+            | Event::FilesDropped { .. }
+            | Event::Close => {
                 self.context_menu = None;
                 return false;
             }

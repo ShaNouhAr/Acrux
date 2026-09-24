@@ -59,7 +59,9 @@ function Start-App {
     $env:ACRUX_SHOT = "$script:Dir/frame.ppm"
     $env:ACRUX_HWND = "$script:Dir/hwnd.txt"
     Remove-Item $env:ACRUX_LOG, $env:ACRUX_HWND -ErrorAction SilentlyContinue
-    Remove-Item Env:ACRUX_THEME, Env:ACRUX_OPEN_FILE, Env:ACRUX_OPEN_IMAGE, Env:ACRUX_SAVE_FILE, Env:ACRUX_SAVE_DIR, Env:ACRUX_CONFIRM, Env:ACRUX_CLIPBOARD_IMAGE -ErrorAction SilentlyContinue
+    Remove-Item Env:ACRUX_THEME, Env:ACRUX_OPEN_FILE, Env:ACRUX_OPEN_FILES, Env:ACRUX_OPEN_IMAGE, Env:ACRUX_SAVE_FILE, Env:ACRUX_SAVE_DIR, Env:ACRUX_CONFIRM, Env:ACRUX_CLIPBOARD_IMAGE -ErrorAction SilentlyContinue
+    # Liste des fichiers d'un depot simule (voir DropFiles).
+    $env:ACRUX_DROP_LIST = "$script:Dir/drop.txt"
     foreach ($k in $Env.Keys) { Set-Item -Path "Env:$k" -Value $Env[$k] }
     # ACRUX_EXE designe un autre executable que celui de target\debug : une copie
     # figee pendant qu'une compilation le remplace, par exemple.
@@ -278,6 +280,19 @@ function KeyCtrl($vk) {
     Key $vk
     [W.HL]::PostMessage($script:Hwnd, 0x0101, [IntPtr]0x11, $script:KeyUp) | Out-Null
     Start-Sleep -Milliseconds 200
+}
+
+# Depot de fichiers en (x, y), coordonnees de la capture, comme si on les
+# lachait depuis l'Explorateur : la liste va dans le fichier que nomme
+# ACRUX_DROP_LIST (un chemin par ligne), puis WM_APP + 2 porte le point. Le
+# message n'est ecoute qu'en mode invisible. Le point part tel quel, sans
+# l'echelle de LParam : Windows convertit les coordonnees des messages de
+# souris d'un contexte DPI a l'autre, pas celles d'un message prive.
+function DropFiles($paths, $x, $y) {
+    Set-Content -Path $env:ACRUX_DROP_LIST -Value ($paths -join "`n") -Encoding utf8
+    $point = [IntPtr]((([int]$y) -shl 16) -bor (([int]$x) -band 0xFFFF))
+    [W.HL]::PostMessage($script:Hwnd, 0x8002, [IntPtr]0, $point) | Out-Null
+    Start-Sleep -Milliseconds 600
 }
 
 function Shot($name) {

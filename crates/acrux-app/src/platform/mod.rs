@@ -202,8 +202,18 @@ pub enum Event {
         /// qu'on l'enfonce ou la relâche en plein geste.
         shift: bool,
     },
-    /// Fichier déposé sur la fenêtre.
-    FileDropped(PathBuf),
+    /// Fichiers déposés sur la fenêtre, dans l'ordre où l'Explorateur les
+    /// donne, au point `(x, y)` de la zone cliente : c'est ce point qui dit
+    /// si l'on dépose sur les vignettes (une insertion) ou ailleurs (un
+    /// onglet par fichier).
+    FilesDropped {
+        /// Chemins des fichiers.
+        paths: Vec<PathBuf>,
+        /// Position x du dépôt.
+        x: i32,
+        /// Position y du dépôt.
+        y: i32,
+    },
     /// Échelle DPI de la fenêtre (1.0 = 96 dpi).
     DpiChanged(f32),
     /// Réveil demandé par un autre fil via [`Waker::wake`] (résultat prêt).
@@ -466,6 +476,13 @@ pub trait WindowHandle {
     /// Dialogue « Ouvrir » limité aux images (PNG, JPEG, BMP, GIF, TIFF).
     fn open_image_dialog(&mut self) -> Option<PathBuf> {
         None
+    }
+    /// Dialogue « Ouvrir » à sélection multiple (PDF, images, textes), titré
+    /// `title` : les fichiers choisis, dans l'ordre ; vide si l'on annule.
+    /// Une plateforme qui ne sait pas choisir plusieurs fichiers en rend un.
+    fn open_files_dialog(&mut self, title: &str) -> Vec<PathBuf> {
+        let _ = title;
+        self.open_file_dialog().into_iter().collect()
     }
     /// Ouvre une adresse `http(s)`/`mailto` dans l'application par défaut.
     /// Les autres schémas sont refusés par la plateforme.

@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use acrux_document::{collect_pages, Document};
@@ -36,6 +37,60 @@ pub struct RenderRequest {
     pub scale_key: u32,
     /// Génération du document (incrémentée à chaque modification).
     pub generation: u32,
+}
+
+/// Pages venues d'un autre fichier, à insérer ou à mettre à la place
+/// d'autres : un PDF gardé **en mémoire** (une image est convertie en PDF
+/// avant d'arriver ici).
+///
+/// Une insertion se rejoue à chaque annulation, dans le visualiseur comme
+/// dans le fil de rendu. Relire le fichier source à chaque fois cassait
+/// Ctrl+Z dès qu'il avait changé ou disparu (« Rejeu impossible »), et
+/// rendait une annulation différente de ce qu'on avait fait. Les octets
+/// sont donc lus une fois, au geste, et partagés (`Arc`) par l'historique,
+/// le visualiseur et le fil de rendu.
+pub struct InsertSource {
+    /// Nom du fichier, pour le journal et les messages.
+    pub name: String,
+    /// Octets du PDF.
+    pub pdf: Vec<u8>,
+    /// Son mot de passe, s'il est chiffré.
+    pub password: Option<Vec<u8>>,
+    /// Les champs de formulaire suivent les pages (voir
+    /// `acrux_features::pages::InsertOptions`).
+    pub forms: bool,
+}
+
+impl InsertSource {
+    /// Le document source, ouvert et authentifié.
+    ///
+    /// # Errors
+    /// PDF illisible, mauvais mot de passe, ou permissions qui interdisent
+    /// d'en extraire les pages (sauf ouvert avec le mot de passe des
+    /// permissions).
+    pub fn open(&self) -> acrux_core::Result<Document> {
+        let src = Document::from_bytes(self.pdf.clone())?;
+        if let Some(pw) = &self.password {
+            src.authenticate(pw)?;
+        }
+        if !acrux_features::pages::extraction_allowed(&src) {
+            return Err(acrux_core::Error::Unsupported(
+                "les permissions de ce document interdisent d'en extraire les pages".into(),
+            ));
+        }
+        Ok(src)
+    }
+}
+
+impl std::fmt::Debug for InsertSource {
+    // Le journal nomme la source ; il ne recopie pas ses octets.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InsertSource")
+            .field("name", &self.name)
+            .field("octets", &self.pdf.len())
+            .field("forms", &self.forms)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Modification du document, appliquée à l'identique par le visualiseur et
@@ -110,10 +165,8 @@ pub enum EditOp {
     ApplyRedactions,
     /// Insérer les pages d'un autre fichier.
     Insert {
-        /// Fichier source.
-        path: PathBuf,
-        /// Mot de passe du fichier source, s'il est chiffré.
-        password: Option<Vec<u8>>,
+        /// Le fichier source, en mémoire.
+        source: Arc<InsertSource>,
         /// Pages du fichier source (vide = toutes).
         pages: Vec<usize>,
         /// Position d'insertion (0 = avant la première page).
@@ -129,13 +182,11 @@ pub enum EditOp {
         rotate: i32,
     },
     /// Remplacer le contenu de pages par celui des pages d'un autre fichier
-    /// (voir `pages::replace_pages`). Comme `Insert`, le fichier source est
-    /// relu à chaque rejeu.
+    /// (voir `pages::replace_pages`). Comme pour `Insert`, le fichier source
+    /// est en mémoire : le rejeu ne dépend pas de ce qu'il est devenu.
     Replace {
-        /// Fichier source.
-        path: PathBuf,
-        /// Mot de passe du fichier source, s'il est chiffré.
-        password: Option<Vec<u8>>,
+        /// Le fichier source, en mémoire.
+        source: Arc<InsertSource>,
         /// Paires (page remplacée, page source).
         pairs: Vec<(usize, usize)>,
     },
@@ -434,29 +485,28 @@ impl EditOp {
             .map(|_| ()),
             EditOp::Mark { marks } => mark_redactions(doc, marks).map(|_| ()),
             EditOp::ApplyRedactions => apply_redactions(doc).map(|_| ()),
-            EditOp::Insert {
-                path,
-                password,
-                pages,
-                at,
-            } => {
-                let src = open_source(path, password.as_deref())?;
+            EditOp::Insert { source, pages, at } => {
+                let src = source.open()?;
                 let indices: Vec<usize> = if pages.is_empty() {
                     (0..collect_pages(&src)?.len()).collect()
                 } else {
                     pages.clone()
                 };
-                acrux_features::pages::insert_pages_from(doc, &src, &indices, *at)
+                acrux_features::pages::insert_pages_with(
+                    doc,
+                    &src,
+                    &indices,
+                    *at,
+                    &acrux_features::pages::InsertOptions {
+                        forms: source.forms,
+                    },
+                )
             }
             EditOp::InsertBlank { at, media, rotate } => {
                 acrux_features::pages::insert_blank_page(doc, *at, *media, *rotate)
             }
-            EditOp::Replace {
-                path,
-                password,
-                pairs,
-            } => {
-                let src = open_source(path, password.as_deref())?;
+            EditOp::Replace { source, pairs } => {
+                let src = source.open()?;
                 acrux_features::pages::replace_pages(doc, &src, pairs)
             }
             EditOp::Reorder { order } => acrux_features::pages::reorder_pages(doc, order),
@@ -537,27 +587,6 @@ impl EditOp {
             }
         }
     }
-}
-
-/// Ouvre le fichier dont on prend des pages (insérer, remplacer).
-///
-/// En prendre les pages, c'est en extraire le contenu : un document à
-/// ouverture libre qui interdit la copie ne se recopie pas ainsi dans un
-/// fichier sans permissions. Son propriétaire, lui, le peut.
-fn open_source(path: &std::path::Path, password: Option<&[u8]>) -> acrux_core::Result<Document> {
-    let src = Document::load(path)?;
-    if let Some(pw) = password {
-        src.authenticate(pw)?;
-    }
-    let restricted = src.security().is_some_and(|h| {
-        !h.is_owner() && !acrux_document::protect::Permissions::from_p(h.permissions()).copy
-    });
-    if restricted {
-        return Err(acrux_core::Error::Unsupported(
-            "les permissions de ce document interdisent d'en extraire les pages".into(),
-        ));
-    }
-    Ok(src)
 }
 
 /// Page `index` du document, telle qu'il est maintenant.
@@ -1126,8 +1155,12 @@ mod tests {
             (EditOp::Delete { pages: vec![0] }, Right::Assemble),
             (
                 EditOp::Insert {
-                    path: PathBuf::from("x.pdf"),
-                    password: None,
+                    source: Arc::new(InsertSource {
+                        name: "x.pdf".into(),
+                        pdf: Vec::new(),
+                        password: None,
+                        forms: true,
+                    }),
                     pages: Vec::new(),
                     at: 0,
                 },
@@ -1220,8 +1253,12 @@ mod tests {
             rotate: 0,
         };
         let replace = EditOp::Replace {
-            path: PathBuf::from("x.pdf"),
-            password: None,
+            source: Arc::new(InsertSource {
+                name: "x.pdf".into(),
+                pdf: Vec::new(),
+                password: None,
+                forms: false,
+            }),
             pairs: vec![(0, 0)],
         };
         assert_eq!(blank.required_right(), Right::Assemble);
@@ -1414,13 +1451,16 @@ mod tests {
         let mut perms = Permissions::all();
         perms.copy = false;
         src.protect(b"", b"chef", perms).unwrap();
-        let path = std::env::temp_dir().join(format!("acrux-insert-{}.pdf", std::process::id()));
-        std::fs::write(&path, src.save_full().unwrap()).unwrap();
+        let bytes = src.save_full().unwrap();
         let insert = |password: Option<Vec<u8>>| {
             let target = Document::from_bytes(plain.clone()).unwrap();
             EditOp::Insert {
-                path: path.clone(),
-                password,
+                source: Arc::new(InsertSource {
+                    name: "source.pdf".into(),
+                    pdf: bytes.clone(),
+                    password,
+                    forms: true,
+                }),
                 pages: Vec::new(),
                 at: 0,
             }
@@ -1428,12 +1468,49 @@ mod tests {
         };
         let refused = insert(None);
         let allowed = insert(Some(b"chef".to_vec()));
-        let _ = std::fs::remove_file(&path);
         assert!(
             matches!(refused, Err(acrux_core::Error::Unsupported(_))),
             "{refused:?}"
         );
         assert!(allowed.is_ok(), "{allowed:?}");
+    }
+
+    /// Une insertion se rejoue sans son fichier : appliquée à deux copies du
+    /// même document, elle donne deux fois le même résultat, et la source
+    /// n'a pas de fichier du tout — c'est ce qui rend l'annulation sûre.
+    #[test]
+    #[allow(clippy::unwrap_used)] // tests
+    fn an_insertion_replays_from_memory() {
+        use acrux_features::create::{new_document, PageSetup};
+        let three = new_document(&PageSetup {
+            pages: 3,
+            ..PageSetup::default()
+        })
+        .unwrap()
+        .save_full()
+        .unwrap();
+        let one = new_document(&PageSetup::default())
+            .unwrap()
+            .save_full()
+            .unwrap();
+        let op = EditOp::Insert {
+            source: Arc::new(InsertSource {
+                name: "trois.pdf".into(),
+                pdf: three,
+                password: None,
+                forms: true,
+            }),
+            pages: vec![2, 0],
+            at: 1,
+        };
+        for _ in 0..2 {
+            let target = Document::from_bytes(one.clone()).unwrap();
+            op.apply(&target).unwrap();
+            assert_eq!(collect_pages(&target).unwrap().len(), 3);
+        }
+        // Le journal nomme la source sans recopier ses octets.
+        let shown = format!("{op:?}");
+        assert!(shown.contains("trois.pdf") && shown.len() < 200, "{shown}");
     }
 
     /// Fractionner écrit un fichier par partie, et n'écrase jamais : un

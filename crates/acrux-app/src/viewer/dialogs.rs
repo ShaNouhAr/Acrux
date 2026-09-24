@@ -27,10 +27,8 @@ pub(super) enum Then {
     DeletePages(Vec<usize>),
     /// Remplacer des pages par celles d'un autre fichier.
     ReplacePages {
-        /// Fichier source.
-        path: std::path::PathBuf,
-        /// Son mot de passe, pris à l'onglet qui l'a ouvert.
-        password: Option<Vec<u8>>,
+        /// Le fichier source, lu au moment de la question.
+        source: std::sync::Arc<crate::render_worker::InsertSource>,
         /// Paires (page remplacée, page source).
         pairs: Vec<(usize, usize)>,
     },
@@ -261,7 +259,7 @@ impl Viewer {
             Event::Char(..) | Event::MouseDown { .. } | Event::Wheel { .. } | Event::Nav { .. } => {
                 None
             }
-            Event::FileDropped(_) | Event::Close => return !matches!(event, Event::Close),
+            Event::FilesDropped { .. } | Event::Close => return !matches!(event, Event::Close),
             _ => return false,
         };
         if let Some(index) = choice {
@@ -340,11 +338,7 @@ impl Viewer {
                 log_line("biffures appliquées");
             }
             Then::DeletePages(pages) => self.delete_pages_now(pages),
-            Then::ReplacePages {
-                path,
-                password,
-                pairs,
-            } => self.replace_pages_now(path, password, pairs),
+            Then::ReplacePages { source, pairs } => self.replace_pages_now(source, pairs),
             Then::DeleteComment(page, index) => self.remove_annot(page, index),
             Then::InstallUpdate(url, version) => self.install_update_now(&url, &version),
             Then::ClearRecent => self.clear_recent(),
@@ -440,7 +434,7 @@ impl Viewer {
             Event::MouseDown { .. }
             | Event::Nav { .. }
             | Event::Wheel { .. }
-            | Event::FileDropped(_) => {}
+            | Event::FilesDropped { .. } => {}
             _ => return false,
         }
         window.request_redraw();
@@ -456,6 +450,11 @@ impl Viewer {
         }
         if let Some(p) = &self.protect {
             return p.typing();
+        }
+        // Une invite s'ouvre par-dessus la feuille « Insérer des pages » :
+        // c'est elle, alors, qui tape.
+        if self.prompt.is_none() && self.insert_sheet.is_some() {
+            return self.insert_typing();
         }
         self.prompt
             .as_ref()
@@ -507,7 +506,7 @@ impl Viewer {
             | Event::MouseDown { .. }
             | Event::Nav { .. }
             | Event::Wheel { .. }
-            | Event::FileDropped(_) => None,
+            | Event::FilesDropped { .. } => None,
             _ => return false,
         };
         if let Some(action) = action {

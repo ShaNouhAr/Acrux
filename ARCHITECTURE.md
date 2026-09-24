@@ -385,6 +385,19 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   sélection suit ses pages par `history::page_after`, comme l'historique de la vue. Le
   fractionnement se fait sur le fil de rendu (`WorkerMessage::Split`, un seul avis à la fin), sur
   son document qui a rejoué l'historique : on fractionne ce qu'on voit.
+- `viewer/insert` et `ui/insertpages` : **insérer des pages** d'un fichier. La source est lue une
+  fois, au geste (une image convertie en PDF), et voyage **en mémoire** dans l'opération
+  (`EditOp::Insert { source: Arc<InsertSource> }`, comme `Replace`) : l'annulation la rejoue
+  sans relire un fichier qui a pu changer ou disparaître. La feuille est un état pur (pages,
+  position, `insertion_index`) ; des fichiers déposés sur les vignettes s'insèrent à l'endroit
+  visé (`Panel::insertion_at`), un fichier par opération.
+- `viewer/combine` et `ui/combine` : **combiner des fichiers**. La fenêtre tient la liste (état
+  pur : ajout, ordre, retrait, glisser) ; le visualiseur combine sur un **fil jetable** qui rend
+  des octets et réveille la fenêtre une seule fois — le traitement du réveil ne réveille jamais
+  (`poll_combine`). Le résultat s'ouvre par `open_made_bytes`, dans le dossier temporaire de
+  l'instance, marqué temporaire et tenu hors des récents, rejeu compris. Des fichiers déposés
+  ailleurs ouvrent un onglet chacun, par `pending_open`, qui s'arrête le temps d'une invite de mot
+  de passe ; le dépôt arrive en `Event::FilesDropped`, avec son point.
 - La **décoration de la fenêtre** suit le thème : `WindowHandle::set_frame_theme` demande le mode
   sombre (`DWMWA_USE_IMMERSIVE_DARK_MODE`) puis, quand le système sait les prendre, la couleur
   exacte de la barre de titre, de son texte et de la bordure. Les attributs inconnus d'un système

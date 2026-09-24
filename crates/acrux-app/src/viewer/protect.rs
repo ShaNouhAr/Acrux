@@ -299,7 +299,7 @@ impl Viewer {
             Event::MouseDown { .. }
             | Event::Nav { .. }
             | Event::Wheel { .. }
-            | Event::FileDropped(_) => Action::None,
+            | Event::FilesDropped { .. } => Action::None,
             _ => return false,
         };
         match action {

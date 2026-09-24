@@ -80,6 +80,7 @@ use crate::ui::video::{self as video_ui, Box2, Hit as VideoHit};
 use acrux_features::edit_objects::{self, Edit as ObjectEdit, PageObject};
 use acrux_features::fillsign::ink::{InkPoint, Nib, Pen, Stroke, Weight};
 
+mod combine;
 mod comments;
 mod context;
 mod dialogs;
@@ -87,6 +88,7 @@ mod draw;
 mod editmode;
 mod formfill;
 mod history;
+mod insert;
 mod organize;
 mod protect;
 mod search;
@@ -861,6 +863,10 @@ enum PromptKind {
         start: usize,
         end: usize,
     },
+    /// Mot de passe du fichier de rang `index` de la liste « Combiner ».
+    CombinePassword { index: usize },
+    /// Mot de passe d'une source d'insertion protégée.
+    InsertPassword { path: PathBuf },
     /// Nombre de pages par fichier d'un fractionnement.
     SplitEvery,
     /// Taille maximale des fichiers d'un fractionnement.
@@ -1033,8 +1039,12 @@ pub struct Viewer {
     scroll_y: f64,
     scroll_x: f64,
     drag_last: Option<(i32, i32)>,
-    /// Documents à ouvrir au premier événement (ligne de commande).
+    /// Documents à ouvrir (ligne de commande, fichiers déposés), un onglet
+    /// chacun ; l'ouverture s'arrête le temps d'une invite de mot de passe.
     pending_open: Vec<PathBuf>,
+    /// Onglet à activer quand les documents en attente seront ouverts :
+    /// celui du premier d'entre eux.
+    pending_focus: Option<usize>,
     title_dirty: bool,
     theme: Theme,
     text: Option<TextRenderer>,
@@ -1109,6 +1119,8 @@ pub struct Viewer {
     welcome_thumbs: HashMap<PathBuf, (Option<Bitmap>, Instant)>,
     /// Zone du bouton « Ouvrir un document ».
     welcome_open: Option<(i32, i32, i32, i32)>,
+    /// Zone du bouton « Combiner des fichiers ».
+    welcome_combine: Option<(i32, i32, i32, i32)>,
     /// Zone du lien « Vider l'historique » de l'écran d'accueil.
     welcome_clear: Option<(i32, i32, i32, i32)>,
     /// L'accueil est affiché par-dessus le document ouvert, qui reste dans
@@ -1158,6 +1170,16 @@ pub struct Viewer {
     /// Fenêtre « Protéger par mot de passe », ouverte par-dessus tout. Elle
     /// vise le document actif : elle se ferme dès qu'il change.
     protect: Option<crate::ui::protect::ProtectDialog>,
+    /// Fenêtre « Combiner des fichiers », ouverte par-dessus tout.
+    combine: Option<crate::ui::combine::CombineWindow>,
+    /// Résultat de la combinaison en cours, s'il y en a une (voir
+    /// `viewer/combine.rs`).
+    combine_rx: Option<std::sync::mpsc::Receiver<combine::Combined>>,
+    /// Feuille « Insérer des pages », et la source qu'elle insérera.
+    insert_sheet: Option<(
+        crate::ui::insertpages::InsertSheet,
+        Arc<crate::render_worker::InsertSource>,
+    )>,
     /// Signature enregistrée, conservée entre deux sessions.
     signatures: Vec<Saved>,
     /// Paraphe enregistré.
@@ -1268,14 +1290,10 @@ pub struct Viewer {
 /// Vrai si ces octets sont ceux d'une image que nous savons lire.
 ///
 /// La signature vaut mieux que l'extension : un fichier mal nommé s'ouvre
-/// quand même, et un PDF nommé `.png` reste un PDF.
+/// quand même, et un PDF nommé `.png` reste un PDF. Ce sont celles que
+/// reconnaît le moteur (`create::image_format`), et donc la combinaison.
 fn is_image(data: &[u8]) -> bool {
-    data.starts_with(&[0x89, b'P', b'N', b'G'])
-        || data.starts_with(&[0xFF, 0xD8])
-        || data.starts_with(b"BM")
-        || data.starts_with(b"GIF8")
-        || data.starts_with(b"II* ")
-        || data.starts_with(b"MM *")
+    acrux_features::create::is_image(data)
 }
 
 impl Viewer {
@@ -1307,6 +1325,9 @@ impl Viewer {
             scroll_y: 0.0,
             scroll_x: 0.0,
             drag_last: None,
+            // Le premier fichier de la ligne de commande reste actif, comme
+            // dans les navigateurs.
+            pending_focus: (!initial.is_empty()).then_some(0),
             pending_open: initial,
             title_dirty: true,
             theme: if prefs.dark_theme && !std::env::var("ACRUX_THEME").is_ok_and(|v| v == "light")
@@ -1365,6 +1386,7 @@ impl Viewer {
             sign_panel: None,
             welcome_thumbs: HashMap::new(),
             welcome_open: None,
+            welcome_combine: None,
             welcome_clear: None,
             home: false,
             welcome_scroll: 0.0,
@@ -1384,6 +1406,9 @@ impl Viewer {
             live_edit: None,
             capture: None,
             protect: None,
+            combine: None,
+            combine_rx: None,
+            insert_sheet: None,
             signatures,
             initials,
             notice: None,
@@ -1712,6 +1737,7 @@ impl Viewer {
         let Some(text) = &mut self.text else {
             self.recent_hits.clear();
             self.welcome_open = None;
+            self.welcome_combine = None;
             self.welcome_clear = None;
             self.welcome_thumbs = thumbs;
             return;
@@ -1764,12 +1790,41 @@ impl Viewer {
             (255, 255, 255),
         );
         let open_hit = Some((x, y, bw, bh));
+        // Le second geste d'Acrobat à l'accueil : réunir plusieurs fichiers.
+        // Un bouton secondaire, pour que « Ouvrir » reste le premier.
+        let combine_label = lang::tr("Combiner des fichiers…");
+        let cx = x + bw + (12.0 * dpi) as i32;
+        let cw = (text.measure(size, combine_label) + 40.0 * dpi) as i32;
+        let over_combine =
+            hover.is_some_and(|(mx, my)| mx >= cx && mx < cx + cw && my >= y && my < y + bh);
+        round_rect(
+            frame,
+            cx,
+            y,
+            cw,
+            bh,
+            10.0 * dpi,
+            if over_combine {
+                t.button_hover
+            } else {
+                t.hover
+            },
+        );
         text.draw(
             frame,
-            (x + bw + (18.0 * dpi) as i32) as f32,
+            (cx + (20.0 * dpi) as i32) as f32,
             y as f32 + f32::midpoint(bh as f32, text.ascent(size)) - 1.0,
             size,
-            lang::tr("ou déposez un PDF sur la fenêtre · Ctrl+Maj+P pour toutes les commandes"),
+            combine_label,
+            t.text,
+        );
+        self.welcome_combine = Some((cx, y, cw, bh));
+        text.draw(
+            frame,
+            (cx + cw + (18.0 * dpi) as i32) as f32,
+            y as f32 + f32::midpoint(bh as f32, text.ascent(size)) - 1.0,
+            size,
+            lang::tr("ou déposez des PDF ou des images · Ctrl+Maj+P pour toutes les commandes"),
             t.text_dim,
         );
         y += bh + (34.0 * dpi) as i32;
@@ -2197,6 +2252,13 @@ impl Viewer {
             return true;
         }
         if self
+            .welcome_combine
+            .is_some_and(|(bx, by, bw, bh)| x >= bx && x < bx + bw && y >= by && y < by + bh)
+        {
+            self.open_combine();
+            return true;
+        }
+        if self
             .welcome_clear
             .is_some_and(|(bx, by, bw, bh)| x >= bx && x < bx + bw && y >= by && y < by + bh)
         {
@@ -2496,6 +2558,24 @@ impl Viewer {
                 let (page, index) = (*page, *index);
                 self.prompt = None;
                 self.set_annot_text(page, index, value);
+            }
+            PromptKind::CombinePassword { index } => {
+                let index = *index;
+                if let Some(error) = self.combine_password_entered(index, &value, window) {
+                    if let Some(p) = &mut self.prompt {
+                        p.error = Some(error);
+                        p.input.clear();
+                    }
+                }
+            }
+            PromptKind::InsertPassword { path } => {
+                let path = path.clone();
+                if let Some(error) = self.insert_password_entered(&path, &value) {
+                    if let Some(p) = &mut self.prompt {
+                        p.error = Some(error);
+                        p.input.clear();
+                    }
+                }
             }
             PromptKind::SplitEvery => {
                 let error = self.split_every_entered(&value, window);
@@ -3050,30 +3130,6 @@ impl Viewer {
         window.request_redraw();
     }
 
-    /// Insère, avant la page courante (ou la première des vignettes
-    /// sélectionnées), toutes les pages d'un autre PDF.
-    fn insert_pages(&mut self, window: &mut dyn WindowHandle) {
-        // Le droit se vérifie avant de faire choisir un fichier pour rien.
-        if self.loaded.is_none() || !self.require_right(crate::render_worker::Right::Assemble) {
-            return;
-        }
-        let at = self.target_pages().first().copied().unwrap_or(0);
-        let Some(path) = window.open_file_dialog() else {
-            return;
-        };
-        // Un fichier protégé déjà ouvert dans un onglet prête son mot de
-        // passe.
-        let password = self.password_of_open(&path);
-        if self.apply_edit(EditOp::Insert {
-            path,
-            password,
-            pages: Vec::new(),
-            at,
-        }) {
-            self.set_notice(format!("pages insérées avant la page {}", at + 1));
-        }
-    }
-
     /// Convertit le document : le format vient de l'extension choisie dans le
     /// dialogue. La conversion elle-même est faite par le fil de rendu — une
     /// centaine de pages en PNG prendrait plusieurs secondes.
@@ -3575,9 +3631,14 @@ impl Viewer {
         self.field_menu = None;
         self.anchor = 0;
         self.title_dirty = true;
+        // Un document fabriqué (image ouverte, combinaison, nouveau PDF) vit
+        // dans un fichier temporaire : il n'a rien à faire dans les récents,
+        // ni à l'ouverture ni au rejeu d'une annulation.
         if let Some(l) = &self.loaded {
             let path = l.path.clone();
-            self.prefs.push_recent(&path);
+            if !stamps::is_made(&path) {
+                self.prefs.push_recent(&path);
+            }
         }
         self.save_prefs();
         window.request_redraw();
@@ -3887,6 +3948,14 @@ impl Viewer {
                 .protect
                 .as_ref()
                 .is_some_and(crate::ui::protect::ProtectDialog::animating)
+            || self
+                .combine
+                .as_ref()
+                .is_some_and(crate::ui::combine::CombineWindow::animating)
+            || self
+                .insert_sheet
+                .as_ref()
+                .is_some_and(|(sheet, _)| sheet.animating())
     }
 
     /// Arme le fil des animations si l'événement qui s'achève a lancé un
@@ -4473,6 +4542,7 @@ impl Viewer {
                 }
             }
             Command::NewBlank => self.new_blank(window),
+            Command::Combine => self.open_combine(),
             Command::NewFromClipboard => self.new_from_clipboard(window),
             Command::CommentBar => self.toggle_comment_bar(window),
             Command::AddTextBox => {
@@ -4716,10 +4786,16 @@ impl Viewer {
         let spot = self.view_spot();
         // La vue de l'onglet n'est pas une modification : l'annulation ne la
         // défait pas. L'historique de la vue survit.
-        let Some((view_rotation, count, mut nav, before)) = self
-            .loaded
-            .take()
-            .map(|l| (l.view_rotation, l.pages.len(), l.nav, l.history))
+        let Some((view_rotation, count, mut nav, before, temporary)) =
+            self.loaded.take().map(|l| {
+                (
+                    l.view_rotation,
+                    l.pages.len(),
+                    l.nav,
+                    l.history,
+                    l.temporary,
+                )
+            })
         else {
             return;
         };
@@ -4747,7 +4823,10 @@ impl Viewer {
                     w.set_view_rotation(view_rotation);
                 }
             }
-            l.modified = !ops.is_empty();
+            // Un document fabriqué reste à enregistrer, et sans fichier à
+            // lui : Ctrl+S demandera toujours où le ranger.
+            l.modified = temporary || !ops.is_empty();
+            l.temporary = temporary;
             l.history = ops;
             l.redo = redo;
             l.view_rotation = view_rotation;
@@ -7512,13 +7591,11 @@ impl Viewer {
     /// [`App::event`]), y compris ses nombreux retours anticipés.
     #[allow(clippy::too_many_lines)] // un bras par type d'événement
     fn handle_event(&mut self, event: Event, window: &mut dyn WindowHandle) {
-        if !self.pending_open.is_empty() {
-            // Chaque fichier de la ligne de commande ouvre un onglet ; le
-            // premier reste actif, comme dans les navigateurs.
-            for path in std::mem::take(&mut self.pending_open) {
-                self.open(&path, window);
-            }
-            self.select_tab(0);
+        // Chaque fichier en attente (ligne de commande, dépôt) ouvre un
+        // onglet ; une invite de mot de passe les fait attendre, ils
+        // reprennent quand elle se referme.
+        if !self.pending_open.is_empty() && self.prompt.is_none() {
+            self.drain_pending_open(window);
         }
         // Une fois par lancement, et au plus une fois par jour : la
         // recherche est silencieuse et n'installe rien toute seule.
@@ -7565,6 +7642,8 @@ impl Viewer {
         if self.dialog_event(&event, window)
             || self.protect_event(&event, window)
             || self.modal_event(&event, window)
+            || self.combine_event(&event, window)
+            || self.insert_event(&event, window)
             || self.zoom_menu_event(&event, window)
             || self.draw_popup_event(&event, window)
             || self.stamp_picker_event(&event, window)
@@ -7597,9 +7676,14 @@ impl Viewer {
                 // info-bulle à faire apparaître et sans média en train de
                 // jouer ne mérite pas de repeindre.
                 let results = self.collect_results();
+                // Le fil de combinaison réveille une fois, son résultat prêt :
+                // on le relève ici, où la fenêtre est à portée pour ouvrir le
+                // document produit.
+                let combined = self.poll_combine(window);
                 // Le fil des mises à jour réveille une fois, son résultat
                 // prêt : la peinture le relève (`poll_updates`) et l'affiche.
                 if !results
+                    && !combined
                     && self.update_rx.is_none()
                     && !self.search_scanning()
                     && !self.tip_due()
@@ -7612,7 +7696,7 @@ impl Viewer {
                     return;
                 }
             }
-            Event::FileDropped(path) => self.open(&path, window),
+            Event::FilesDropped { paths, x, y } => self.files_dropped(&paths, x, y, window),
             Event::Wheel {
                 delta,
                 modifiers,
@@ -8782,6 +8866,8 @@ impl Viewer {
         self.paint_field_menu(frame);
         self.paint_capture(frame);
         self.paint_protect(frame);
+        self.paint_combine(frame);
+        self.paint_insert_sheet(frame);
         self.paint_prompt(frame);
         self.paint_settings(frame);
         self.paint_palette(frame);

@@ -212,6 +212,8 @@ pub enum Command {
     NewBlank,
     /// Nouveau document fait de l'image ou du texte du presse-papiers.
     NewFromClipboard,
+    /// Réunir plusieurs fichiers (PDF, images, textes) en un document.
+    Combine,
     /// Poser une note.
     Note,
     /// Chercher une version plus récente.
@@ -361,6 +363,7 @@ impl Command {
             Command::PasteImage => "paste-image",
             Command::NewBlank => "new-blank",
             Command::NewFromClipboard => "new-from-clipboard",
+            Command::Combine => "combine",
             Command::Note => "note",
             Command::CheckUpdates => "check-updates",
             Command::EditObjects => "edit-objects",
@@ -615,6 +618,13 @@ const ENTRIES: &[Entry] = &[
         shortcut: "",
         keywords: "creer nouveau coller capture ecran image texte presse papiers",
         command: Command::NewFromClipboard,
+        needs_document: false,
+    },
+    Entry {
+        label: "Combiner des fichiers…",
+        shortcut: "",
+        keywords: "fusionner assembler joindre reunir images plusieurs pdf combiner",
+        command: Command::Combine,
         needs_document: false,
     },
     Entry {

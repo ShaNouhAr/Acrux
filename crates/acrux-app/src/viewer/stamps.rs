@@ -372,7 +372,7 @@ impl Viewer {
             }
             Event::Resize { .. }
             | Event::DpiChanged(_)
-            | Event::FileDropped(_)
+            | Event::FilesDropped { .. }
             | Event::Close
             | Event::Wake => {
                 if !matches!(event, Event::Wake) {
@@ -837,11 +837,8 @@ impl Viewer {
 
     // --- Nouveau PDF ------------------------------------------------------------------
 
-    /// Ouvre un document fabriqué ici dans un onglet neuf. Son fichier va
-    /// dans le dossier temporaire, sous un nom qui n'écrase aucun autre
-    /// onglet ; il est marqué « temporaire » (le premier Ctrl+S demande où
-    /// l'enregistrer) et n'entre pas dans les documents récents. `title`
-    /// nomme l'échec, s'il y en a un.
+    /// Ouvre un document fabriqué ici dans un onglet neuf (voir
+    /// [`Viewer::open_made_bytes`]). `title` nomme l'échec, s'il y en a un.
     pub(super) fn open_made(
         &mut self,
         name: &str,
@@ -849,17 +846,37 @@ impl Viewer {
         (title, notice): (&'static str, String),
         window: &mut dyn WindowHandle,
     ) -> bool {
+        match made.and_then(|doc| doc.save_full()) {
+            Ok(bytes) => self.open_made_bytes(name, &bytes, (title, notice), window),
+            Err(e) => {
+                self.alert(tr(title), &format!("{name}\n\n{e}"));
+                false
+            }
+        }
+    }
+
+    /// Ouvre dans un onglet neuf un document fabriqué ici, donné par ses
+    /// octets. Son fichier va dans le dossier temporaire de **cette**
+    /// instance d'Acrux, sous un nom qui n'écrase aucun autre onglet : le
+    /// fil de rendu et l'annulation le relisent tant que l'onglet vit, il ne
+    /// doit jamais être réécrit sous eux. Il est marqué « temporaire » (le
+    /// premier Ctrl+S demande où l'enregistrer) et n'entre pas dans les
+    /// documents récents. `title` nomme l'échec, s'il y en a un.
+    pub(super) fn open_made_bytes(
+        &mut self,
+        name: &str,
+        bytes: &[u8],
+        (title, notice): (&'static str, String),
+        window: &mut dyn WindowHandle,
+    ) -> bool {
         let fail = |viewer: &mut Self, e: &dyn std::fmt::Display| {
             viewer.alert(tr(title), &format!("{name}\n\n{e}"));
             false
         };
-        let bytes = match made.and_then(|doc| doc.save_full()) {
-            Ok(b) => b,
-            Err(e) => return fail(self, &e),
-        };
         // Le fil de rendu relit le document sur le disque : le PDF fabriqué a
-        // donc besoin d'un fichier.
-        let dir = std::env::temp_dir().join("acrux-nouveaux");
+        // donc besoin d'un fichier. Un dossier par instance : deux Acrux
+        // ouverts ne s'écrasent pas leurs « Sans titre.pdf ».
+        let dir = made_dir();
         let _ = std::fs::create_dir_all(&dir);
         let open_paths: Vec<PathBuf> = self
             .loaded
@@ -873,7 +890,7 @@ impl Viewer {
             .chain((2..10_000).map(|n| dir.join(format!("{name} {n}.pdf"))))
             .find(|p| !open_paths.contains(p))
             .unwrap_or_else(|| dir.join(format!("{name}.pdf")));
-        if let Err(e) = std::fs::write(&target, &bytes) {
+        if let Err(e) = std::fs::write(&target, bytes) {
             return fail(self, &e);
         }
         match Document::load(&target).and_then(|doc| {
@@ -881,7 +898,9 @@ impl Viewer {
             Ok((doc, pages))
         }) {
             Ok((doc, pages)) => {
-                self.commit_field();
+                // Ce qui travaille sur le document actif ne suit pas dans le
+                // nouvel onglet.
+                self.leave_document_modes();
                 self.leave_home();
                 self.finish_open(target.clone(), doc, pages, None, window);
                 if let Some(l) = &mut self.loaded {
@@ -938,6 +957,21 @@ impl Viewer {
             }
         }
     }
+}
+
+/// Dossier des documents fabriqués par cette instance d'Acrux (images
+/// ouvertes, combinaisons, nouveaux PDF) : un sous-dossier par processus du
+/// dossier temporaire.
+fn made_dir() -> PathBuf {
+    std::env::temp_dir()
+        .join("acrux-nouveaux")
+        .join(std::process::id().to_string())
+}
+
+/// Vrai pour le fichier d'un document fabriqué : il n'entre pas dans les
+/// documents récents.
+pub(super) fn is_made(path: &Path) -> bool {
+    path.starts_with(std::env::temp_dir().join("acrux-nouveaux"))
 }
 
 /// Document fait du presse-papiers : son image sur une page, sinon son texte

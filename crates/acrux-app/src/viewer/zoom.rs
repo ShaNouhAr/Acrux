@@ -427,7 +427,10 @@ impl Viewer {
                 }
                 return true;
             }
-            Event::Resize { .. } | Event::DpiChanged(_) | Event::FileDropped(_) | Event::Close => {
+            Event::Resize { .. }
+            | Event::DpiChanged(_)
+            | Event::FilesDropped { .. }
+            | Event::Close => {
                 self.zoom_menu = None;
                 return false;
             }

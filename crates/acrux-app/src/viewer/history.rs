@@ -320,8 +320,12 @@ mod tests {
     #[test]
     fn insertion_de_pages() {
         let op = EditOp::Insert {
-            path: std::path::PathBuf::new(),
-            password: None,
+            source: std::sync::Arc::new(crate::render_worker::InsertSource {
+                name: String::new(),
+                pdf: Vec::new(),
+                password: None,
+                forms: false,
+            }),
             pages: Vec::new(),
             at: 2,
         };
@@ -345,8 +349,12 @@ mod tests {
             order: vec![2, 0, 0, 1],
         };
         let insert = EditOp::Insert {
-            path: std::path::PathBuf::new(),
-            password: None,
+            source: std::sync::Arc::new(crate::render_worker::InsertSource {
+                name: String::new(),
+                pdf: Vec::new(),
+                password: None,
+                forms: false,
+            }),
             pages: Vec::new(),
             at: 2,
         };

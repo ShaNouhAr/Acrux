@@ -99,7 +99,9 @@ acr info fichier.pdf
 `info`, `pages`, `dump`, `check` inspectent un fichier (y compris cassé ou chiffré avec un mot
 de passe vide) ; `rotate`, `delete`, `reorder`, `extract`, `merge`, `rewrite` le modifient
 (enregistrement incrémental par défaut, `--full` pour une réécriture complète ; `extract --each`
-écrit un fichier par page ; `insert-blank <f> 4` insère une page vierge au format de sa voisine,
+écrit un fichier par page ; `insert <f> source.pdf --pages 1-3 --at 4` insère des pages d'un autre
+PDF, ou une image (`--at debut|fin|N`, les champs de formulaire suivent sauf `--no-forms`) ;
+`insert-blank <f> 4` insère une page vierge au format de sa voisine,
 `replace <f> 2-3 source.pdf` remplace le contenu de pages en gardant leurs signets, liens et
 commentaires ; `split` **fractionne** : `--every 10`, `--bookmarks` (un fichier par signet de
 premier niveau, son titre dans le nom), `--max-size 2M`, `--each`, dans le dossier du document
@@ -118,9 +120,10 @@ coupure aux espaces, césure simple, paragraphes, `--align gauche|droite|centre|
 dernière ligne d'un paragraphe ne se justifie jamais, pagination, `--font`, `--size`, `--margin`,
 `--header`/`--footer` avec les jetons `{page}` et `{pages}`) et `--markdown fichier.md` (titres,
 gras, italique, code, listes, citations, règles, tableaux et **liens cliquables**, les titres
-devenant des signets) ; `combine a.pdf b.jpg c.md` réunit PDF, images et fichiers texte ou Markdown
-en un seul document (`--bookmarks` : un signet par fichier ; `--toc` : sommaire cliquable en tête ;
-`--numbers` : numérotation continue en pied de page) ; `render`
+devenant des signets) ; `combine a.pdf b.jpg scan.tif c.md` réunit PDF, images (PNG, JPEG, BMP, GIF,
+TIFF) et fichiers texte ou Markdown en un seul document (`--bookmarks` : un signet par fichier ;
+`--toc` : sommaire cliquable en tête ; `--numbers` : numérotation continue en pied de page ; les
+champs de formulaire suivent, renommés s'ils existent déjà, sauf `--no-forms`) ; `render`
 produit des PNG (`--dpi` ; `--rotate 90` tourne l'image sans toucher au fichier, comme la
 rotation de la vue de l'application, là où `rotate` écrit `/Rotate`) ; `export` convertit (`--format png|jpeg|images|html|docx|xlsx|md|txt`,
 `--dpi`, `--quality`, `--pages`, `--flow`) : pages en PNG ou en JPEG, images incorporées extraites
@@ -256,7 +259,8 @@ en retire un, `flatten` les fond définitivement dans les pages ;
 `bench` mesure les performances. L'option globale
 `--password <mdp>` ouvre un document chiffré.
 
-L'application graphique : `acrux.exe fichier.pdf` (ou Ctrl+O, ou déposer un fichier).
+L'application graphique : `acrux.exe fichier.pdf` (ou Ctrl+O, ou déposer des fichiers : un
+onglet chacun ; déposés sur les vignettes, ils s'insèrent entre deux pages).
 
 **La recherche (Ctrl+F)** est une carte flottante en haut à droite : le champ, « Aa » (respecter
 la casse), « Mot entier », occurrence précédente et suivante, et une croix pour fermer ; en
@@ -357,12 +361,19 @@ une page par feuille, et `Ctrl+S` demande où ranger le document obtenu. « Nouv
 « Nouveau PDF depuis le presse-papiers » (palette, colonne d'outils) en font autant d'une page
 blanche, ou de l'image ou du texte copiés.
 
+**« Combiner des fichiers… »** (accueil, palette, colonne d'outils) réunit PDF, images et textes
+en un document : on les ajoute par le dialogue (plusieurs d'un coup) ou en les déposant sur la
+fenêtre, on les ordonne en glissant une ligne ou par `Ctrl+↑` / `Ctrl+↓`, `Suppr` en retire un ;
+« Un signet par fichier » et « Conserver les formulaires » sont cochés d'office. Le document ouvert
+est déjà dans la liste, avec ses modifications ; un PDF protégé demande son mot de passe au moment
+de combiner. Le résultat s'ouvre dans un nouvel onglet, sur ses signets.
+
 | Modifier | |
 | --- | --- |
 | « Organiser les pages » (colonne de droite, palette) | le panneau des vignettes s'ouvre et prend le clavier : **`Ctrl+clic`** ajoute ou retire une vignette de la sélection, **`Maj+clic`** (ou `Maj+↑` / `Maj+↓`) sélectionne une plage, **`Ctrl+A`** (panneau survolé ou au clavier) sélectionne tout, `Ctrl+Espace` bascule la vignette du focus, `Échap` lève la sélection ; **glisser** une vignette sélectionnée déplace tout le bloc. Les vignettes sélectionnées portent un voile d'accent : c'est exactement ce sur quoi agissent les commandes de page |
 | `R` / `Maj+R` | pivoter les pages sélectionnées, sinon la page courante (une seule modification, un seul `Ctrl+Z`) |
 | `Ctrl+Suppr`, `Suppr` dans le panneau | supprimer les pages sélectionnées (confirmation ; tout supprimer est refusé) |
-| `Ctrl+I` | insérer les pages d'un autre fichier avant la page courante |
+| `Ctrl+I` | **insérer des pages** d'un autre fichier, PDF ou image : la feuille choisit les pages (« 1-3, 5 », vide pour toutes) et la position (au début, avant ou après la page N, à la fin) ; les champs de formulaire suivent. Déposer des fichiers sur les vignettes les insère là où l'on vise. `Ctrl+Z` défait l'insertion, même si le fichier source a changé depuis |
 | palette, colonne d'outils, clic droit sur une vignette | **page vierge** avant ou après (format et orientation de la voisine), dupliquer (les copies suivent le bloc), **remplacer des pages** par celles d'un autre fichier (signets, liens et commentaires gardés), extraire dans un fichier ou **un fichier par page** |
 | « Fractionner le document… » (palette, colonne d'outils) | par **nombre de pages**, par **signets de premier niveau**, par **taille maximale** (« 2 », « 2,5 » Mo ou « 500 Ko ») ou une page par fichier ; le dossier se choisit dans « Enregistrer sous » (`rapport-1.pdf` donne `rapport-01.pdf`…), les fichiers s'écrivent en arrière-plan, rien n'est écrasé (« (2) ») et le document est fractionné tel qu'il s'affiche |
 | `E` | modifier le texte sélectionné (même police, la ligne se recompose) |

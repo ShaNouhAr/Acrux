@@ -1604,6 +1604,18 @@ impl Panel {
         changed
     }
 
+    /// Position d'insertion (0 = avant la première page) visée par des
+    /// fichiers déposés au point `(x, y)` du panneau : entre deux vignettes,
+    /// comme le glisser d'une page. `None` si le panneau ne montre pas les
+    /// vignettes, ou n'en a dessiné aucune.
+    #[must_use]
+    pub fn insertion_at(&self, x: i32, y: i32) -> Option<usize> {
+        if self.tab != PanelTab::Thumbnails || x < 0 {
+            return None;
+        }
+        self.drop_index(y)
+    }
+
     /// Position d'insertion visée par un glisser à l'ordonnée `y`.
     fn drop_index(&self, y: i32) -> Option<usize> {
         let mut best: Option<(i32, usize)> = None;
@@ -1946,6 +1958,25 @@ mod tests {
             page,
             mode: SelectMode::Only,
         }
+    }
+
+    #[test]
+    fn dropped_files_aim_between_the_thumbnails() {
+        let mut p = Panel::new();
+        p.tab = PanelTab::Thumbnails;
+        // Sans vignette dessinée, aucune place à viser.
+        assert_eq!(p.insertion_at(50, 50), None);
+        p.hits = vec![
+            ((0, 0, 200, 100), Hit::Page(0)),
+            ((0, 100, 200, 100), Hit::Page(1)),
+        ];
+        assert_eq!(p.insertion_at(50, 20), Some(0), "moitié haute : avant");
+        assert_eq!(p.insertion_at(50, 80), Some(1), "moitié basse : après");
+        assert_eq!(p.insertion_at(50, 180), Some(2), "après la dernière");
+        assert_eq!(p.insertion_at(-5, 80), None, "hors du panneau");
+        // Sur un autre onglet, un dépôt n'est pas une insertion.
+        p.tab = PanelTab::Bookmarks;
+        assert_eq!(p.insertion_at(50, 80), None);
     }
 
     #[test]

@@ -142,6 +142,8 @@ pub enum Icon {
     Stamp,
     /// Cadre, montagnes et soleil (ajouter une image).
     Image,
+    /// Une page au coin replié, et ses lignes de texte (un document).
+    Document,
 }
 
 /// Contour d'une page, motif commun à beaucoup d'icônes.
@@ -652,6 +654,25 @@ pub fn geometry(icon: Icon) -> (Path, Path) {
             );
             polyline(&mut lines, &[(4.0, 20.0), (20.0, 20.0)]);
         }
+        Icon::Document => {
+            // La page, son coin replié en haut à droite, trois lignes.
+            polyline(
+                &mut lines,
+                &[
+                    (14.0, 3.5),
+                    (5.5, 3.5),
+                    (5.5, 20.5),
+                    (18.5, 20.5),
+                    (18.5, 8.0),
+                    (14.0, 3.5),
+                    (14.0, 8.0),
+                    (18.5, 8.0),
+                ],
+            );
+            polyline(&mut lines, &[(8.5, 12.0), (15.5, 12.0)]);
+            polyline(&mut lines, &[(8.5, 15.0), (15.5, 15.0)]);
+            polyline(&mut lines, &[(8.5, 18.0), (13.0, 18.0)]);
+        }
         Icon::Image => {
             page(&mut lines, 3.5, 5.0, 17.0, 14.0);
             polyline(
@@ -915,6 +936,7 @@ mod tests {
             Icon::Reply,
             Icon::Stamp,
             Icon::Image,
+            Icon::Document,
         ];
         let mut raster = Rasterizer::new();
         for icon in icons {

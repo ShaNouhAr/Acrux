@@ -1594,7 +1594,10 @@ impl Viewer {
             Event::Key(key, _) => open.menu.key(key),
             Event::Char(c, m) if !m.ctrl => open.menu.char(c),
             Event::Char(..) | Event::Nav { .. } => Outcome::Close,
-            Event::Resize { .. } | Event::DpiChanged(_) | Event::FileDropped(_) | Event::Close => {
+            Event::Resize { .. }
+            | Event::DpiChanged(_)
+            | Event::FilesDropped { .. }
+            | Event::Close => {
                 self.comment_menu = None;
                 return false;
             }
