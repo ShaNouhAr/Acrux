@@ -106,6 +106,17 @@ impl AnnotBar {
             .map(|(r, _)| *r)
     }
 
+    /// Élément survolé et son rectangle au dernier dessin : l'info-bulle se
+    /// pose dessous.
+    #[must_use]
+    pub fn hovered(&self) -> Option<(BarItem, Rect)> {
+        let item = self.hover?;
+        self.hits
+            .iter()
+            .find(|(_, h)| *h == item)
+            .map(|(r, _)| (item, *r))
+    }
+
     /// Survol ; vrai si l'image change.
     pub fn mouse_move(&mut self, x: i32, y: i32) -> bool {
         let hover = self.hit(x, y);

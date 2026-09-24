@@ -1121,6 +1121,34 @@ impl Viewer {
         true
     }
 
+    /// Info-bulle d'un bouton de la barre de propriétés, en coordonnées de
+    /// la fenêtre : ses boutons ne sont que des icônes et des pastilles, que
+    /// seul ce texte explique.
+    pub(super) fn annot_bar_tip(&mut self) -> Option<(String, (i32, i32, i32, i32))> {
+        let subtype = self.annot_sel.as_ref()?.subtype.clone();
+        let (item, r) = self.annot_bar.hovered()?;
+        let label = match item {
+            BarItem::Setting(i) => match self.annot_settings().get(i)?.0 {
+                // Une note, un surlignage, un signe d'insertion n'ont pas de
+                // trait : leur pastille est leur couleur.
+                DrawSetting::Stroke
+                    if !matches!(
+                        subtype.as_str(),
+                        "Square" | "Circle" | "Polygon" | "Line" | "PolyLine" | "Ink"
+                    ) =>
+                {
+                    "Couleur"
+                }
+                target => target.label(),
+            },
+            BarItem::EditText => "Modifier le texte…",
+            BarItem::Reply => "Répondre",
+            BarItem::Delete => "Supprimer le commentaire",
+        };
+        let (left, top) = (self.view_left() as i32, self.view_top() as i32);
+        Some((tr(label).to_string(), (r.0 + left, r.1 + top, r.2, r.3)))
+    }
+
     /// Molette au-dessus de la bulle : son fil défile. Vrai si elle l'a
     /// prise (coordonnées de la fenêtre).
     pub(super) fn bubble_wheel(&mut self, x: i32, y: i32, delta: f32) -> bool {

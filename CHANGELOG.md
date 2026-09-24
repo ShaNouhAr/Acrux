@@ -15,8 +15,9 @@ c'est la section correspondante de ce fichier qui devient la page de version.
   fond, épaisseur, opacité, texte, répondre, supprimer). On la **déplace** en
   la glissant (elle suit le pointeur telle qu'elle est), on la
   **redimensionne** par ses poignées — le trait garde son épaisseur —, `Suppr`
-  la supprime, les flèches la décalent d'un point (dix avec `Maj`), `Échap` la
-  désélectionne. Chaque geste est **une** modification : `Ctrl+Z` le défait
+  la supprime, les flèches la décalent d'un point (dix avec `Maj`) dans le
+  sens de l'écran, même vue pivotée, `Échap` la désélectionne. Les boutons de
+  la barre disent ce qu'ils font au survol. Chaque geste est **une** modification : `Ctrl+Z` le défait
   entier. Un surlignage, un soulignement ou un barré suivent le texte : un
   clic dessus ne vole pas la sélection du texte, son relâchement le
   sélectionne, et un double-clic ouvre sa bulle. « Remplir et signer »,
@@ -35,7 +36,8 @@ c'est la section correspondante de ce fichier qui devient la page de version.
   accents). Un clic sur un commentaire y mène et le sélectionne.
 - **Clic droit sur un commentaire** : répondre, modifier le texte, statut,
   cocher, supprimer. Les mêmes commandes sont dans la palette quand un
-  commentaire est sélectionné.
+  commentaire est sélectionné. Sur du texte sélectionné, même surligné, le
+  clic droit garde le menu de la sélection (Copier…).
 - Supprimer un commentaire emporte ses réponses, ses statuts et sa fenêtre
   contextuelle ; s'il a des réponses, la question est posée d'abord.
 - Une petite modification (un commentaire déplacé, une réponse, un statut) ne

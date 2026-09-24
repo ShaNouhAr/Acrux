@@ -3144,7 +3144,8 @@ impl Viewer {
             .or_else(|| self.mode_bar_tip())
             .or_else(|| self.tab_tip())
             .or_else(|| self.recent_tip())
-            .or_else(|| self.status_tip());
+            .or_else(|| self.status_tip())
+            .or_else(|| self.annot_bar_tip());
         // Même texte ne veut pas dire même élément : les croix des onglets
         // disent toutes « Fermer l'onglet ». Sans le rectangle, passer de
         // l'une à l'autre laissait la bulle sous la première.
@@ -8469,8 +8470,14 @@ impl Viewer {
                     window.request_redraw();
                     return;
                 }
-                if !dragging && (self.annot_sel.is_some() || self.bubble.is_some()) {
-                    hover_changed |= self.annot_hover(x, y);
+                if !dragging
+                    && (self.annot_sel.is_some() || self.bubble.is_some())
+                    && self.annot_hover(x, y)
+                {
+                    // Les boutons de la barre de propriétés ne sont que des
+                    // icônes : leur info-bulle dit ce qu'ils font.
+                    hover_changed = true;
+                    self.update_tip(window);
                 }
                 if self.sel_dragging && dragging {
                     if let Some((pos, _)) = self.text_pos_at(x, y) {
