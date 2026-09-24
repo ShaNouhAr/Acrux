@@ -19,7 +19,8 @@ use std::path::{Path, PathBuf};
 use acrux_core::{Point, Rect};
 use acrux_document::{collect_pages, Document, Page};
 use acrux_features::annotations::{
-    add_annotation, list_annotations, Callout, LineEnding, NewAnnotation, ShapeStyle, TextAlign,
+    add_annotation, freetext, list_annotations, Callout, LineEnding, NewAnnotation, ShapeStyle,
+    TextAlign,
 };
 use acrux_features::stamp::StandardFont;
 use acrux_render::page::base_matrix;
@@ -109,6 +110,7 @@ fn seven(x: f64, y: f64) -> Vec<NewAnnotation> {
             fill: Some([1.0, 1.0, 0.85]),
             align: TextAlign::Left,
             callout: None,
+            rotation: 0,
         },
         NewAnnotation::FreeText {
             rect: r(300.0, -120.0, 100.0, 30.0),
@@ -124,6 +126,7 @@ fn seven(x: f64, y: f64) -> Vec<NewAnnotation> {
                 knee: None,
                 ending: LineEnding::OpenArrow,
             }),
+            rotation: 0,
         },
     ]
 }
@@ -243,6 +246,73 @@ fn page_tournee_la_forme_est_au_bon_endroit() {
     assert!(
         px[1] > 150 && px[0] < 80 && px[2] < 80,
         "disque vert attendu en {at:?} : {px:?}"
+    );
+}
+
+/// Une zone de texte sur la page tournée de 90° : écrite dans le repère
+/// droit, elle se lit à l'horizontale une fois la page rendue tournée — une
+/// seule ligne de W, bien plus large que haute, dans la zone attendue.
+#[test]
+fn page_tournee_le_texte_se_lit_droit() {
+    let doc = load("reels/chrome-skia-rotate90-mise-a-jour-incrementale.pdf");
+    let pages = collect_pages(&doc).unwrap();
+    let page = &pages[0];
+    let rotation = page.rotate(&doc);
+    assert_eq!(rotation, 90);
+    let crop = page.crop_box(&doc);
+    let turn = freetext::upright(rotation);
+    let c = freetext::upright(-rotation).transform_rect(&crop);
+    let local = Rect::new(c.x0 + 40.0, c.y1 - 100.0, c.x0 + 300.0, c.y1 - 60.0);
+    let rect = turn.transform_rect(&local);
+    // Étroite et haute dans l'espace de la page, large à l'écran.
+    assert!(rect.height() > rect.width() * 4.0, "{rect:?}");
+    add_annotation(
+        &doc,
+        page,
+        &NewAnnotation::FreeText {
+            rect,
+            text: "WWWWWWWWWWWWWWW".into(),
+            font: StandardFont::Helvetica,
+            size: 12.0,
+            color: [0.0, 0.0, 1.0],
+            border: None,
+            fill: None,
+            align: TextAlign::Left,
+            callout: None,
+            rotation,
+        },
+        None,
+    )
+    .unwrap();
+    let d2 = Document::from_bytes(doc.save_full().unwrap()).unwrap();
+    let pages2 = collect_pages(&d2).unwrap();
+    let bmp = render_page(&d2, &pages2[0], 1.0, &RenderOptions::default()).bitmap;
+    let m = base_matrix(
+        &pages2[0].crop_box(&d2),
+        1.0,
+        pages2[0].rotate(&d2),
+        bmp.width(),
+        bmp.height(),
+    );
+    let screen = m.transform_rect(&rect);
+    let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+    for y in 0..bmp.height() {
+        for x in 0..bmp.width() {
+            let p = bmp.pixel(x, y).unwrap();
+            if p[2] > 150 && p[0] < 100 && p[1] < 100 {
+                (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+            }
+        }
+    }
+    assert!(x1 > x0 && y1 > y0, "aucun texte bleu");
+    let (w, h) = (f64::from(x1 - x0), f64::from(y1 - y0));
+    assert!(w > h * 6.0, "texte {w} × {h} : couché ?");
+    assert!(
+        f64::from(x0) >= screen.x0 - 2.0
+            && f64::from(x1) <= screen.x1 + 2.0
+            && f64::from(y0) >= screen.y0 - 2.0
+            && f64::from(y1) <= screen.y1 + 2.0,
+        "texte hors de la zone {screen:?} : {x0},{y0} – {x1},{y1}"
     );
 }
 

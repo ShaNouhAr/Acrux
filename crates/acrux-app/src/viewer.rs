@@ -5257,6 +5257,10 @@ impl Viewer {
             self.close_active();
         }
         self.commit_field();
+        // Une zone de texte s'écrit droite pour l'orientation où on l'a
+        // ouverte (`freetext::upright`) : elle est posée avant de tourner.
+        self.commit_draft();
+        self.draft_ghost = None;
         let spot = self.view_spot();
         let Some(l) = &mut self.loaded else { return };
         l.view_rotation = add_rotation(l.view_rotation, degrees);

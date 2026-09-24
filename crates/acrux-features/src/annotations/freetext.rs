@@ -14,7 +14,7 @@
 
 use std::fmt::Write as _;
 
-use acrux_core::{Point, Rect};
+use acrux_core::{Matrix, Point, Rect};
 use acrux_document::{Dict, Name, Object};
 
 use super::shapes::{bounds_of, ending_shape, EndShape};
@@ -414,11 +414,93 @@ pub fn callout_points(rect: &Rect, callout: &Callout) -> Vec<Point> {
     points
 }
 
+/// Repère « droit » d'une zone de texte sur une page affichée tournée de
+/// `rotation` degrés (sens horaire, comme `/Rotate`) : la matrice qui mène
+/// de ce repère à l'espace de la page.
+///
+/// Le texte s'écrit à l'horizontale dans ce repère ; la page tournée à
+/// l'affichage, il se lit droit, comme dans Acrobat. Sans lui, une zone
+/// tracée sur une page à `/Rotate 90` (un scan à l'italienne) était une
+/// colonne étroite, au texte couché. C'est une rotation pure : un
+/// rectangle droit y reste droit, et `upright(-rotation)` la défait. Une
+/// rotation qui n'est pas un multiple de 90° est ignorée, comme `/Rotate`.
+#[must_use]
+pub fn upright(rotation: i32) -> Matrix {
+    match rotation.rem_euclid(360) {
+        90 => Matrix::new(0.0, 1.0, -1.0, 0.0, 0.0, 0.0),
+        180 => Matrix::new(-1.0, 0.0, 0.0, -1.0, 0.0, 0.0),
+        270 => Matrix::new(0.0, -1.0, 1.0, 0.0, 0.0, 0.0),
+        _ => Matrix::IDENTITY,
+    }
+}
+
+/// Rotation, parmi 0, 90, 180 et 270, que [`upright`] applique vraiment.
+#[must_use]
+pub fn quarter_turns(rotation: i32) -> i32 {
+    match rotation.rem_euclid(360) {
+        r @ (90 | 180 | 270) => r,
+        _ => 0,
+    }
+}
+
+/// Une légende exprimée dans le repère droit de [`upright`].
+fn callout_in(call: &Callout, back: &Matrix) -> Callout {
+    Callout {
+        anchor: back.apply(call.anchor),
+        knee: call.knee.map(|k| back.apply(k)),
+        ending: call.ending,
+    }
+}
+
+/// Points de `/CL` d'une légende sur une page tournée de `rotation`
+/// degrés : [`callout_points`] calculés dans le repère droit (la ligne
+/// quitte le côté de la zone qui fait face à l'ancre **à l'écran**), puis
+/// ramenés dans l'espace de la page.
+#[must_use]
+pub fn callout_points_turned(rect: &Rect, callout: &Callout, rotation: i32) -> Vec<Point> {
+    let (turn, back) = (upright(rotation), upright(-rotation));
+    callout_points(&back.transform_rect(rect), &callout_in(callout, &back))
+        .into_iter()
+        .map(|p| turn.apply(p))
+        .collect()
+}
+
 /// Apparence d'une zone de texte, avec sa légende s'il y en a une : le
 /// contenu, et la boîte de l'annotation (le `/Rect`), qui déborde de la
 /// zone de la ligne et de la flèche.
+///
+/// `b.rect` et l'ancre de la légende sont dans l'espace de la page ; sur
+/// une page tournée (`rotation`, voir [`upright`]), le dessin est fait
+/// dans le repère droit puis tourné par un `cm`, pour que le texte se lise
+/// droit à l'affichage.
 #[must_use]
-pub fn appearance(b: &TextBox<'_>, callout: Option<&Callout>) -> (String, Rect) {
+pub fn appearance(b: &TextBox<'_>, callout: Option<&Callout>, rotation: i32) -> (String, Rect) {
+    let rotation = quarter_turns(rotation);
+    if rotation == 0 {
+        return upright_appearance(b, callout);
+    }
+    let (turn, back) = (upright(rotation), upright(-rotation));
+    let local = TextBox {
+        rect: back.transform_rect(&b.rect),
+        ..b.clone()
+    };
+    let call = callout.map(|c| callout_in(c, &back));
+    let (content, bbox) = upright_appearance(&local, call.as_ref());
+    (
+        format!(
+            "q {} {} {} {} 0 0 cm {content} Q",
+            fmt(turn.a),
+            fmt(turn.b),
+            fmt(turn.c),
+            fmt(turn.d)
+        ),
+        turn.transform_rect(&bbox),
+    )
+}
+
+/// [`appearance`] d'une zone dont le texte s'écrit à l'horizontale de la
+/// page.
+fn upright_appearance(b: &TextBox<'_>, callout: Option<&Callout>) -> (String, Rect) {
     let mut content = String::new();
     let mut bbox = b.rect;
     if let Some(call) = callout {
@@ -651,10 +733,65 @@ mod tests {
             fill: None,
             align: TextAlign::Left,
         };
-        let (content, bbox) = appearance(&tb, Some(&call));
+        let (content, bbox) = appearance(&tb, Some(&call), 0);
         assert!(bbox.x0 < 21.0, "{bbox:?}");
         assert!(content.contains("(Voir ici) Tj"), "{content}");
         assert_eq!(default_appearance(&tb), "0 0 0 rg /Helv 12 Tf 1 0 0 RG");
+    }
+
+    #[test]
+    fn repere_droit_d_une_page_tournee() {
+        for r in [0, 90, 180, 270, -90, 450] {
+            let there_and_back = upright(r).then(&upright(-r));
+            assert_eq!(there_and_back, Matrix::IDENTITY, "{r}");
+        }
+        // Page affichée tournée d'un quart de tour horaire : l'horizontale
+        // de l'écran est la verticale montante de la page.
+        assert_eq!(
+            upright(90).apply(Point::new(1.0, 0.0)),
+            Point::new(0.0, 1.0)
+        );
+        assert_eq!(quarter_turns(-90), 270);
+        assert_eq!(quarter_turns(45), 0);
+        assert_eq!(upright(45), Matrix::IDENTITY);
+    }
+
+    /// Sur une page à `/Rotate 90`, la zone étroite et haute dans l'espace
+    /// de la page est large à l'écran : le texte y tient sur une ligne,
+    /// écrit dans le repère tourné, et la légende part du côté qui fait
+    /// face à l'ancre **à l'écran**.
+    #[test]
+    fn zone_sur_une_page_tournee() {
+        let r = Rect::new(80.0, 20.0, 110.0, 180.0);
+        let tb = TextBox {
+            rect: r,
+            text: "WWWWWWWWWW",
+            font: H,
+            size: 12.0,
+            color: [0.0, 0.0, 0.0],
+            border: Some(([1.0, 0.0, 0.0], 1.0)),
+            fill: None,
+            align: TextAlign::Left,
+        };
+        let (content, bbox) = appearance(&tb, None, 90);
+        assert!(content.starts_with("q 0 1 -1 0 0 0 cm "), "{content}");
+        assert_eq!(content.matches(" Tj").count(), 1, "{content}");
+        assert_eq!(bbox, r);
+        // Sans rotation, la même zone coupe le texte à chaque lettre ou
+        // presque.
+        let (flat, _) = appearance(&tb, None, 0);
+        assert!(flat.matches(" Tj").count() > 3, "{flat}");
+        // Ancre « à gauche à l'écran » : sous la zone dans la page.
+        let call = Callout {
+            anchor: Point::new(95.0, -40.0),
+            knee: None,
+            ending: LineEnding::OpenArrow,
+        };
+        let points = callout_points_turned(&r, &call, 90);
+        let junction = points[points.len() - 1];
+        assert!((junction.x - 95.0).abs() < 1e-9 && (junction.y - 20.0).abs() < 1e-9);
+        let (_, with_call) = appearance(&tb, Some(&call), 90);
+        assert!(with_call.y0 < -39.0, "{with_call:?}");
     }
 
     #[test]

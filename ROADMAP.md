@@ -281,8 +281,9 @@ Livrable : version 0.2, parité avec Acrobat Standard hors édition de texte.
   est un brouillon dessiné avec la géométrie du moteur, posé au relâchement (ou à `Échap` pour le
   crayon et le texte) par la même modification que les autres annotations ; `Maj` contraint, la
   zone de texte se tape en place avec son annulation propre. Réglages dans la barre (nuancier,
-  épaisseur, opacité, corps, police, cadre, fond), retenus dans les préférences. À faire : texte
-  hors WinAnsi dans une zone (police incorporée), texte couché sur les pages tournées, déplacer et
+  épaisseur, opacité, corps, police, cadre, fond), retenus dans les préférences. Sur une page tournée
+  (`/Rotate` ou vue pivotée), la zone s'écrit dans le repère droit (`freetext::upright`, `/Rotate` de
+  l'annotation). À faire : texte hors WinAnsi dans une zone (police incorporée), déplacer et
   redimensionner une annotation posée, tampons.
 - [x] **Écran d'accueil** : les documents récents sont des cartes avec la vignette de leur première
   page (rendu complet, calculé une vignette par réveil pour ne pas figer la fenêtre), leur taille et

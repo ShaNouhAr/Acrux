@@ -450,6 +450,10 @@ pub enum NewAnnotation {
         align: TextAlign,
         /// Ligne d'ancrage d'une légende.
         callout: Option<Callout>,
+        /// Rotation de la page **à l'affichage**, en degrés (sens horaire,
+        /// comme `/Rotate`) : le texte s'écrit droit pour qui la regarde
+        /// ainsi (voir [`freetext::upright`]). 0 pour une page droite.
+        rotation: i32,
     },
     /// Surlignage (`/Highlight`) d'une zone rectangulaire. C'est un
     /// [`NewAnnotation::Markup`] à une seule zone, gardé pour les appelants
@@ -1115,8 +1119,10 @@ fn freetext_dict(
     d: &mut Dict,
     tb: &freetext::TextBox<'_>,
     callout: Option<&Callout>,
+    rotation: i32,
 ) {
-    let (content, bbox) = freetext::appearance(tb, callout);
+    let rotation = freetext::quarter_turns(rotation);
+    let (content, bbox) = freetext::appearance(tb, callout, rotation);
     d.insert(Name::new("Subtype"), Object::Name(Name::new("FreeText")));
     d.insert(Name::new("Rect"), rect_object(bbox));
     d.insert(Name::new("Contents"), Object::String(encode_text(tb.text)));
@@ -1129,6 +1135,11 @@ fn freetext_dict(
         Object::String(encode_text(&freetext::default_style(tb))),
     );
     d.insert(Name::new("Q"), Object::Integer(tb.align.q()));
+    // Le sens du texte, pour les lecteurs qui refont l'apparence d'après
+    // `/DA` et `/Contents` (Acrobat écrit la même clé).
+    if rotation != 0 {
+        d.insert(Name::new("Rotate"), Object::Integer(i64::from(rotation)));
+    }
     let mut bs = Dict::new();
     bs.insert(Name::new("W"), Object::Real(tb.border_width()));
     d.insert(Name::new("BS"), Object::Dict(bs));
@@ -1140,7 +1151,7 @@ fn freetext_dict(
         d.insert(Name::new("Subj"), Object::String(encode_text("Légende")));
         d.insert(
             Name::new("CL"),
-            points_array(&freetext::callout_points(&tb.rect, call)),
+            points_array(&freetext::callout_points_turned(&tb.rect, call, rotation)),
         );
         d.insert(
             Name::new("LE"),
@@ -1363,6 +1374,7 @@ pub fn add_annotation_with(
             fill,
             align,
             callout,
+            rotation,
         } => {
             let size = if size.is_finite() {
                 size.clamp(1.0, 144.0)
@@ -1379,7 +1391,7 @@ pub fn add_annotation_with(
                 fill: *fill,
                 align: *align,
             };
-            freetext_dict(doc, &mut d, &tb, callout.as_ref());
+            freetext_dict(doc, &mut d, &tb, callout.as_ref(), *rotation);
         }
         NewAnnotation::Highlight {
             rect,
@@ -2397,6 +2409,7 @@ mod tests {
             fill: None,
             align: TextAlign::Left,
             callout,
+            rotation: 0,
         }
     }
 

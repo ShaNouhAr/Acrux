@@ -63,6 +63,7 @@ geste : la flèche qu'on voit en glissant est celle qui sera écrite.
 | `Ink` | traits simplifiés (Ramer-Douglas-Peucker, 0,35 pt : `shapes::simplify`), lissés en Bézier (Catmull-Rom) ; `/InkList` garde les points simplifiés, un point seul reste visible |
 | `FreeText` | zone de texte en police standard WinAnsi : `/Contents`, `/DA` (couleur, police, corps, et `RG` du cadre), `/DS`, `/Q`, `/BS`, `/C` du fond (convention d'Acrobat) ; la mise en lignes `freetext::layout` est publique, pour que la frappe se coupe comme l'écrit |
 | `FreeText` + `callout` | légende : `/IT /FreeTextCallout`, `/CL` (ancre, coude, jonction au milieu du côté qui fait face à l'ancre), `/LE`, `/RD` |
+| `FreeText` sur page tournée | dessin fait dans le repère droit (`freetext::upright`) puis tourné par un `cm`, `/Rotate` de l'annotation : le texte se lit droit à l'affichage |
 
 Un caractère hors de WinAnsiEncoding devient « ? » ; `freetext::unsupported_chars`
 les nomme d'avance, pour prévenir. Épreuves : `tests/annotations_corpus.rs` pose

@@ -2312,6 +2312,9 @@ fn cmd_annotate(path: &str, rest: &[String]) -> acrux_core::Result<()> {
             fill,
             align,
             callout,
+            // Le texte s'écrit droit pour qui lit la page tournée, comme
+            // dans l'application.
+            rotation: all_pages[page_index].rotate(&doc),
         })
     };
     let annot = match kind.as_str() {

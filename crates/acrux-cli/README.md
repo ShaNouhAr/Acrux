@@ -19,7 +19,8 @@ acr annotate doc.pdf 1 polygon 100 100 150 180 200 100 -o a.pdf
 Coordonnées en points de page, origine en bas à gauche. `line` et `arrow`
 prennent `--head` et `--tail` (`open`, `closed`, `circle`, `square`, `butt`,
 `none`) ; `text` et `callout`, `--font helvetica|times|courier[-bold|-italic]`,
-`--size`, `--align left|center|right`, `--border r,g,b`, `--fill r,g,b`.
+`--size`, `--align left|center|right`, `--border r,g,b`, `--fill r,g,b` ; sur une
+page tournée (`/Rotate`), le texte s'écrit droit pour qui lit la page tournée.
 `acr annots` liste ce qui a été posé.
 
 Tests : `cargo test -p acrux-cli`

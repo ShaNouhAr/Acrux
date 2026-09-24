@@ -25,6 +25,8 @@ c'est la section correspondante de ce fichier qui devient la page de version.
   « s » écrit un s au lieu d'ouvrir « remplir et signer ». `Échap`, un clic
   ailleurs ou un autre outil posent la zone. La **légende** désigne un point
   de la page par une ligne coudée et une flèche, jusqu'à sa zone de texte.
+  Sur une page tournée (un scan à l'italienne, ou la vue pivotée), la zone et
+  son texte se lisent droits, comme dans Acrobat.
 - **Les réglages de l'outil sont dans la barre** : couleur du trait (le
   nuancier de « Modifier le PDF », avec les couleurs récentes), remplissage
   (ou aucun), épaisseur de 0,5 à 12 pt, opacité ; pour le texte, couleur,

@@ -52,7 +52,7 @@ use acrux_features::annotations::{
 use acrux_features::stamp::StandardFont;
 use acrux_graphics::{stroke_path, LineCap, LineJoin, StrokeStyle};
 
-use super::{author_name, log_line, AnnotTool, Viewer};
+use super::{author_name, log_line, shown_rotation, AnnotTool, Viewer};
 use crate::platform::{Cursor, Event, Frame, Key, Modifiers, MouseButton, WindowHandle};
 use crate::render_worker::{AnnotItem, EditOp};
 use crate::ui::fieldedit::{FieldEditor, FieldKey};
@@ -360,16 +360,24 @@ impl DrawPopup {
 }
 
 /// Zone de texte en cours de frappe.
+///
+/// Sa zone et l'ancre d'une légende sont dans le **repère droit** de la
+/// page (`freetext::upright`) : celui où le texte s'écrit à l'horizontale
+/// de l'écran, la page fût-elle tournée. « Haut » et « bas » y sont ceux
+/// qu'on voit.
 pub(super) struct TextDraft {
     /// Page.
     pub(super) page: usize,
-    /// Zone du texte, dans l'espace de la page. Son haut est fixe ; sa
-    /// hauteur suit le texte.
+    /// Rotation de la page à l'écran quand la zone s'est ouverte (`/Rotate`
+    /// et rotation de la vue), en degrés.
+    pub(super) rotation: i32,
+    /// Zone du texte, dans le repère droit. Son haut est fixe ; sa hauteur
+    /// suit le texte.
     pub(super) rect: Rect,
     /// Hauteur tracée : le texte agrandit la zone, il ne la rapetisse pas
     /// en deçà.
     pub(super) min_height: f64,
-    /// Point que désigne une légende.
+    /// Point que désigne une légende, dans le repère droit.
     pub(super) anchor: Option<Point>,
     /// Le texte, son curseur et ses étapes d'annulation.
     pub(super) editor: FieldEditor,
@@ -557,10 +565,12 @@ pub(super) fn draft_annotation(draft: &Draft, style: &DrawStyle) -> Option<(usiz
             if text.trim().is_empty() {
                 return None;
             }
+            // Du repère droit à l'espace de la page.
+            let turn = freetext::upright(t.rotation);
             Some((
                 t.page,
                 NewAnnotation::FreeText {
-                    rect: t.rect,
+                    rect: turn.transform_rect(&t.rect),
                     text,
                     font: style.font,
                     size: style.text_size,
@@ -569,10 +579,11 @@ pub(super) fn draft_annotation(draft: &Draft, style: &DrawStyle) -> Option<(usiz
                     fill: style.text_fill,
                     align: TextAlign::Left,
                     callout: t.anchor.map(|anchor| Callout {
-                        anchor,
+                        anchor: turn.apply(anchor),
                         knee: None,
                         ending: LineEnding::OpenArrow,
                     }),
+                    rotation: t.rotation,
                 },
             ))
         }
@@ -712,6 +723,20 @@ impl Viewer {
         m.a.hypot(m.b).max(1e-6)
     }
 
+    /// Rotation de la page à l'écran, en degrés : sa `/Rotate` et celle de
+    /// la vue. Une zone de texte s'écrit droite pour cette orientation.
+    fn page_rotation(&self, page: usize) -> i32 {
+        self.loaded
+            .as_ref()
+            .and_then(|l| Some(shown_rotation(l, l.pages.get(page)?)))
+            .unwrap_or(0)
+    }
+
+    /// Un point de la page dans le repère droit de la zone ouverte.
+    fn in_text_frame(t: &TextDraft, p: Point) -> Point {
+        freetext::upright(-t.rotation).apply(p)
+    }
+
     // --- Souris ------------------------------------------------------------
 
     /// Clic sur la page avec un outil de dessin ; vrai s'il a servi.
@@ -727,7 +752,7 @@ impl Viewer {
             let rect = t.rect;
             if let Some(p) = self.view_to_page(page, x, y) {
                 let near = Rect::new(rect.x0 - 3.0, rect.y0 - 3.0, rect.x1 + 3.0, rect.y1 + 3.0);
-                if near.contains(p) {
+                if near.contains(Self::in_text_frame(t, p)) {
                     self.text_click(p, shift, clicks);
                     return true;
                 }
@@ -843,6 +868,11 @@ impl Viewer {
                 ..
             } => {
                 let to = constrain(from, to, AnnotTool::TextBox, shift);
+                // Dans le repère droit : sur une page tournée, la largeur
+                // de la zone est celle qu'on voit.
+                let rotation = self.page_rotation(page);
+                let back = freetext::upright(-rotation);
+                let (from, to) = (back.apply(from), back.apply(to));
                 let traced = Rect::new(from.x, from.y, to.x, to.y);
                 // Tracée : la zone est celle du geste. D'un clic : une
                 // largeur d'usage à partir du clic, rognée au bord de la
@@ -852,12 +882,12 @@ impl Viewer {
                 } else {
                     let right = self.crop_of(page).map_or(from.x + CLICK_TEXT_WIDTH, |c| {
                         (from.x + CLICK_TEXT_WIDTH)
-                            .min(c.x1 - 4.0)
+                            .min(back.transform_rect(&c).x1 - 4.0)
                             .max(from.x + 40.0)
                     });
                     (Rect::new(from.x, from.y - 10.0, right, from.y), 0.0)
                 };
-                self.open_text(page, rect, min_height, None);
+                self.open_text(page, rotation, rect, min_height, None);
             }
             Draft::Shape {
                 tool: AnnotTool::Callout,
@@ -874,8 +904,11 @@ impl Viewer {
                     CALLOUT_WIDTH,
                     TEXT_BORDER,
                 );
-                let rect = callout_box(from, to, moved, height);
-                self.open_text(page, rect, 0.0, Some(from));
+                let rotation = self.page_rotation(page);
+                let back = freetext::upright(-rotation);
+                let anchor = back.apply(from);
+                let rect = callout_box(anchor, back.apply(to), moved, height);
+                self.open_text(page, rotation, rect, 0.0, Some(anchor));
             }
             Draft::Shape { .. } => {
                 self.draft = Some(draft);
@@ -899,10 +932,19 @@ impl Viewer {
         }
     }
 
-    /// Ouvre une zone de texte à taper.
-    fn open_text(&mut self, page: usize, rect: Rect, min_height: f64, anchor: Option<Point>) {
+    /// Ouvre une zone de texte à taper ; `rect` et `anchor` sont dans le
+    /// repère droit de `rotation`.
+    fn open_text(
+        &mut self,
+        page: usize,
+        rotation: i32,
+        rect: Rect,
+        min_height: f64,
+        anchor: Option<Point>,
+    ) {
         let mut t = TextDraft {
             page,
+            rotation,
             rect,
             min_height,
             anchor,
@@ -923,6 +965,7 @@ impl Viewer {
         let Some(Draft::Text(t)) = &self.draft else {
             return 0;
         };
+        let p = Self::in_text_frame(t, p);
         let style = &self.draw_style;
         let pad = freetext::inner_padding(style.border.map_or(0.0, |_| TEXT_BORDER));
         let text = &t.editor.buffer.text;
@@ -966,7 +1009,7 @@ impl Viewer {
         if let Some(Draft::Text(t)) = &self.draft {
             if self
                 .view_to_page(t.page, x, y)
-                .is_some_and(|p| t.rect.contains(p))
+                .is_some_and(|p| t.rect.contains(Self::in_text_frame(t, p)))
             {
                 return Some(Cursor::IBeam);
             }
@@ -1643,7 +1686,8 @@ impl Viewer {
                     return;
                 }
                 let to = constrain(*from, *to, *tool, *shift);
-                self.paint_shape(frame, &m, *tool, [*from, to], &style);
+                let rotation = self.page_rotation(draft.page());
+                self.paint_shape(frame, &m, *tool, [*from, to], rotation);
             }
             Draft::Ink { strokes, .. } => {
                 let shape = style.shape(AnnotTool::Pencil);
@@ -1726,15 +1770,18 @@ impl Viewer {
         );
     }
 
-    /// Aperçu d'une forme en cours de tracé.
+    /// Aperçu d'une forme en cours de tracé, avec les réglages en cours ;
+    /// `rotation` est celle de la page à l'écran (la zone d'une légende se
+    /// place dans son repère droit).
     fn paint_shape(
         &mut self,
         frame: &mut Frame<'_>,
         m: &Matrix,
         tool: AnnotTool,
         [from, to]: [Point; 2],
-        style: &DrawStyle,
+        rotation: i32,
     ) {
+        let style = self.draw_style;
         let shape = style.shape(tool);
         match tool {
             AnnotTool::Rectangle | AnnotTool::Ellipse => {
@@ -1794,7 +1841,10 @@ impl Viewer {
                     CALLOUT_WIDTH,
                     TEXT_BORDER,
                 );
-                self.dashed_frame(frame, m, &callout_box(from, to, true, height));
+                let back = freetext::upright(-rotation);
+                let local = callout_box(back.apply(from), back.apply(to), true, height);
+                let m_local = freetext::upright(rotation).then(m);
+                self.dashed_frame(frame, &m_local, &local);
             }
             _ => {}
         }
@@ -1869,6 +1919,10 @@ impl Viewer {
         style: &DrawStyle,
         editing: bool,
     ) {
+        // Tout se dessine dans le repère droit de la zone : sur une page
+        // tournée, le texte reste à l'horizontale de l'écran.
+        let local = freetext::upright(t.rotation).then(m);
+        let m = &local;
         let scale = Self::page_scale(m);
         let border = style.text_border();
         if let Some(anchor) = t.anchor {
@@ -2130,6 +2184,7 @@ mod tests {
             editor.insert(s);
             Draft::Text(Box::new(TextDraft {
                 page: 0,
+                rotation: 0,
                 rect: Rect::new(0.0, 0.0, 100.0, 20.0),
                 min_height: 0.0,
                 anchor: Some(p(-20.0, -20.0)),
