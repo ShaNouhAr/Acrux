@@ -410,6 +410,9 @@ impl Viewer {
                 return false;
             }
             Event::Wheel { .. } => return true,
+            // Un bouton latéral de la souris est un clic ailleurs : la liste
+            // se referme, et la vue ne bouge pas dessous.
+            Event::Nav { .. } => Outcome::Close,
             Event::Key(key, _) => {
                 window.request_redraw();
                 picker.key(key)

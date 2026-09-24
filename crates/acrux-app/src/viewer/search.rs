@@ -38,7 +38,7 @@ use acrux_features::text::{find_matches, MatchPiece, SearchOptions};
 use acrux_graphics::Rasterizer;
 use acrux_render::page::base_matrix;
 
-use super::{fill_rect_blend, log_line, EditOp, PageBox, Viewer};
+use super::{fill_rect_blend, log_line, shown_rotation, EditOp, PageBox, Viewer};
 use crate::platform::{Cursor, Frame, Key, Modifiers, WindowHandle};
 use crate::ui::icons::{self, Icon};
 use crate::ui::input::{InputAction, TextInput};
@@ -140,6 +140,10 @@ pub(super) struct Search {
     /// Texte de la page déjà repris comme requête : Ctrl+F ne le reprend
     /// qu'une fois, pour ne pas écraser ce qu'on a tapé depuis.
     taken: Option<String>,
+    /// La vue a déjà sauté vers une première occurrence depuis l'ouverture
+    /// de la carte : l'endroit d'où l'on est parti est dans l'historique de
+    /// la vue. Taper « bonjour » y laisse une seule entrée, pas sept.
+    jumped: bool,
 }
 
 /// Ce que l'on touche en cliquant dans la carte de recherche.
@@ -177,6 +181,7 @@ impl Search {
             insert_at: 0,
             shown: false,
             taken: None,
+            jumped: false,
         }
     }
 
@@ -349,8 +354,8 @@ impl Viewer {
     }
 
     /// Passe à l'occurrence suivante ou précédente, en bouclant, et la
-    /// montre. C'est le seul endroit où la recherche fait sauter la vue :
-    /// l'historique de navigation s'y branchera.
+    /// montre. Chaque passage demandé (Entrée, F3, les flèches de la carte)
+    /// est un saut : Alt+← ramène à l'occurrence d'avant.
     pub(super) fn go_to_hit(&mut self, forward: bool) {
         let Some(s) = &mut self.search else { return };
         let n = s.hits.len();
@@ -359,12 +364,13 @@ impl Viewer {
         }
         s.current = step_index(s.current, n, forward);
         s.shown = true;
+        s.jumped = true;
         let line = format!(
             "recherche : « {} » {} sur {n}",
             s.input.value,
             s.current + 1
         );
-        self.scroll_to_hit();
+        self.navigate(Self::scroll_to_hit);
         log_line(&line);
     }
 
@@ -450,14 +456,18 @@ impl Viewer {
                 ));
             }
         }
-        // Dès que la première occurrence apparaît, on s'y rend.
-        let place = self.search.as_mut().is_some_and(|s| {
+        // Dès que la première occurrence apparaît, on s'y rend. Le premier
+        // de ces sauts depuis l'ouverture de la carte retient d'où l'on
+        // vient ; ceux qui suivent la frappe ne font que suivre la requête.
+        let place = self.search.as_mut().and_then(|s| {
             let place = !s.shown && !s.hits.is_empty();
             s.shown |= place;
-            place
+            place.then(|| std::mem::replace(&mut s.jumped, true))
         });
-        if place {
-            self.scroll_to_hit();
+        match place {
+            Some(false) => self.navigate(Self::scroll_to_hit),
+            Some(true) => self.scroll_to_hit(),
+            None => {}
         }
         if let Some(line) = finished {
             log_line(&line);
@@ -485,7 +495,13 @@ impl Viewer {
         };
         let Some(l) = &self.loaded else { return };
         let p = &l.pages[page];
-        let m = base_matrix(&p.crop_box(&l.doc), self.scale(), p.rotate(&l.doc), w, h);
+        let m = base_matrix(
+            &p.crop_box(&l.doc),
+            self.scale(),
+            shown_rotation(l, p),
+            w,
+            h,
+        );
         let dev = m.transform_rect(&rect);
         let (view_w, view_h) = (f64::from(self.view_width()), f64::from(self.view_height()));
         // En hauteur, une marge d'un septième : la carte de recherche, en
@@ -526,7 +542,7 @@ impl Viewer {
                     continue;
                 }
                 let p = &l.pages[page];
-                let m = base_matrix(&p.crop_box(&l.doc), scale, p.rotate(&l.doc), b.w, b.h);
+                let m = base_matrix(&p.crop_box(&l.doc), scale, shown_rotation(l, p), b.w, b.h);
                 for (i, hit) in s.hits[lo..hi].iter().enumerate() {
                     let color = if lo + i == s.current {
                         CURRENT_HIT
@@ -855,6 +871,8 @@ impl Viewer {
         s.pressed = None;
         s.last = None;
         let current = s.current;
+        // Une modification n'est pas un saut : rien à retenir.
+        s.jumped = true;
         self.search = Some(s);
         self.update_search();
         while self.step_search() {}

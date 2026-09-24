@@ -56,6 +56,17 @@ pub enum Command {
     CloseTab,
     /// Onglet suivant.
     NextTab,
+    /// Onglet précédent.
+    PrevTab,
+    /// Vue précédente : revenir d'où un lien, un signet ou « aller à la
+    /// page » nous a fait partir.
+    ViewBack,
+    /// Vue suivante : refaire le saut qu'on vient de défaire.
+    ViewForward,
+    /// Tourner la vue d'un quart de tour à droite, sans toucher au document.
+    RotateViewRight,
+    /// Tourner la vue d'un quart de tour à gauche, sans toucher au document.
+    RotateViewLeft,
     /// Page précédente.
     PrevPage,
     /// Page suivante.
@@ -186,6 +197,11 @@ impl Command {
             Command::Export => "export",
             Command::CloseTab => "close-tab",
             Command::NextTab => "next-tab",
+            Command::PrevTab => "prev-tab",
+            Command::ViewBack => "view-back",
+            Command::ViewForward => "view-forward",
+            Command::RotateViewRight => "rotate-view-right",
+            Command::RotateViewLeft => "rotate-view-left",
             Command::PrevPage => "prev-page",
             Command::NextPage => "next-page",
             Command::FirstPage => "first-page",
@@ -284,6 +300,9 @@ fn shortcut_in_lang(shortcut: &'static str, english: bool) -> &'static str {
     match shortcut {
         "Ctrl+Maj+S" => "Ctrl+Shift+S",
         "Ctrl+Maj+E" => "Ctrl+Shift+E",
+        "Ctrl+Maj+Tab" => "Ctrl+Shift+Tab",
+        "Ctrl+Maj+Plus" => "Ctrl+Shift+Plus",
+        "Ctrl+Maj+Moins" => "Ctrl+Shift+Minus",
         "Maj+R" => "Shift+R",
         "Maj+F3" => "Shift+F3",
         "Maj+F4" => "Shift+F4",
@@ -569,6 +588,20 @@ const ENTRIES: &[Entry] = &[
         needs_document: true,
     },
     Entry {
+        label: "Vue précédente",
+        shortcut: "Alt+←",
+        keywords: "retour arriere historique revenir back lien signet",
+        command: Command::ViewBack,
+        needs_document: true,
+    },
+    Entry {
+        label: "Vue suivante",
+        shortcut: "Alt+→",
+        keywords: "avancer historique forward refaire lien signet",
+        command: Command::ViewForward,
+        needs_document: true,
+    },
+    Entry {
         label: "Panneau latéral (vignettes, signets)",
         shortcut: "F4",
         keywords: "vignettes signets sommaire miniatures volet barre",
@@ -597,8 +630,15 @@ const ENTRIES: &[Entry] = &[
         needs_document: true,
     },
     Entry {
+        label: "Onglet précédent",
+        shortcut: "Ctrl+Maj+Tab",
+        keywords: "changer basculer document",
+        command: Command::PrevTab,
+        needs_document: true,
+    },
+    Entry {
         label: "Fermer l'onglet",
-        shortcut: "Ctrl+W",
+        shortcut: "Ctrl+W, Ctrl+F4",
         keywords: "quitter fermeture document",
         command: Command::CloseTab,
         needs_document: true,
@@ -636,6 +676,22 @@ const ENTRIES: &[Entry] = &[
         shortcut: "Maj+R",
         keywords: "rotation tourner orientation antihoraire pivotement",
         command: Command::RotateLeft,
+        needs_document: true,
+    },
+    // Après les deux précédentes : « rotation » doit d'abord proposer de
+    // pivoter la page, ce que l'on cherche le plus souvent.
+    Entry {
+        label: "Faire pivoter la vue à droite",
+        shortcut: "Ctrl+Maj+Plus",
+        keywords: "affichage vue temporaire horaire tourner lecture couche",
+        command: Command::RotateViewRight,
+        needs_document: true,
+    },
+    Entry {
+        label: "Faire pivoter la vue à gauche",
+        shortcut: "Ctrl+Maj+Moins",
+        keywords: "affichage vue temporaire antihoraire tourner lecture couche",
+        command: Command::RotateViewLeft,
         needs_document: true,
     },
     Entry {
@@ -1957,6 +2013,35 @@ mod tests {
             .find(|e| e.command == Command::Properties)
             .map(|e| (e.label, e.shortcut));
         assert_eq!(properties, Some(("Propriétés du document", "Ctrl+D")));
+    }
+
+    #[test]
+    fn l_historique_et_la_rotation_de_la_vue_se_trouvent() {
+        assert_eq!(top("vue prec"), Some(Command::ViewBack));
+        assert_eq!(top("vue suiv"), Some(Command::ViewForward));
+        assert_eq!(top("pivoter la vue"), Some(Command::RotateViewRight));
+        assert_eq!(top("onglet prec"), Some(Command::PrevTab));
+        // « rotation » mène d'abord à la page, que l'on pivote plus souvent.
+        assert_eq!(top("rotation"), Some(Command::RotateRight));
+        let keys = |c| {
+            ENTRIES
+                .iter()
+                .find(|e| e.command == c)
+                .map(|e| (e.shortcut, shortcut_in_lang(e.shortcut, true)))
+        };
+        assert_eq!(keys(Command::ViewBack), Some(("Alt+←", "Alt+←")));
+        assert_eq!(
+            keys(Command::RotateViewRight),
+            Some(("Ctrl+Maj+Plus", "Ctrl+Shift+Plus"))
+        );
+        assert_eq!(
+            keys(Command::RotateViewLeft),
+            Some(("Ctrl+Maj+Moins", "Ctrl+Shift+Minus"))
+        );
+        assert_eq!(
+            keys(Command::CloseTab),
+            Some(("Ctrl+W, Ctrl+F4", "Ctrl+W, Ctrl+F4"))
+        );
     }
 
     #[test]

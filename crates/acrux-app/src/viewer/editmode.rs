@@ -25,9 +25,9 @@
 //! tapant est ce qu'on obtient.
 
 use super::{
-    base_matrix, collect_pages, render_page, Color, Cursor, Duration, EditOp, Frame, HashMap,
-    Instant, Key, Matrix, Modifiers, PageBox, PageIndex, Point, Rect, RenderOptions, Toolbar,
-    Viewer, WindowHandle,
+    base_matrix, collect_pages, render_page_rotated, shown_rotation, Color, Cursor, Duration,
+    EditOp, Frame, HashMap, Instant, Key, Matrix, Modifiers, PageBox, PageIndex, Point, Rect,
+    RenderOptions, Toolbar, Viewer, WindowHandle,
 };
 use crate::ui::editpdf::{step_size, BarAction, Buffer, EditBar, EditTool};
 use crate::ui::objects::{self as objects_ui, Handle, ViewRect};
@@ -625,7 +625,13 @@ impl Viewer {
         let (ox, top) = self.page_screen(layout, page)?;
         let PageBox { w, h, .. } = *layout.get(page)?;
         let p = l.pages.get(page)?;
-        let m = base_matrix(&p.crop_box(&l.doc), self.scale(), p.rotate(&l.doc), w, h);
+        let m = base_matrix(
+            &p.crop_box(&l.doc),
+            self.scale(),
+            shown_rotation(l, p),
+            w,
+            h,
+        );
         Some(m.then(&Matrix::new(1.0, 0.0, 0.0, 1.0, ox, top)))
     }
 
@@ -1539,7 +1545,7 @@ impl Viewer {
         let m = base_matrix(
             &page_ref.crop_box(&l.doc),
             scale,
-            page_ref.rotate(&l.doc),
+            shown_rotation(l, page_ref),
             pw,
             ph,
         );
@@ -2427,7 +2433,8 @@ impl Viewer {
                             background: Some(Color::WHITE),
                             ..RenderOptions::default()
                         };
-                        let bitmap = render_page(&l.doc, p, scale, &options).bitmap;
+                        let bitmap =
+                            render_page_rotated(&l.doc, p, scale, l.view_rotation, &options).bitmap;
                         l.cache.insert((page, key_scale), bitmap);
                     }
                     if let Some(mode) = &mut self.edit {
@@ -2557,7 +2564,8 @@ impl Viewer {
                             background: Some(Color::WHITE),
                             ..RenderOptions::default()
                         };
-                        let bitmap = render_page(&l.doc, p, scale, &options).bitmap;
+                        let bitmap =
+                            render_page_rotated(&l.doc, p, scale, l.view_rotation, &options).bitmap;
                         l.cache.insert((a.page, key_scale), bitmap);
                     }
                 }

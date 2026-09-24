@@ -362,6 +362,15 @@ Alternative acceptable si l'on privilégie l'accessibilité aux débutants : C# 
   question ne bloque rien : elle est posée, et l'action attend la réponse (`Then`). Les boutons
   nomment ce qu'ils font (« Enregistrer », « Ne pas enregistrer »), ce qu'un « Oui / Non » du
   système ne permet pas. Tant qu'une fenêtre est ouverte, elle reçoit seule le clavier et la souris.
+- `viewer/history` : **historique de la vue** (Alt+←, Alt+→, boutons latéraux de la souris), une
+  pile bornée par onglet. Seuls les sauts s'y inscrivent — liens, signets, aller à la page, Origine
+  et Fin, panneau, recherche —, par une seule porte (`navigate`) qui ne retient l'endroit quitté que
+  si la vue a vraiment bougé. Une vue retenue est une page et la part de sa hauteur passée, pas des
+  pixels : elle survit au zoom, à la disposition et à la rotation. Supprimer, insérer ou réordonner
+  des pages la fait suivre (`page_after`). La **rotation de la vue** (Ctrl+Maj+Plus) vit à côté,
+  dans l'onglet : `acrux_render::render_page_rotated` ajoute ses degrés au `/Rotate` de la page, et
+  toute conversion page ↔ écran passe par `shown_rotation` ; rien n'est écrit dans le document, et
+  l'impression comme la vignette de l'accueil l'ignorent.
 - La **décoration de la fenêtre** suit le thème : `WindowHandle::set_frame_theme` demande le mode
   sombre (`DWMWA_USE_IMMERSIVE_DARK_MODE`) puis, quand le système sait les prendre, la couleur
   exacte de la barre de titre, de son texte et de la bordure. Les attributs inconnus d'un système

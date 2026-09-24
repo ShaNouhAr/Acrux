@@ -236,7 +236,11 @@ impl Viewer {
                 });
                 None
             }
-            Event::Char(..) | Event::MouseDown { .. } | Event::Wheel { .. } => None,
+            // Un bouton latéral de la souris ne fait pas reculer la vue sous
+            // la question.
+            Event::Char(..) | Event::MouseDown { .. } | Event::Wheel { .. } | Event::Nav { .. } => {
+                None
+            }
             Event::FileDropped(_) | Event::Close => return !matches!(event, Event::Close),
             _ => return false,
         };
@@ -382,9 +386,13 @@ impl Viewer {
                     return true;
                 }
             }
-            // Les autres boutons de la souris, la molette et un fichier
-            // déposé (il ouvrirait un document sous l'invite) s'arrêtent là.
-            Event::MouseDown { .. } | Event::Wheel { .. } | Event::FileDropped(_) => {}
+            // Les autres boutons de la souris, les boutons latéraux, la
+            // molette et un fichier déposé (il ouvrirait un document sous
+            // l'invite) s'arrêtent là.
+            Event::MouseDown { .. }
+            | Event::Nav { .. }
+            | Event::Wheel { .. }
+            | Event::FileDropped(_) => {}
             _ => return false,
         }
         window.request_redraw();
@@ -449,6 +457,7 @@ impl Viewer {
             }
             Event::Char(..)
             | Event::MouseDown { .. }
+            | Event::Nav { .. }
             | Event::Wheel { .. }
             | Event::FileDropped(_) => None,
             _ => return false,

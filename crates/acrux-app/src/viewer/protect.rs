@@ -296,7 +296,10 @@ impl Viewer {
             }
             // Le reste de la souris, et un fichier déposé (il ouvrirait un
             // autre document sous la fenêtre), s'arrêtent là.
-            Event::MouseDown { .. } | Event::Wheel { .. } | Event::FileDropped(_) => Action::None,
+            Event::MouseDown { .. }
+            | Event::Nav { .. }
+            | Event::Wheel { .. }
+            | Event::FileDropped(_) => Action::None,
             _ => return false,
         };
         match action {

@@ -9,6 +9,41 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 
 ## 0.23.0 — non publiée
 
+- **Vue précédente, vue suivante.** Alt+← ramène là d'où un lien, un
+  signet, « aller à la page » (Ctrl+G), Origine ou Fin, une vignette ou un
+  commentaire du panneau, une occurrence de la recherche vous a fait partir ;
+  Alt+→ refait le saut. Les boutons latéraux de la souris et les touches
+  « Précédent » et « Suivant » d'un clavier multimédia font de même, comme
+  dans Acrobat et les navigateurs. Chaque onglet a son historique, qui suit
+  les pages supprimées, insérées ou déplacées et reste juste après une
+  annulation.
+  Taper une recherche n'y laisse qu'une entrée, pas une par lettre ; la
+  molette, les flèches et les pages suivantes n'en laissent aucune. Le clic
+  droit sur la page et la palette proposent « Vue précédente » et « Vue
+  suivante », grisées quand il n'y a pas où aller.
+- **Faire pivoter la vue** (Ctrl+Maj+Plus, Ctrl+Maj+Moins, clic droit,
+  palette) : les pages s'affichent tournées d'un quart de tour — pour lire un
+  tableau couché ou un plan scanné de travers — **sans que le document
+  change** : rien à enregistrer ni à annuler, l'impression et les exports
+  restent droits, et la rotation part avec l'onglet. La barre d'état affiche
+  « vue 90° » tant que la vue est tournée ; un clic dessus la remet droite.
+  Clics, liens, sélection, surlignages de la recherche, champs de formulaire
+  et « Modifier le PDF » suivent la rotation. En AZERTY, Ctrl+Maj+Moins est
+  la touche du 6. `R` et `Maj+R` pivotent toujours la page elle-même.
+  `acr render --rotate 90` fait de même en ligne de commande : l'image sort
+  tournée, le fichier reste tel quel.
+- **Onglets au clavier, partout.** Ctrl+Tab et Ctrl+Maj+Tab (nouveau, aussi
+  dans la palette) changent d'onglet même quand la carte de recherche, la
+  barre d'outils ou le panneau tient le clavier, où ils étaient avalés.
+  **Ctrl+F4 ferme l'onglet**, comme Ctrl+W : il ouvrait le panneau latéral.
+- **Chaque onglet retrouve sa page.** Changer d'onglet, ou fermer celui qu'on
+  regarde, ramenait le document suivant à sa première page, comme s'il venait
+  de s'ouvrir ; chacun reprend désormais là où on l'avait laissé.
+- Afficher ou masquer un calque ne laisse plus, de temps à autre, une page
+  dessinée avec l'ancienne visibilité : un rendu parti avant le changement et
+  arrivé après était pris pour neuf, jusqu'au zoom suivant.
+- Le harnais invisible gagne `AltKey` (Alt+←), `XButton` (boutons latéraux
+  de la souris) et `CtrlShiftKey` (Ctrl+Maj+touche).
 - **La recherche est complète.** La carte de Ctrl+F gagne « Aa » (respecter la
   casse), « Mot entier », les flèches occurrence précédente et suivante et une
   croix pour fermer, chacun avec son info-bulle ; le compteur dit « 3 sur 12 »,

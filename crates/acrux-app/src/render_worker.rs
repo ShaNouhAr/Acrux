@@ -19,7 +19,7 @@ use acrux_features::forms::{set_field_value, FieldValue};
 use acrux_features::redact::{apply_redactions, mark_redactions, RedactionMark};
 use acrux_features::text::SearchOptions;
 use acrux_graphics::{Bitmap, Color};
-use acrux_render::{render_page, RenderOptions};
+use acrux_render::{render_page_rotated, RenderOptions};
 
 use crate::platform::Waker;
 
@@ -484,6 +484,9 @@ enum WorkerMessage {
     Keep(Vec<u32>),
     /// Imposer la visibilité de calques (contenu optionnel).
     SetLayers(std::collections::HashMap<u32, bool>),
+    /// Tourner la **vue** de ce nombre de degrés (multiple de 90) : les
+    /// pages se rendent tournées, le document ne change pas.
+    SetViewRotation(i32),
     /// Convertir le document dans un autre format (peut être long : c'est
     /// justement pour cela qu'il se fait ici).
     Export {
@@ -550,6 +553,9 @@ impl RenderWorker {
                     background: Some(Color::WHITE),
                     ..RenderOptions::default()
                 };
+                // Rotation de la vue : elle ne vaut que pour l'écran, un
+                // export rend le document tel qu'il est.
+                let mut view_rotation = 0;
                 while let Ok(first) = req_rx.recv() {
                     // Vide la file : la dernière consigne `Keep` élimine les
                     // demandes d'échelles devenues inutiles (zoom changé), les
@@ -565,6 +571,10 @@ impl RenderWorker {
                             // Les rendus demandés avant sont périmés.
                             batch.clear();
                             options.layers = map;
+                        }
+                        WorkerMessage::SetViewRotation(degrees) => {
+                            batch.clear();
+                            view_rotation = degrees;
                         }
                         WorkerMessage::Edit(op) => {
                             // Les rendus demandés avant la modification sont périmés.
@@ -598,7 +608,8 @@ impl RenderWorker {
                             continue;
                         };
                         let start = std::time::Instant::now();
-                        let rendered = render_page(&doc, page, r.scale, &options);
+                        let rendered =
+                            render_page_rotated(&doc, page, r.scale, view_rotation, &options);
                         let ms = start.elapsed().as_secs_f64() * 1000.0;
                         if res_tx
                             .send(RenderResult {
@@ -630,8 +641,29 @@ impl RenderWorker {
 
     /// Impose la visibilité de calques pour les rendus suivants.
     pub fn set_layers(&mut self, layers: std::collections::HashMap<u32, bool>) {
-        self.pending.clear();
+        self.invalidate();
         let _ = self.requests.send(WorkerMessage::SetLayers(layers));
+    }
+
+    /// Tourne la vue : les rendus suivants montrent les pages tournées de
+    /// `degrees` (multiple de 90) en plus de leur `/Rotate`. Le document du
+    /// fil n'est pas touché, ses exports non plus.
+    pub fn set_view_rotation(&mut self, degrees: i32) {
+        self.invalidate();
+        let _ = self.requests.send(WorkerMessage::SetViewRotation(degrees));
+    }
+
+    /// Les rendus en route décrivent un état dépassé : ils seront écartés à
+    /// réception, et les pages redemandées.
+    ///
+    /// Vider la liste d'attente ne suffit pas. La clé du cache est la page et
+    /// l'échelle, pas l'orientation ni les calques : un rendu parti avant le
+    /// changement, arrivé après, serait pris pour neuf et resterait affiché
+    /// — la page de travers jusqu'au prochain zoom. C'est la génération qui
+    /// le trahit.
+    fn invalidate(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.pending.clear();
     }
 
     /// Demande la conversion du document. Le fichier est écrit par le fil de
@@ -687,8 +719,7 @@ impl RenderWorker {
     /// Applique une modification sur la copie du fil de rendu ; les rendus en
     /// attente sont abandonnés.
     pub fn edit(&mut self, op: EditOp) {
-        self.generation = self.generation.wrapping_add(1);
-        self.pending.clear();
+        self.invalidate();
         let _ = self.requests.send(WorkerMessage::Edit(Box::new(op)));
     }
 

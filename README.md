@@ -115,7 +115,8 @@ gras, italique, code, listes, citations, règles, tableaux et **liens cliquables
 devenant des signets) ; `combine a.pdf b.jpg c.md` réunit PDF, images et fichiers texte ou Markdown
 en un seul document (`--bookmarks` : un signet par fichier ; `--toc` : sommaire cliquable en tête ;
 `--numbers` : numérotation continue en pied de page) ; `render`
-produit des PNG (`--dpi`) ; `export` convertit (`--format png|jpeg|images|html|docx|xlsx|md|txt`,
+produit des PNG (`--dpi` ; `--rotate 90` tourne l'image sans toucher au fichier, comme la
+rotation de la vue de l'application, là où `rotate` écrit `/Rotate`) ; `export` convertit (`--format png|jpeg|images|html|docx|xlsx|md|txt`,
 `--dpi`, `--quality`, `--pages`, `--flow`) : pages en PNG ou en JPEG, images incorporées extraites
 dans leur format d'origine, page HTML fidèle (texte positionné, images en `data:`, polices du PDF
 en WOFF) ou refluée, document Word `.docx` et classeur Excel `.xlsx` des tableaux détectés ;
@@ -294,7 +295,9 @@ l'A4 sur un écran à 150 %) ; la barre d'état le dit quand on bute dessus.
 | clic sur un lien | destination interne, ou adresse dans le navigateur |
 | `F4` | panneau latéral : pages (glisser pour réordonner), signets, notes, calques, fichiers joints |
 | `Ctrl+G` | aller à une page par son numéro **ou son étiquette** (« iv », « Annexe-A ») |
-| `Ctrl+Tab`, `Ctrl+W`, clic du milieu | onglet suivant, fermer l'onglet |
+| `Alt+←` / `Alt+→`, boutons latéraux de la souris | **vue précédente / suivante** : revenir d'où un lien, un signet, `Ctrl+G`, `Origine`/`Fin`, le panneau ou la recherche vous a fait partir (un historique par onglet, aussi dans le clic droit et la palette) |
+| `Ctrl+Tab` / `Ctrl+Maj+Tab` | onglet suivant / précédent, même la recherche ouverte ; chaque onglet retrouve la page où on l'a laissé |
+| `Ctrl+W`, `Ctrl+F4`, clic du milieu | fermer l'onglet |
 
 | Voir | |
 | --- | --- |
@@ -302,6 +305,7 @@ l'A4 sur un écran à 150 %) ; la barre d'état le dit quand on bute dessus.
 | `Ctrl+molette` | zoom **vers le pointeur** : ce qui est sous la souris y reste (les petits crans d'un pavé tactile s'additionnent) |
 | clic sur la case du zoom, ou sur le zoom de la barre d'état | liste du zoom : niveaux, ajustements, niveau tapé |
 | `F`, `Ctrl+0` | ajuster à la largeur, ajustement automatique (la liste ajoute « ajuster à la page ») |
+| `Ctrl+Maj+Plus` / `Ctrl+Maj+Moins` | **faire pivoter la vue** d'un quart de tour : pour lire un tableau couché ou un plan scanné de travers ; le document n'est pas modifié (la barre d'état affiche « vue 90° », un clic la remet droite) — `R` pivote la page elle-même |
 | bouton « disposition » | continu, page unique, continu deux pages, deux pages |
 | `F11` | plein écran |
 | `F5` | mode lecture : plus de barres ni de panneau, seulement les pages (Échap pour revenir) |

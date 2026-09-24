@@ -1,5 +1,6 @@
 //! Barre d'état : le nom du document (ou un message passager) à gauche ;
-//! à droite la page, le zoom et la disposition, puis la version.
+//! à droite la rotation de la vue quand elle est tournée, la page, le zoom
+//! et la disposition, puis la version.
 //!
 //! Les trois indications de droite sont des **boutons** : le survol les
 //! éclaire et dit ce que fera le clic ; la page prend le focus du champ de
@@ -28,6 +29,10 @@ pub(super) enum StatusSeg {
     Zoom,
     /// « continu » : la disposition suivante.
     Layout,
+    /// « vue 90° », tant que la vue est tournée : la remettre droite. Une
+    /// vue tournée ne doit jamais passer pour un document tourné — celui-ci
+    /// ne l'est pas, et rien ne s'enregistrera.
+    Rotation,
 }
 
 fn inside(r: Rect, x: i32, y: i32) -> bool {
@@ -86,6 +91,10 @@ impl Viewer {
             }
             StatusSeg::Zoom => self.open_zoom_menu(ZoomAnchor::Status, window),
             StatusSeg::Layout => self.set_view_mode(self.view_mode.next()),
+            StatusSeg::Rotation => {
+                let now = self.loaded.as_ref().map_or(0, |l| l.view_rotation);
+                self.rotate_view(-now);
+            }
         }
         window.request_redraw();
     }
@@ -107,6 +116,14 @@ impl Viewer {
                     tr(self.view_mode.label()),
                     tr(self.view_mode.next().label()),
                 ],
+            ),
+            StatusSeg::Rotation => trf(
+                "Vue pivotée de {}° — cliquer pour la remettre droite",
+                &[&self
+                    .loaded
+                    .as_ref()
+                    .map_or(0, |l| l.view_rotation)
+                    .to_string()],
             ),
         };
         Some((text, rect))
@@ -156,6 +173,12 @@ impl Viewer {
                 "" => String::new(),
                 mode => format!(" ({})", lang::tr(mode)),
             };
+            if l.view_rotation != 0 {
+                segments.push((
+                    StatusSeg::Rotation,
+                    trf("vue {}°", &[&l.view_rotation.to_string()]),
+                ));
+            }
             segments.push((StatusSeg::Page, position));
             segments.push((StatusSeg::Zoom, format!("{:.0} %{fit}", zoom * 100.0)));
             segments.push((

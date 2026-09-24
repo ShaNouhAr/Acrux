@@ -114,6 +114,22 @@ fait Windows, et l'application le reconvertit. Poster à la main un `WM_MOUSEWHE
 coordonnées client viserait donc à côté. Le journal (`Journal "Wheel"`) montre la position
 reçue, en coordonnées de la capture.
 
+La navigation a ses trois fonctions :
+
+```powershell
+AltKey 0x25          # Alt+← : vue précédente (0x27 : Alt+→, vue suivante)
+XButton 1 700 600    # bouton « précédent » de la souris (4) ; XButton 2 : « suivant » (5)
+CtrlShiftKey 0xBB    # Ctrl+Maj+Plus : tourner la vue (0xBD : Ctrl+Maj+Moins ; 0x09 : Ctrl+Maj+Tab)
+KeyCtrl 0x09         # Ctrl+Tab (0x73 : Ctrl+F4, fermer l'onglet)
+```
+
+Alt+flèche arrive en `WM_SYSKEYDOWN`, avec le bit 29 de `lParam` qui dit qu'Alt est enfoncée :
+c'est ce bit que lit l'application, `GetKeyState` ne voyant rien en mode invisible. Le journal
+note `historique : vue retenue (page N), saut vers la page M` à chaque saut retenu,
+`historique : vue précédente → page N` (ou `suivante`) à chaque retour, `historique : pas de vue
+précédente` quand la pile est vide, et `vue pivotée : 90°` à chaque rotation de la vue. Pour
+ouvrir deux onglets d'un coup, `Start-App "a.pdf b.pdf"` (chemins sans espace).
+
 Codes de touches utiles : `0x72` F3, `0x73` F4, `0x74` F5, `0x75` F6, `0x7A` F11, `0x0D` Entrée, `0x1B` Échap,
 `0x09` Tab, `0x20` Espace, `0x25` à `0x28` flèches gauche, haut, droite, bas, `0x21`/`0x22` page
 précédente et suivante, `0x24`/`0x23` Origine et Fin.

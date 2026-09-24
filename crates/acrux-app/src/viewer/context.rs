@@ -193,7 +193,9 @@ impl Viewer {
                 window.set_cursor(Cursor::Arrow);
                 return true;
             }
-            Event::Wheel { .. } => Outcome::Close,
+            // Comme un clic dehors, un bouton latéral de la souris referme le
+            // menu sans rien faire d'autre.
+            Event::Wheel { .. } | Event::Nav { .. } => Outcome::Close,
             // Maj+F10, comme la touche « menu », referme ce qu'elle a ouvert.
             Event::Key(Key::F(10), m) if m.shift => Outcome::Close,
             Event::Key(key, _) => {
@@ -430,12 +432,18 @@ impl Viewer {
     }
 
     /// Le menu d'une page : ce qu'on fait d'une sélection, d'un endroit,
-    /// de la page et du document.
+    /// de la vue, de la page et du document.
     fn page_menu(&self, x: i32, y: i32, page: usize) -> Menu<Action> {
         let selected = self.selection.is_some_and(|s| !s.is_empty());
         let rights = self.rights();
         let here = Target::Page(page);
         let now = Target::Current;
+        // Comme dans Acrobat, « Vue précédente » et « Vue suivante » ouvrent
+        // la partie « vue » du menu ; grisées tant qu'il n'y a pas où aller.
+        let (back, forward) = self
+            .loaded
+            .as_ref()
+            .map_or((false, false), |l| (l.nav.can_back(), l.nav.can_forward()));
         Menu::new(x, y)
             .item(
                 None,
@@ -456,6 +464,28 @@ impl Viewer {
                 tr("Poser une note ici"),
                 shortcut(Command::Note),
                 (Command::Note, here),
+                true,
+            )
+            .separator()
+            .item(
+                None,
+                tr("Vue précédente"),
+                shortcut(Command::ViewBack),
+                (Command::ViewBack, now),
+                back,
+            )
+            .item(
+                None,
+                tr("Vue suivante"),
+                shortcut(Command::ViewForward),
+                (Command::ViewForward, now),
+                forward,
+            )
+            .item(
+                None,
+                tr("Faire pivoter la vue"),
+                shortcut(Command::RotateViewRight),
+                (Command::RotateViewRight, now),
                 true,
             )
             .separator()

@@ -38,7 +38,9 @@ use acrux_features::redact::RedactionMark;
 use acrux_features::text::{extract_page_text, PageText, SearchOptions};
 use acrux_graphics::{Bitmap, Color, Rasterizer};
 use acrux_render::page::base_matrix;
-use acrux_render::{page_pixel_size, render_page, RenderOptions};
+use acrux_render::{
+    add_rotation, page_pixel_size_rotated, render_page, render_page_rotated, RenderOptions,
+};
 
 use crate::platform::{
     App, Cursor, Event, Frame, Key, Modifiers, MouseButton, PrintOutcome, PrintSource, Waker,
@@ -73,6 +75,7 @@ use acrux_features::fillsign::ink::{InkPoint, Nib, Pen, Stroke, Weight};
 mod context;
 mod dialogs;
 mod editmode;
+mod history;
 mod protect;
 mod search;
 mod status;
@@ -83,6 +86,7 @@ use crate::ui::modebar::ModeBar;
 use context::{ContextMenu, Target};
 use dialogs::{Asking, Then};
 use editmode::EditMode;
+use history::{NavHistory, Spot};
 use protect::OwnerThen;
 use search::{Search, SearchFocus};
 use status::StatusSeg;
@@ -127,8 +131,28 @@ fn log_event(event: &Event) {
 
 /// Vrai pour les touches qui commandent la disposition de la fenêtre : elles
 /// gardent le même effet quelle que soit la zone qui tient le focus.
-fn is_global_key(key: Key) -> bool {
-    matches!(key, Key::F(3 | 4 | 5 | 6 | 11))
+///
+/// Ctrl+F4 n'en est pas : c'est « fermer l'onglet », comme dans tous les
+/// programmes à onglets de Windows. Il ouvrait le panneau latéral.
+fn is_global_key(key: Key, m: Modifiers) -> bool {
+    match key {
+        Key::F(4) => !m.ctrl,
+        Key::F(3 | 5 | 6 | 11) => true,
+        _ => false,
+    }
+}
+
+/// Rotation sous laquelle une page est **affichée** : son `/Rotate` plus la
+/// rotation de la vue de l'onglet.
+///
+/// Tout ce qui passe de la page à l'écran ou de l'écran à la page (clics,
+/// sélection, surlignages, liens, champs, ajustement) doit la prendre, sans
+/// quoi un clic sur une vue tournée viserait à côté. L'impression et la
+/// vignette de l'accueil, elles, montrent le document tel qu'il est : elles
+/// s'en tiennent à `/Rotate`, comme Acrobat, où la vue tournée ne s'imprime
+/// pas.
+fn shown_rotation(l: &Loaded, p: &Page) -> i32 {
+    add_rotation(p.rotate(&l.doc), l.view_rotation)
 }
 
 /// Zone de l'interface qui reçoit les touches. F6 passe de l'une à l'autre,
@@ -448,6 +472,16 @@ struct Loaded {
     /// tient à la numérotation décimale : c'est ce qui distingue « iii sur
     /// 240 » de « 3 sur 240 » dans la barre d'outils et la barre d'état.
     labels: Vec<String>,
+    /// Rotation de la **vue**, en degrés dans le sens horaire (0, 90, 180 ou
+    /// 270) : Ctrl+Maj+Plus. Elle n'est jamais écrite dans le document et
+    /// ne le marque pas modifié ; elle suit l'onglet et part avec lui.
+    view_rotation: i32,
+    /// Vues précédentes et suivantes (Alt+←, Alt+→). Le nom `history` est
+    /// déjà celui des modifications.
+    nav: NavHistory,
+    /// Vue de l'onglet quand il est passé à l'arrière-plan : y revenir la
+    /// retrouve, au lieu de repartir de la première page.
+    resume: Option<Spot>,
 }
 
 impl Loaded {
@@ -1011,7 +1045,13 @@ impl Viewer {
         let (ox, oy) = self.page_screen(&layout, page)?;
         let PageBox { w, h, .. } = layout[page];
         let p = &l.pages[page];
-        let m = base_matrix(&p.crop_box(&l.doc), self.scale(), p.rotate(&l.doc), w, h);
+        let m = base_matrix(
+            &p.crop_box(&l.doc),
+            self.scale(),
+            shown_rotation(l, p),
+            w,
+            h,
+        );
         let inv = m.invert()?;
         let pt = inv.apply(Point::new(f64::from(x) - ox, f64::from(y) - oy));
         Some((page, pt))
@@ -1182,7 +1222,7 @@ impl Viewer {
         let m = base_matrix(
             &page.crop_box(&l.doc),
             self.scale(),
-            page.rotate(&l.doc),
+            shown_rotation(l, page),
             w,
             h,
         );
@@ -1197,22 +1237,27 @@ impl Viewer {
     /// Exécute l'action d'un lien.
     fn follow(&mut self, action: &Action, window: &mut dyn WindowHandle) {
         log_line(&format!("lien suivi : {action:?}"));
+        // Un lien, un signet ou une action nommée est un saut : l'endroit
+        // quitté entre dans l'historique de la vue (Alt+← y ramène).
         match action {
-            Action::GoTo(d) => self.go_to(d),
+            Action::GoTo(d) => self.navigate(|v| v.go_to(d)),
             Action::Uri(u) => window.open_url(u),
-            Action::Named(n) => match n.as_str() {
-                "NextPage" => self.scroll_to_page(self.current_page() + 1),
-                "PrevPage" => self.scroll_to_page(self.current_page().saturating_sub(1)),
-                "FirstPage" => self.scroll_to_page(0),
-                "LastPage" => {
-                    let last = self
-                        .loaded
-                        .as_ref()
-                        .map_or(0, |l| l.pages.len().saturating_sub(1));
-                    self.scroll_to_page(last);
+            Action::Named(n) => {
+                let last = self
+                    .loaded
+                    .as_ref()
+                    .map_or(0, |l| l.pages.len().saturating_sub(1));
+                let page = match n.as_str() {
+                    "NextPage" => Some(self.current_page() + 1),
+                    "PrevPage" => Some(self.current_page().saturating_sub(1)),
+                    "FirstPage" => Some(0),
+                    "LastPage" => Some(last),
+                    _ => None,
+                };
+                if let Some(page) = page {
+                    self.navigate(|v| v.scroll_to_page(page));
                 }
-                _ => {}
-            },
+            }
             Action::Launch(_) | Action::GoToRemote(_) | Action::Unsupported(_) => {}
         }
     }
@@ -1309,7 +1354,7 @@ impl Viewer {
                     continue;
                 }
                 let p = &l.pages[page];
-                let m = base_matrix(&p.crop_box(&l.doc), scale, p.rotate(&l.doc), w, h);
+                let m = base_matrix(&p.crop_box(&l.doc), scale, shown_rotation(l, p), w, h);
                 let text = &l.text(page).1;
                 let Some((a, b)) = sel.range_on_page(page, text.len()) else {
                     continue;
@@ -2319,7 +2364,7 @@ impl Viewer {
                 .map(|n| (n - 1).min(count - 1))
         });
         match target {
-            Some(page) => self.scroll_to_page(page),
+            Some(page) => self.navigate(|v| v.scroll_to_page(page)),
             None => self.set_notice(format!("aucune page « {text} »")),
         }
     }
@@ -2922,8 +2967,11 @@ impl Viewer {
             .collect();
         self.panel = Panel::new();
         self.panel.set_default_expanded(open_ids);
-        // Un document déjà ouvert passe en arrière-plan : nouvel onglet.
-        if let Some(previous) = self.loaded.take() {
+        // Un document déjà ouvert passe en arrière-plan : nouvel onglet. Il
+        // garde sa vue, qu'on retrouvera en y revenant.
+        let spot = self.view_spot();
+        if let Some(mut previous) = self.loaded.take() {
+            previous.resume = spot;
             let at = self.active_tab.min(self.others.len());
             self.others.insert(at, previous);
             self.active_tab = at + 1;
@@ -2953,6 +3001,9 @@ impl Viewer {
             models,
             boxes: HashMap::new(),
             labels,
+            view_rotation: 0,
+            nav: NavHistory::default(),
+            resume: None,
         });
         self.error = None;
         self.scroll_y = 0.0;
@@ -3110,7 +3161,13 @@ impl Viewer {
             let layout = self.layout();
             if let (Some(&PageBox { y, w, h, .. }), Some(l)) = (layout.get(page), &self.loaded) {
                 let p = &l.pages[page];
-                let m = base_matrix(&p.crop_box(&l.doc), self.scale(), p.rotate(&l.doc), w, h);
+                let m = base_matrix(
+                    &p.crop_box(&l.doc),
+                    self.scale(),
+                    shown_rotation(l, p),
+                    w,
+                    h,
+                );
                 let dev = m.transform_rect(&rect);
                 let top = f64::from(y) + dev.y0;
                 let bottom = f64::from(y) + dev.y1;
@@ -3153,7 +3210,7 @@ impl Viewer {
                 continue;
             };
             let p = &l.pages[page];
-            let m = base_matrix(&p.crop_box(&l.doc), scale, p.rotate(&l.doc), pw, ph);
+            let m = base_matrix(&p.crop_box(&l.doc), scale, shown_rotation(l, p), pw, ph);
             let dev = m.transform_rect(&w.rect);
             let x0 = (ox + dev.x0).round() as i32 - 2;
             let y0 = (top + dev.y0).round() as i32 - 2;
@@ -3427,7 +3484,7 @@ impl Viewer {
             .iter()
             .map(|p| {
                 let b = p.crop_box(&l.doc);
-                match p.rotate(&l.doc) {
+                match shown_rotation(l, p) {
                     90 | 270 => b.height(),
                     _ => b.width(),
                 }
@@ -3438,7 +3495,7 @@ impl Viewer {
         let sizes = l
             .pages
             .iter()
-            .map(|p| page_pixel_size(&l.doc, p, scale))
+            .map(|p| page_pixel_size_rotated(&l.doc, p, scale, l.view_rotation))
             .collect();
         (scale, key, sizes)
     }
@@ -3658,7 +3715,7 @@ impl Viewer {
     fn panel_action(&mut self, action: PanelAction, window: &mut dyn WindowHandle) {
         match action {
             PanelAction::None => {}
-            PanelAction::GoToPage(p) => self.scroll_to_page(p),
+            PanelAction::GoToPage(p) => self.navigate(|v| v.scroll_to_page(p)),
             PanelAction::MovePage { from, to } => {
                 let count = self.loaded.as_ref().map_or(0, |l| l.pages.len());
                 if from >= count || to >= count {
@@ -3682,7 +3739,7 @@ impl Viewer {
                     .and_then(|l| l.comments.get(index))
                     .map(|c| c.page);
                 if let Some(page) = target {
-                    self.scroll_to_page(page);
+                    self.navigate(|v| v.scroll_to_page(page));
                 }
             }
             PanelAction::Follow(id) => {
@@ -3737,14 +3794,19 @@ impl Viewer {
             Command::NextTab => self.cycle_tab(true),
             Command::PrevPage => self.step_row(false),
             Command::NextPage => self.step_row(true),
-            Command::FirstPage => self.scroll_to_page(0),
+            Command::FirstPage => self.navigate(|v| v.scroll_to_page(0)),
             Command::LastPage => {
                 let last = self
                     .loaded
                     .as_ref()
                     .map_or(0, |l| l.pages.len().saturating_sub(1));
-                self.scroll_to_page(last);
+                self.navigate(|v| v.scroll_to_page(last));
             }
+            Command::ViewBack => self.history_step(false),
+            Command::ViewForward => self.history_step(true),
+            Command::RotateViewRight => self.rotate_view(90),
+            Command::RotateViewLeft => self.rotate_view(-90),
+            Command::PrevTab => self.cycle_tab(false),
             Command::ZoomIn => self.zoom_step(1),
             Command::ZoomOut => self.zoom_step(-1),
             Command::ZoomReset => self.set_zoom(1.0),
@@ -3838,12 +3900,21 @@ impl Viewer {
         }
         l.history.push(op);
         l.redo.clear();
+        let before = l.pages.len();
         match collect_pages(&l.doc) {
             Ok(p) => l.pages = p,
             Err(e) => {
                 self.alert("Modification impossible", &format!("{e}"));
                 return false;
             }
+        }
+        // L'historique de la vue suit les pages supprimées, insérées ou
+        // déplacées : revenir en arrière mène à la page qu'on avait quittée,
+        // pas à celle qui a pris sa place. Toute nouvelle opération sur la
+        // structure passe par `history::page_after`.
+        let inserted = l.pages.len().saturating_sub(before);
+        if let Some(op) = l.history.last() {
+            l.nav.remap(|p| history::page_after(op, p, inserted));
         }
         l.page_index = PageIndex::new(&l.pages);
         l.cache.clear();
@@ -3905,10 +3976,28 @@ impl Viewer {
                 return;
             }
         };
+        // La vue de l'onglet n'est pas une modification : l'annulation ne la
+        // défait pas. L'historique de la vue survit, sauf si l'opération
+        // défaite ou refaite a supprimé, inséré ou déplacé des pages : les
+        // siennes ne désigneraient plus les mêmes.
+        let Some((view_rotation, count, nav, before)) = self
+            .loaded
+            .take()
+            .map(|l| (l.view_rotation, l.pages.len(), l.nav, l.history))
+        else {
+            return;
+        };
+        // L'opération en jeu est la dernière de l'historique le plus long :
+        // celui d'avant pour une annulation, le nouveau pour un rétablissement.
+        let changed = if before.len() > ops.len() {
+            before.last()
+        } else {
+            ops.last()
+        };
+        let keep_nav = !changed.is_some_and(history::moves_pages);
         // Le document rechargé **remplace** celui de l'onglet courant : sans
         // cela, `finish_open` le rangerait en arrière-plan et ouvrirait un
         // onglet de plus à chaque annulation.
-        self.loaded = None;
         self.finish_open(path, doc, pages, password, window);
         if let Some(l) = &mut self.loaded {
             // Le fil de rendu repart du fichier : on lui rejoue l'historique.
@@ -3916,10 +4005,17 @@ impl Viewer {
                 for op in &ops {
                     w.edit(op.clone());
                 }
+                if view_rotation != 0 {
+                    w.set_view_rotation(view_rotation);
+                }
             }
             l.modified = !ops.is_empty();
             l.history = ops;
             l.redo = redo;
+            l.view_rotation = view_rotation;
+            if keep_nav && l.pages.len() == count {
+                l.nav = nav;
+            }
         }
         // L'utilisateur ne doit pas perdre sa place en annulant.
         self.anchor = anchor;
@@ -4137,7 +4233,7 @@ impl Viewer {
             ToolAction::GoToPage(n) => {
                 let count = self.loaded.as_ref().map_or(0, |l| l.pages.len());
                 if count > 0 {
-                    self.scroll_to_page((n - 1).min(count - 1));
+                    self.navigate(|v| v.scroll_to_page((n - 1).min(count - 1)));
                 }
             }
             ToolAction::GoToLabel(text) => self.go_to_label(&text),
@@ -4215,7 +4311,7 @@ impl Viewer {
                 } else {
                     big
                 };
-                let (pw, ph) = match p.rotate(&l.doc) {
+                let (pw, ph) = match shown_rotation(l, p) {
                     90 | 270 => (b.height(), b.width()),
                     _ => (b.width(), b.height()),
                 };
@@ -4267,7 +4363,7 @@ impl Viewer {
         let sizes: Vec<(u32, u32)> = l
             .pages
             .iter()
-            .map(|p| page_pixel_size(&l.doc, p, scale))
+            .map(|p| page_pixel_size_rotated(&l.doc, p, scale, l.view_rotation))
             .collect();
         let rows = self.rows(sizes.len());
         let paged = self.view_mode.is_paged();
@@ -4403,6 +4499,158 @@ impl Viewer {
         self.scroll_to_page(rows[next].0);
     }
 
+    // -----------------------------------------------------------------
+    // Historique de la vue et rotation de la vue.
+    // -----------------------------------------------------------------
+
+    /// La vue actuelle, pour l'historique : la page en haut de l'écran et la
+    /// part de sa hauteur déjà passée (voir `viewer/history.rs`).
+    ///
+    /// C'est la page du **haut** et non la « page courante » (la plus
+    /// visible) : la part passée se mesure depuis le bord de la vue, et une
+    /// page courante encore sous ce bord la ferait négative.
+    fn view_spot(&self) -> Option<Spot> {
+        self.loaded.as_ref()?;
+        let layout = self.layout();
+        let last = layout.len().checked_sub(1)?;
+        let page = if self.view_mode.is_paged() {
+            self.anchor.min(last)
+        } else {
+            layout
+                .iter()
+                .position(|b| b.visible && f64::from(b.y + b.h as i32) > self.scroll_y)
+                .unwrap_or(last)
+        };
+        let b = layout.get(page)?;
+        let frac = ((self.scroll_y - f64::from(b.y - GAP)) / f64::from(b.h.max(1))).clamp(0.0, 1.0);
+        Some(Spot { page, frac })
+    }
+
+    /// Ramène la vue à `s`. Un glissement en cours s'arrête : la vue saute.
+    fn restore_spot(&mut self, s: Spot) {
+        let count = self.loaded.as_ref().map_or(0, |l| l.pages.len());
+        if count == 0 {
+            return;
+        }
+        let page = s.page.min(count - 1);
+        self.scroll_to_page(page);
+        if let Some(b) = self.layout().get(page) {
+            self.scroll_y = f64::from(b.y - GAP) + s.frac * f64::from(b.h);
+        }
+        self.clamp_scroll();
+    }
+
+    /// Fait un **saut** : `jump` déplace la vue, et l'endroit quitté entre
+    /// dans l'historique de l'onglet — si la vue a vraiment bougé. Un lien
+    /// vers ce qu'on voit déjà n'y laisse rien : revenir en arrière ne
+    /// ramènerait nulle part.
+    fn navigate(&mut self, jump: impl FnOnce(&mut Self)) {
+        let before = self.view_spot();
+        let y = self.scroll_y;
+        jump(self);
+        let (Some(before), Some(after)) = (before, self.view_spot()) else {
+            return;
+        };
+        let moved = after.page != before.page
+            || (self.scroll_y - y).abs() > f64::from(self.view_height()) / 4.0;
+        if !moved {
+            return;
+        }
+        if let Some(l) = &mut self.loaded {
+            l.nav.record(before);
+            log_line(&format!(
+                "historique : vue retenue (page {}), saut vers la page {}",
+                before.page + 1,
+                after.page + 1
+            ));
+        }
+    }
+
+    /// Vrai quand rien ne prend tout le clavier et la souris — ni la
+    /// palette, ni une invite, ni la capture d'une signature — : la
+    /// navigation (Alt+←, Ctrl+Tab, Ctrl+F4, rotation de la vue, boutons
+    /// latéraux) a la main. Les questions, la fiche « Paramètres » et la
+    /// fenêtre « Protéger » prennent l'événement avant d'en arriver là.
+    fn navigation_keys_free(&self) -> bool {
+        self.prompt.is_none() && self.palette.is_none() && self.capture.is_none()
+    }
+
+    /// Vue précédente (Alt+←, bouton « précédent » de la souris) ou
+    /// suivante (Alt+→). Un saut sec, sans glissement : on sait où l'on va.
+    pub(super) fn history_step(&mut self, forward: bool) {
+        if self.showing_home() {
+            return;
+        }
+        let Some(here) = self.view_spot() else { return };
+        let target = self.loaded.as_mut().and_then(|l| {
+            if forward {
+                l.nav.forward(here)
+            } else {
+                l.nav.back(here)
+            }
+        });
+        let which = if forward { "suivante" } else { "précédente" };
+        let Some(spot) = target else {
+            log_line(&format!("historique : pas de vue {which}"));
+            self.set_notice(
+                lang::tr(if forward {
+                    "Aucune vue suivante"
+                } else {
+                    "Aucune vue précédente"
+                })
+                .into(),
+            );
+            return;
+        };
+        self.restore_spot(spot);
+        self.title_dirty = true;
+        log_line(&format!(
+            "historique : vue {which} → page {}",
+            spot.page + 1
+        ));
+    }
+
+    /// Tourne la **vue** d'un quart de tour (Ctrl+Maj+Plus, Ctrl+Maj+Moins) :
+    /// les pages s'affichent tournées, le document ne change pas. Rien à
+    /// enregistrer ni à annuler, et l'on garde sa page à l'écran.
+    ///
+    /// C'est ce qui sert à lire un tableau couché ou un plan scanné de
+    /// travers sans toucher au fichier — pivoter la page (R, Maj+R), elle,
+    /// écrit `/Rotate`.
+    pub(super) fn rotate_view(&mut self, degrees: i32) {
+        if self.showing_home() {
+            return;
+        }
+        // La saisie en cours a été mise en page pour l'orientation d'avant :
+        // elle part au document, le mode reste ouvert.
+        if self.edit.as_ref().is_some_and(|e| e.active.is_some()) {
+            self.close_active();
+        }
+        let spot = self.view_spot();
+        let Some(l) = &mut self.loaded else { return };
+        l.view_rotation = add_rotation(l.view_rotation, degrees);
+        // Les images rendues, vignettes comprises, montrent l'ancienne
+        // orientation.
+        l.cache.clear();
+        if let Some(w) = &mut l.worker {
+            w.set_view_rotation(l.view_rotation);
+        }
+        let now = l.view_rotation;
+        if let Some(spot) = spot {
+            self.restore_spot(spot);
+        }
+        self.title_dirty = true;
+        log_line(&format!("vue pivotée : {now}°"));
+        self.set_notice(if now == 0 {
+            lang::tr("Vue remise droite").into()
+        } else {
+            lang::trf(
+                "Vue pivotée de {}° (le document n'est pas modifié)",
+                &[&now.to_string()],
+            )
+        });
+    }
+
     /// Nombre d'onglets ouverts.
     fn tab_count(&self) -> usize {
         self.others.len() + usize::from(self.loaded.is_some())
@@ -4456,9 +4704,11 @@ impl Viewer {
         if index == self.active_tab || index >= self.tab_count() {
             return;
         }
-        let Some(current) = self.loaded.take() else {
+        let spot = self.view_spot();
+        let Some(mut current) = self.loaded.take() else {
             return;
         };
+        current.resume = spot;
         let at = self.active_tab.min(self.others.len());
         self.others.insert(at, current);
         // `index` désigne une position dans la liste complète, qui est
@@ -4466,6 +4716,16 @@ impl Viewer {
         self.loaded = Some(self.others.remove(index));
         self.active_tab = index;
         self.reset_view_state();
+        self.resume_view();
+    }
+
+    /// Retrouve la vue que l'onglet actif avait quand on l'a quitté. Passer
+    /// d'un onglet à l'autre ramenait chacun à sa première page, comme si on
+    /// venait de l'ouvrir.
+    fn resume_view(&mut self) {
+        if let Some(spot) = self.loaded.as_mut().and_then(|l| l.resume.take()) {
+            self.restore_spot(spot);
+        }
     }
 
     /// Ferme un onglet (en proposant d'enregistrer s'il a des modifications).
@@ -4512,20 +4772,7 @@ impl Viewer {
         if index >= self.tab_count() {
             return;
         }
-        if index == self.active_tab {
-            self.edit = None;
-            self.annot_tool = None;
-            self.loaded = None;
-            if self.others.is_empty() {
-                self.active_tab = 0;
-                self.reset_view_state();
-                self.title_dirty = true;
-                return;
-            }
-            let next = self.active_tab.min(self.others.len() - 1);
-            self.loaded = Some(self.others.remove(next));
-            self.active_tab = next;
-        } else {
+        if index != self.active_tab {
             // Position dans `others` : l'onglet actif n'y est pas encore.
             let at = if index > self.active_tab {
                 index - 1
@@ -4542,7 +4789,19 @@ impl Viewer {
             self.title_dirty = true;
             return;
         }
+        self.edit = None;
+        self.annot_tool = None;
+        self.loaded = None;
+        if self.others.is_empty() {
+            self.active_tab = 0;
+        } else {
+            let next = self.active_tab.min(self.others.len() - 1);
+            self.loaded = Some(self.others.remove(next));
+            self.active_tab = next;
+        }
         self.reset_view_state();
+        // L'onglet qui prend la place retrouve sa vue.
+        self.resume_view();
         self.title_dirty = true;
     }
 
@@ -4564,6 +4823,9 @@ impl Viewer {
     fn reset_view_state(&mut self) {
         // La fenêtre « Protéger » visait l'ancien document actif.
         self.protect = None;
+        // Le message passager aussi : « Vue pivotée de 90° » restait affiché
+        // sur l'accueil, ou sous le document voisin, qui n'est pas tourné.
+        self.notice = None;
         self.scroll_x = 0.0;
         self.scroll_y = 0.0;
         self.anchor = 0;
@@ -4961,7 +5223,13 @@ impl Viewer {
         let (ox, oy) = self.page_screen(&layout, page)?;
         let PageBox { w, h, .. } = *layout.get(page)?;
         let p = l.pages.get(page)?;
-        let m = base_matrix(&p.crop_box(&l.doc), self.scale(), p.rotate(&l.doc), w, h);
+        let m = base_matrix(
+            &p.crop_box(&l.doc),
+            self.scale(),
+            shown_rotation(l, p),
+            w,
+            h,
+        );
         let a = m.apply(Point::new(rect.x0, rect.y0));
         let b = m.apply(Point::new(rect.x1, rect.y1));
         let (x0, x1) = (a.x.min(b.x), a.x.max(b.x));
@@ -5790,7 +6058,7 @@ impl Viewer {
         let matrix = base_matrix(
             &page.crop_box(&loaded.doc),
             self.scale(),
-            page.rotate(&loaded.doc),
+            shown_rotation(loaded, page),
             area.w,
             area.h,
         )
@@ -5923,7 +6191,7 @@ impl Viewer {
                 background: Some(Color::WHITE),
                 ..RenderOptions::default()
             };
-            let bitmap = render_page(&l.doc, page, scale, &options).bitmap;
+            let bitmap = render_page_rotated(&l.doc, page, scale, l.view_rotation, &options).bitmap;
             l.cache.insert((placed.0, key), bitmap);
         }
     }
@@ -6385,7 +6653,8 @@ impl Viewer {
                 }
                 // Sans fil de rendu : rendu direct.
                 let start = std::time::Instant::now();
-                let b = render_page(&l.doc, &l.pages[i], scale, &options).bitmap;
+                let b = render_page_rotated(&l.doc, &l.pages[i], scale, l.view_rotation, &options)
+                    .bitmap;
                 log_line(&format!(
                     "rendu direct : page {} en {:.0} ms",
                     i + 1,
@@ -6619,6 +6888,34 @@ impl Viewer {
                     self.palette = None;
                 }
             }
+            // La navigation vaut quelle que soit la zone qui tient le clavier
+            // — la carte de recherche, la barre d'outils, le panneau, un bloc
+            // de texte en cours de saisie — : ces raccourcis y étaient
+            // avalés, Ctrl+Tab ne changeait pas d'onglet recherche ouverte.
+            // Seules les fenêtres qui prennent tout les arrêtent.
+            Event::Key(k @ (Key::Left | Key::Right), m)
+                if m.alt && !m.ctrl && self.navigation_keys_free() =>
+            {
+                self.history_step(k == Key::Right);
+            }
+            Event::Key(k @ (Key::Plus | Key::Minus), m)
+                if m.ctrl && m.shift && self.navigation_keys_free() =>
+            {
+                self.rotate_view(if k == Key::Plus { 90 } else { -90 });
+            }
+            Event::Key(Key::Tab, m) if m.ctrl && self.navigation_keys_free() => {
+                self.cycle_tab(!m.shift);
+            }
+            // Ctrl+F4 ferme l'onglet, comme Ctrl+W.
+            Event::Key(Key::F(4), m) if m.ctrl && self.navigation_keys_free() => {
+                let active = self.active_tab;
+                self.close_tab(active, window);
+            }
+            Event::Nav { forward } => {
+                if self.navigation_keys_free() {
+                    self.history_step(forward);
+                }
+            }
             // Un sélecteur de la barre « Modifier » déroulé prend le clavier :
             // flèches et Entrée dans la liste des polices, frappe dans sa
             // recherche ou dans le code d'une couleur, Échap pour refermer.
@@ -6689,7 +6986,7 @@ impl Viewer {
             }
             // Les touches de disposition valent partout : sinon la zone qui
             // tient le focus les avalerait et on ne pourrait plus en sortir.
-            Event::Key(key, m) if is_global_key(key) => self.key(key, m, window),
+            Event::Key(key, m) if is_global_key(key, m) => self.key(key, m, window),
             Event::Key(key, m) if self.region == Region::Toolbar && !self.toolbar.has_focus() => {
                 self.toolbar_key(key, m, window);
             }
@@ -6796,8 +7093,11 @@ impl Viewer {
                             let info = self.toolbar_info();
                             self.toolbar.focus_page(&info);
                         }
-                        '+' | '=' => self.zoom_step(1),
-                        '-' => self.zoom_step(-1),
+                        // Avec Maj, c'est la rotation de la vue : la touche
+                        // l'a déjà faite (Key::Plus, Key::Minus), son
+                        // caractère ne doit pas zoomer en plus.
+                        '+' | '=' if !m.shift => self.zoom_step(1),
+                        '-' if !m.shift => self.zoom_step(-1),
                         '0' => self.set_fit(Fit::Automatic),
                         _ => {}
                     }
@@ -7406,8 +7706,9 @@ impl Viewer {
             Key::F(5) => self.toggle_reading(window),
             Key::F(6) => self.cycle_region(!m.shift, window),
             Key::F(11) => self.toggle_fullscreen(window),
-            Key::Tab if m.ctrl => self.cycle_tab(!m.shift),
-            Key::Tab => self.focus_next_field(!m.shift),
+            // Ctrl+Tab change d'onglet ; il est pris plus tôt, quelle que
+            // soit la zone (voir `handle_event`).
+            Key::Tab if !m.ctrl => self.focus_next_field(!m.shift),
             Key::Enter => self.activate_focused_field(),
             Key::Delete if m.ctrl => self.delete_current(),
             Key::Down => self.glide_by(70.0),
@@ -7430,23 +7731,29 @@ impl Viewer {
                     self.glide_by(-page_h * 0.9);
                 }
             }
-            Key::Home => {
-                if self.view_mode.is_paged() {
-                    self.scroll_to_page(0);
+            // Origine et Fin sont des sauts, comme dans Acrobat : Alt+← ramène
+            // là où l'on était.
+            Key::Home => self.navigate(|v| {
+                if v.view_mode.is_paged() {
+                    v.scroll_to_page(0);
                 } else {
-                    self.scroll_y = 0.0;
+                    v.scroll_y = 0.0;
+                    v.clamp_scroll();
                 }
-            }
+            }),
             Key::End => {
                 let last = self
                     .loaded
                     .as_ref()
                     .map_or(0, |l| l.pages.len().saturating_sub(1));
-                if self.view_mode.is_paged() {
-                    self.scroll_to_page(last);
-                } else {
-                    self.scroll_y = f64::MAX / 4.0;
-                }
+                self.navigate(|v| {
+                    if v.view_mode.is_paged() {
+                        v.scroll_to_page(last);
+                    } else {
+                        v.scroll_y = f64::MAX / 4.0;
+                        v.clamp_scroll();
+                    }
+                });
             }
             Key::Escape => {
                 if self.media.is_some() {

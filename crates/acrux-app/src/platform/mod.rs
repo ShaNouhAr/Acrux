@@ -80,6 +80,12 @@ pub enum Key {
     /// Touche « menu contextuel » du clavier, entre AltGr et Ctrl droit :
     /// elle ouvre le menu du clic droit là où l'on travaille.
     ContextMenu,
+    /// « + » de la rangée principale ou du pavé numérique, quelle que soit
+    /// la disposition du clavier (Ctrl+Maj+Plus : tourner la vue).
+    Plus,
+    /// « - » de la rangée principale ou du pavé numérique, quelle que soit
+    /// la disposition du clavier — en AZERTY, la touche du 6.
+    Minus,
     /// Autre touche (code virtuel de la plateforme).
     Other(u32),
 }
@@ -196,6 +202,17 @@ pub enum Event {
     DpiChanged(f32),
     /// Réveil demandé par un autre fil via [`Waker::wake`] (résultat prêt).
     Wake,
+    /// Vue précédente ou suivante : les boutons latéraux de la souris (4 et
+    /// 5) ou les touches « Précédent » et « Suivant » d'un clavier
+    /// multimédia.
+    ///
+    /// Un événement à part, et non un [`MouseButton`] de plus : tout ce qui
+    /// prend `MouseDown` (outils, capture de signature, cartes) le prendrait
+    /// pour un clic.
+    Nav {
+        /// Vers la vue suivante (bouton 5) plutôt que la précédente.
+        forward: bool,
+    },
     /// Demande de fermeture.
     Close,
 }

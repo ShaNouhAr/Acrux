@@ -279,6 +279,10 @@ const WM_RBUTTONUP: UINT = 0x0205;
 const WM_MBUTTONDOWN: UINT = 0x0207;
 const WM_MBUTTONUP: UINT = 0x0208;
 const WM_MOUSEWHEEL: UINT = 0x020A;
+const WM_XBUTTONDOWN: UINT = 0x020B;
+const WM_XBUTTONUP: UINT = 0x020C;
+const WM_XBUTTONDBLCLK: UINT = 0x020D;
+const WM_APPCOMMAND: UINT = 0x0319;
 const WM_DROPFILES: UINT = 0x0233;
 const WM_DPICHANGED: UINT = 0x02E0;
 /// Message privé (`WM_APP + 1`) envoyé par les fils de travail pour réveiller la fenêtre.
@@ -286,6 +290,13 @@ const WM_APP_WAKE: UINT = 0x8000 + 1;
 const VK_SHIFT: i32 = 0x10;
 const VK_CONTROL: i32 = 0x11;
 const VK_MENU: i32 = 0x12;
+/// Touches « Précédent » et « Suivant » d'un clavier multimédia.
+const VK_BROWSER_BACK: WPARAM = 0xA6;
+const VK_BROWSER_FORWARD: WPARAM = 0xA7;
+/// Bit 29 du `lParam` d'une touche : Alt était enfoncée (« context code »).
+const KEY_ALT_DOWN: LPARAM = 1 << 29;
+/// `MapVirtualKeyW` : le caractère qu'écrit une touche, sans modificateur.
+const MAPVK_VK_TO_CHAR: UINT = 2;
 const MK_LBUTTON: WPARAM = 0x0001;
 
 #[repr(C)]
@@ -346,6 +357,7 @@ extern "system" {
     fn MonitorFromWindow(hwnd: HWND, flags: DWORD) -> *mut c_void;
     fn GetMonitorInfoW(monitor: *mut c_void, info: *mut MONITORINFO) -> BOOL;
     fn GetKeyState(key: i32) -> i16;
+    fn MapVirtualKeyW(code: UINT, map_type: UINT) -> UINT;
     fn MessageBoxW(hwnd: HWND, text: *const u16, caption: *const u16, kind: UINT) -> i32;
     fn SetProcessDpiAwarenessContext(context: isize) -> BOOL;
     fn GetDpiForWindow(hwnd: HWND) -> UINT;
@@ -1252,6 +1264,30 @@ fn modifiers() -> Modifiers {
 }
 
 fn key_from_vk(vk: u32) -> Key {
+    match key_from_table(vk) {
+        Key::Other(code) => typed_sign(code).unwrap_or(Key::Other(code)),
+        key => key,
+    }
+}
+
+/// « + » ou « - » d'une touche que son code virtuel ne désigne pas comme
+/// tels : en AZERTY, le « - » est sur la touche du 6. On demande à la
+/// disposition active ce que la touche écrit sans modificateur ; c'est ce
+/// qui rend Ctrl+Maj+Moins possible sur tous les claviers.
+fn typed_sign(vk: u32) -> Option<Key> {
+    // SAFETY : MapVirtualKeyW n'a pas de précondition ; un code sans
+    // caractère rend 0. Le bit de poids fort marque une touche morte.
+    let code = unsafe { MapVirtualKeyW(vk, MAPVK_VK_TO_CHAR) } & 0x7FFF_FFFF;
+    match char::from_u32(code)? {
+        '-' => Some(Key::Minus),
+        '+' | '=' => Some(Key::Plus),
+        _ => None,
+    }
+}
+
+/// Touches reconnues à leur seul code virtuel, le même sur tous les
+/// claviers.
+fn key_from_table(vk: u32) -> Key {
     match vk {
         0x21 => Key::PageUp,
         0x22 => Key::PageDown,
@@ -1270,6 +1306,10 @@ fn key_from_vk(vk: u32) -> Key {
         0x70..=0x7B => Key::F((vk - 0x70 + 1) as u8),
         // VK_APPS : la touche « menu » du clavier.
         0x5D => Key::ContextMenu,
+        // VK_ADD et VK_OEM_PLUS : « + » du pavé et de la rangée principale.
+        0x6B | 0xBB => Key::Plus,
+        // VK_SUBTRACT et VK_OEM_MINUS.
+        0x6D | 0xBD => Key::Minus,
         other => Key::Other(other),
     }
 }
@@ -1618,6 +1658,17 @@ fn handle_message(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRES
             paint(state);
             0
         }
+        // Les touches « Précédent » et « Suivant » d'un clavier multimédia
+        // font ce que font les boutons latéraux de la souris.
+        WM_KEYDOWN if wparam == VK_BROWSER_BACK || wparam == VK_BROWSER_FORWARD => {
+            deliver(
+                state,
+                Event::Nav {
+                    forward: wparam == VK_BROWSER_FORWARD,
+                },
+            );
+            0
+        }
         WM_KEYDOWN => {
             note_simulated(wparam as u32, true);
             deliver(state, Event::Key(key_from_vk(wparam as u32), modifiers()));
@@ -1638,6 +1689,23 @@ fn handle_message(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRES
         // Son relâchement ne doit pas, lui non plus, activer la barre de
         // menus que cette fenêtre n'a pas.
         WM_SYSKEYUP if wparam == 0x79 && modifiers().shift => 0,
+        // Alt+← et Alt+→ : vue précédente et suivante. Alt fait arriver la
+        // touche en message « système », que le reste du code ne voit pas.
+        // Alt se lit dans le bit 29, qui vaut aussi pour le mode invisible,
+        // où GetKeyState ne voit rien. Les autres combinaisons (Alt+F4,
+        // Alt+Espace, Alt seule) gardent leur sens pour Windows.
+        WM_SYSKEYDOWN if (wparam == 0x25 || wparam == 0x27) && lparam & KEY_ALT_DOWN != 0 => {
+            let m = Modifiers {
+                alt: true,
+                ..modifiers()
+            };
+            deliver(state, Event::Key(key_from_vk(wparam as u32), m));
+            // Windows doit quand même voir passer la touche : sans cela, il
+            // croit Alt pressée seule, et la relâcher ouvrirait le menu
+            // système de la fenêtre, qui prendrait les flèches suivantes.
+            // SAFETY : voir wndproc.
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
         WM_CHAR => {
             // Ctrl+lettre arrive comme caractère de contrôle 1..=26 : on le
             // normalise en lettre minuscule avec le modificateur Ctrl, pour que
@@ -1684,6 +1752,43 @@ fn handle_message(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> LRES
                 },
             );
             0
+        }
+        // Boutons latéraux de la souris (4 : précédent, 5 : suivant). Deux
+        // appuis rapprochés arrivent en double-clic : c'est encore un pas
+        // de plus ; le relâchement ne fait rien. Rendre 1 empêche Windows
+        // d'en fabriquer en plus un WM_APPCOMMAND, qui ferait reculer deux
+        // fois.
+        WM_XBUTTONDOWN | WM_XBUTTONDBLCLK | WM_XBUTTONUP => {
+            let button = (wparam >> 16) & 0xFFFF;
+            if msg != WM_XBUTTONUP && (button == 1 || button == 2) {
+                deliver(
+                    state,
+                    Event::Nav {
+                        forward: button == 2,
+                    },
+                );
+            }
+            1
+        }
+        // « Précédent » et « Suivant » venus d'un pilote de souris ou d'un
+        // clavier qui parle en commandes d'application.
+        WM_APPCOMMAND => {
+            // GET_APPCOMMAND_LPARAM : le mot fort, sans les bits du périphérique.
+            let command = ((lparam >> 16) & 0x0FFF) as u32;
+            match command {
+                // APPCOMMAND_BROWSER_BACKWARD, APPCOMMAND_BROWSER_FORWARD.
+                1 | 2 => {
+                    deliver(
+                        state,
+                        Event::Nav {
+                            forward: command == 2,
+                        },
+                    );
+                    1
+                }
+                // SAFETY : voir wndproc.
+                _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+            }
         }
         WM_SETCURSOR if (lparam & 0xFFFF) == HTCLIENT => {
             // SAFETY : pointeur chargé à la création de la fenêtre.
@@ -2068,4 +2173,21 @@ pub fn run(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plus_et_moins_du_pave_et_de_la_rangee_principale() {
+        assert_eq!(key_from_table(0x6B), Key::Plus, "VK_ADD");
+        assert_eq!(key_from_table(0xBB), Key::Plus, "VK_OEM_PLUS");
+        assert_eq!(key_from_table(0x6D), Key::Minus, "VK_SUBTRACT");
+        assert_eq!(key_from_table(0xBD), Key::Minus, "VK_OEM_MINUS");
+        // Le reste de la table ne bouge pas.
+        assert_eq!(key_from_table(0x25), Key::Left);
+        assert_eq!(key_from_table(0x73), Key::F(4));
+        assert_eq!(key_from_table(0x41), Key::Other(0x41));
+    }
 }

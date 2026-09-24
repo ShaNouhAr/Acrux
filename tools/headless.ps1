@@ -259,3 +259,35 @@ function Chord($letter, [switch]$Shift) {
     [W.HL]::PostMessage($script:Hwnd, 0x0101, [IntPtr]0x11, $script:KeyUp) | Out-Null
     Start-Sleep -Milliseconds 400
 }
+
+# Alt+touche (Alt+fleche gauche : 0x25, Alt+fleche droite : 0x27). Alt fait
+# arriver la touche en WM_SYSKEYDOWN ; le bit 29 de lParam dit qu'Alt est
+# enfoncee, et c'est lui que lit l'application (GetKeyState ne voit rien en
+# mode invisible).
+function AltKey($vk) {
+    [W.HL]::PostMessage($script:Hwnd, 0x0104, [IntPtr]$vk, [IntPtr]0x20000001) | Out-Null
+    Start-Sleep -Milliseconds 90
+    [W.HL]::PostMessage($script:Hwnd, 0x0105, [IntPtr]$vk, [IntPtr]0xE0000001L) | Out-Null
+    Start-Sleep -Milliseconds 350
+}
+
+# Bouton lateral de la souris en (x, y) : 1 = precedent (bouton 4),
+# 2 = suivant (bouton 5). Le numero du bouton est dans le mot fort de wParam.
+function XButton($n, $x, $y) {
+    [W.HL]::PostMessage($script:Hwnd, 0x020B, [IntPtr]($n -shl 16), (LParam $x $y)) | Out-Null
+    Start-Sleep -Milliseconds 90
+    [W.HL]::PostMessage($script:Hwnd, 0x020C, [IntPtr]($n -shl 16), (LParam $x $y)) | Out-Null
+    Start-Sleep -Milliseconds 350
+}
+
+# Touche avec Ctrl et Maj enfoncees : Ctrl+Maj+Plus (0xBB) et Ctrl+Maj+Moins
+# (0xBD) tournent la vue, Ctrl+Maj+Tab (0x09) passe a l'onglet precedent.
+function CtrlShiftKey($vk) {
+    [W.HL]::PostMessage($script:Hwnd, 0x0100, [IntPtr]0x11, [IntPtr]1) | Out-Null
+    [W.HL]::PostMessage($script:Hwnd, 0x0100, [IntPtr]0x10, [IntPtr]1) | Out-Null
+    Start-Sleep -Milliseconds 60
+    Key $vk
+    [W.HL]::PostMessage($script:Hwnd, 0x0101, [IntPtr]0x10, $script:KeyUp) | Out-Null
+    [W.HL]::PostMessage($script:Hwnd, 0x0101, [IntPtr]0x11, $script:KeyUp) | Out-Null
+    Start-Sleep -Milliseconds 200
+}
