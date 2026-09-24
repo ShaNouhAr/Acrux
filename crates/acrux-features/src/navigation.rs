@@ -203,6 +203,39 @@ fn explicit_destination(doc: &Document, a: &[Object], pages: &PageIndex) -> Opti
     Some(Destination { page, view })
 }
 
+/// La destination explicite (`[page /XYZ …]`, telle qu'écrite dans `doc`)
+/// que désigne une destination **nommée** ; `None` pour une destination déjà
+/// explicite, ou un nom que le document ne connaît pas.
+///
+/// C'est ce qui permet de copier un lien d'un document dans un autre : son
+/// nom ne voudrait plus rien dire dans le document d'arrivée, dont l'arbre
+/// `/Names /Dests` est un autre — ou désignerait, dans une fusion d'un
+/// document avec lui-même, la page de la première copie.
+#[must_use]
+pub fn named_to_explicit(doc: &Document, dest: &Object) -> Option<Object> {
+    let resolved = doc.resolve(dest).ok()?;
+    let key = match &*resolved {
+        Object::Name(n) => n.0.clone(),
+        Object::String(s) => s.clone(),
+        _ => return None,
+    };
+    let mut target = named_destination(doc, &key)?;
+    // Un nom mène à un tableau, ou à un dictionnaire dont `/D` est le
+    // tableau (§12.3.2.4) ; quelques détours au plus.
+    for _ in 0..4 {
+        let next = {
+            let value = doc.resolve(&target).ok()?;
+            match &*value {
+                Object::Array(_) => return Some((*value).clone()),
+                Object::Dict(d) => d.get(&Name::new("D"))?.clone(),
+                _ => return None,
+            }
+        };
+        target = next;
+    }
+    None
+}
+
 /// Valeur d'une destination nommée : `/Dests` du catalogue, puis l'arbre
 /// de noms `/Names /Dests`.
 fn named_destination(doc: &Document, key: &[u8]) -> Option<Object> {

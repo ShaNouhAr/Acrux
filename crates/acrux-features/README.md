@@ -209,6 +209,8 @@ qu'il faut pour organiser un document comme dans Acrobat :
 | `duplicate_block(count, bloc)` | l'ordre qui duplique un bloc, ses copies juste après sa dernière page |
 | `duplicate_page_dict` | la copie d'une page, qui partage contenus et ressources mais a **ses propres annotations** (`/P` vers la copie, `/Popup`, `/Parent` et `/IRT` reportés, widgets omis) : un commentaire ne vit plus sur deux pages |
 | `insert_blank_page(doc, at, format, rotation)` | une page vierge, au format et à la rotation de la page voisine |
+| `insert_pages_with(dst, src, pages, at, options)`, `merge_with(docs, options)` | l'insertion et la fusion, avec `InsertOptions { forms }` : les **champs de formulaire** suivent leurs pages (voir plus bas) |
+| `extraction_allowed(doc)` | les permissions permettent-elles d'emporter ses pages ailleurs (copie permise, ou mot de passe des permissions) |
 | `replace_pages(dst, src, paires)` | le **contenu** de pages remplacé par celui d'un autre fichier : la page garde son objet, donc ses signets, liens, étiquettes et commentaires ; les boîtes héritées ne recadrent pas la nouvelle page |
 | `split::plan_parts` | le découpage : tranches de N pages, un fichier par signet de premier niveau, taille maximale (estimation par l'union des objets, vérifiée par une vraie écriture), groupes donnés |
 | `split::write_parts` | écrit chaque partie et la passe à un puits, sans rien garder d'une partie à l'autre |
@@ -219,8 +221,23 @@ références : un lien « voir page 40 » embarquait la page 40 entière, images
 comprises, comme objet orphelin. L'`Importer` sait maintenant où vont les
 pages copiées (`map_ref`) et lesquelles restent derrière (`drop_ref`) : un
 lien vers une page extraite vise sa copie, un lien vers une page laissée de
-côté devient `null`. L'extraction garde aussi les calques
-(`/OCProperties`), sans lesquels un calque masqué réapparaissait.
+côté devient `null`, comme les annotations des pages laissées derrière.
+Une destination **nommée** devient explicite à la copie
+(`navigation::named_to_explicit`) : son nom ne dirait rien dans le document
+d'arrivée, ou y désignerait la première copie d'un document fusionné avec
+lui-même. L'extraction garde aussi les calques (`/OCProperties`), sans
+lesquels un calque masqué réapparaissait.
+
+Avec `InsertOptions::forms` (l'insertion et la combinaison de
+l'application, `acr insert`, `acr combine`), chaque widget garde son
+`/Parent` et les champs rejoignent le formulaire de la destination
+(`forms::merge_acroform`) : les widgets restés sur des pages non copiées
+sont retirés des `/Kids`, un champ racine dont le nom existe déjà est
+renommé `nom_2` (deux copies d'un formulaire ne partagent plus leurs
+valeurs), une signature perd sa valeur et son apparence, les polices de
+`/DR`, `/DA`, `/NeedAppearances` et l'ordre de calcul `/CO` suivent. `merge`
+et `insert_pages_from` gardent leur comportement : `acr merge` ne fusionne
+pas les formulaires.
 
 Le test `tests/pages_corpus.rs` fractionne chaque fichier du corpus page
 par page, recombine les parties et compare le rendu **au pixel près**.

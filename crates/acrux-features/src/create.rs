@@ -10,7 +10,7 @@
 //! | [`from_text`] | du texte brut mis en page, paginé, aligné |
 //! | [`from_markdown`] | du Markdown : titres, styles, listes, tableaux, liens |
 //! | [`from_3d`] | un modèle 3D (U3D) posé sur une page, avec sa vue |
-//! | [`combine`] | plusieurs fichiers réunis, avec signets et sommaire |
+//! | [`combine`] | plusieurs fichiers réunis — PDF, images, textes —, avec signets, sommaire et formulaires |
 //!
 //! # Ce que les documents produits garantissent
 //!
@@ -51,7 +51,8 @@ mod wrap;
 use acrux_core::Result;
 use acrux_document::Document;
 
-pub use combine::{combine, CombineInput, CombineOptions, CombineSource};
+pub use crate::stamp::image::{image_format, is_supported as is_image};
+pub use combine::{combine, looks_like_pdf, CombineInput, CombineOptions, CombineSource};
 pub use images::{from_images, Fit, ImageInput, ImageLayout};
 pub use markdown::from_markdown;
 pub use paper::{Margins, Orientation, PageSetup, PageSize};

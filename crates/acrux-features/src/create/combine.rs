@@ -1,9 +1,18 @@
 //! Combinaison de fichiers en un seul document (inventaire Acrobat §1,
 //! « Combiner des fichiers »).
 //!
-//! Chaque entrée — un PDF, une image ou du texte — est d'abord convertie en
-//! document par les créateurs de ce module, puis toutes les pages sont
-//! réunies par [`crate::pages::merge`].
+//! Chaque entrée — un PDF, une image (PNG, JPEG, BMP, GIF, TIFF) ou du
+//! texte — est d'abord convertie en document par les créateurs de ce module,
+//! puis toutes les pages sont réunies par [`crate::pages::merge_with`]. La
+//! nature d'un fichier se lit dans ses octets, pas dans son nom : un PDF se
+//! reconnaît à son en-tête `%PDF-` (tolérée, comme à la lecture, dans les
+//! 1024 premiers octets), une image à sa signature
+//! ([`crate::create::image_format`]) ; le reste est du texte, ou du Markdown
+//! pour un `.md`.
+//!
+//! Les **formulaires** des PDF combinés sont gardés par défaut, comme dans
+//! Acrobat (voir [`crate::pages::InsertOptions`] : un champ dont le nom
+//! existe déjà est renommé, une signature ne survit pas à la combinaison).
 //!
 //! Trois garnitures facultatives :
 //!
@@ -27,6 +36,8 @@ use super::builder::{write_outlines, Pen};
 use super::images::{from_images, ImageInput, ImageLayout};
 use super::markdown::from_markdown;
 use super::text::{from_text, Flow, TextLayout};
+use crate::pages::InsertOptions;
+use crate::stamp::image::is_supported as is_image;
 use crate::stamp::metrics::StandardFont;
 use crate::stamp::{add_header_footer, HeaderFooterOptions, NumberFormat};
 
@@ -36,7 +47,7 @@ pub enum CombineSource {
     /// Un document PDF, repris tel quel.
     Pdf(Vec<u8>),
     /// Une image (PNG, JPEG, BMP, GIF, TIFF), mise en page par
-    /// [`from_images`].
+    /// [`from_images`] ; un TIFF multipage donne une page par feuille.
     Image(Vec<u8>),
     /// Du texte brut, mis en page par [`from_text`].
     Text(String),
@@ -52,15 +63,36 @@ pub struct CombineInput {
     pub name: String,
     /// Contenu.
     pub source: CombineSource,
+    /// Mot de passe d'un PDF protégé : sans lui, un PDF qui en demande un
+    /// est refusé, nommément.
+    pub password: Option<Vec<u8>>,
+}
+
+/// Vrai si ces octets sont ceux d'un PDF : `%PDF-` dans les 1024 premiers
+/// octets, la tolérance du lecteur (ISO 32000-2 §7.5.2, et Acrobat, qui
+/// accepte des octets parasites avant l'en-tête).
+#[must_use]
+pub fn looks_like_pdf(data: &[u8]) -> bool {
+    data[..data.len().min(1024)]
+        .windows(5)
+        .any(|w| w == b"%PDF-")
 }
 
 impl CombineInput {
-    /// Lit un fichier et devine sa nature : d'abord ses octets de tête
-    /// (`%PDF`, signature PNG, `FF D8` d'un JPEG), puis son extension
-    /// (`.md` pour du Markdown, tout le reste pour du texte).
+    /// Entrée sans mot de passe.
+    #[must_use]
+    pub fn new(name: impl Into<String>, source: CombineSource) -> Self {
+        CombineInput {
+            name: name.into(),
+            source,
+            password: None,
+        }
+    }
+
+    /// Lit un fichier et devine sa nature (voir [`CombineInput::from_bytes`]).
     ///
     /// # Errors
-    /// Fichier illisible, ou fichier texte qui n'est pas de l'UTF-8.
+    /// Fichier illisible, ou d'un format inconnu.
     pub fn from_path(path: impl AsRef<std::path::Path>) -> Result<Self> {
         let path = path.as_ref();
         let data =
@@ -70,31 +102,48 @@ impl CombineInput {
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
         let extension = path
             .extension()
-            .map(|e| e.to_string_lossy().to_ascii_lowercase())
+            .map(|e| e.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let source = if data.starts_with(b"%PDF") {
+        Self::from_bytes(name, data, &extension).map_err(|e| match e {
+            Error::Unsupported(m) => Error::Unsupported(format!("{} : {m}", path.display())),
+            other => other,
+        })
+    }
+
+    /// Devine la nature d'octets déjà lus : d'abord leur signature (`%PDF-`
+    /// dans les 1024 premiers octets, puis celle d'une image), ensuite
+    /// l'extension (`md` ou `markdown` pour du Markdown, tout le reste pour
+    /// du texte). C'est ce que fait l'application, qui a déjà les octets.
+    ///
+    /// # Errors
+    /// Ni PDF, ni image connue, ni texte UTF-8.
+    pub fn from_bytes(name: String, data: Vec<u8>, extension: &str) -> Result<Self> {
+        let source = if looks_like_pdf(&data) {
             CombineSource::Pdf(data)
-        } else if data.starts_with(&[0x89, b'P', b'N', b'G']) || data.starts_with(&[0xFF, 0xD8]) {
+        } else if is_image(&data) {
             CombineSource::Image(data)
         } else {
             let text = String::from_utf8(data).map_err(|_| {
-                Error::Unsupported(format!(
-                    "{} : format inconnu (ni PDF, ni image, ni texte UTF-8)",
-                    path.display()
-                ))
+                Error::Unsupported(
+                    "format inconnu (ni PDF, ni image PNG/JPEG/BMP/GIF/TIFF, ni texte UTF-8)"
+                        .into(),
+                )
             })?;
-            if extension == "md" || extension == "markdown" {
+            if extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown") {
                 CombineSource::Markdown(text)
             } else {
                 CombineSource::Text(text)
             }
         };
-        Ok(CombineInput { name, source })
+        Ok(CombineInput::new(name, source))
     }
 }
 
 /// Réglages de la combinaison.
 #[derive(Debug, Clone, PartialEq)]
+// Des garnitures indépendantes, cochées une à une — dans la fenêtre de
+// l'application comme par les options de `acr combine`.
+#[allow(clippy::struct_excessive_bools)]
 pub struct CombineOptions {
     /// Poser un signet par fichier, portant son nom.
     pub bookmarks: bool,
@@ -109,10 +158,15 @@ pub struct CombineOptions {
     /// Mise en page des entrées texte et Markdown ; c'est aussi elle qui
     /// règle le format et la police du sommaire.
     pub text_layout: TextLayout,
+    /// Garder les champs de formulaire des PDF combinés (vrai par défaut,
+    /// comme Acrobat) ; faux, leurs widgets restent dessinés mais ne sont
+    /// plus des champs.
+    pub keep_forms: bool,
 }
 
 impl Default for CombineOptions {
-    /// Signets par fichier, pas de sommaire, pas de numérotation.
+    /// Signets par fichier, formulaires gardés, pas de sommaire, pas de
+    /// numérotation.
     fn default() -> Self {
         CombineOptions {
             bookmarks: true,
@@ -121,6 +175,7 @@ impl Default for CombineOptions {
             page_numbers: false,
             image_layout: ImageLayout::default(),
             text_layout: TextLayout::default(),
+            keep_forms: true,
         }
     }
 }
@@ -144,8 +199,8 @@ struct Entry {
 /// Combine plusieurs fichiers en un document.
 ///
 /// # Errors
-/// Liste vide, entrée illisible (PDF corrompu, image d'un format inconnu),
-/// ou assemblage impossible.
+/// Liste vide, entrée illisible (PDF corrompu ou protégé sans son mot de
+/// passe, image d'un format inconnu), ou assemblage impossible.
 pub fn combine(inputs: &[CombineInput], options: &CombineOptions) -> Result<Document> {
     if inputs.is_empty() {
         return Err(Error::Corrupt("aucun fichier à combiner".into()));
@@ -174,7 +229,12 @@ pub fn combine(inputs: &[CombineInput], options: &CombineOptions) -> Result<Docu
         all.push(doc);
     }
     all.extend(parts.iter());
-    let merged = crate::pages::merge(&all)?;
+    let merged = crate::pages::merge_with(
+        &all,
+        &InsertOptions {
+            forms: options.keep_forms,
+        },
+    )?;
     let pages = collect_pages(&merged)?;
     let page_refs: Vec<ObjectRef> = pages.iter().filter_map(|p| p.reference).collect();
 
@@ -225,9 +285,36 @@ pub fn combine(inputs: &[CombineInput], options: &CombineOptions) -> Result<Docu
 }
 
 /// Convertit une entrée en document.
+///
+/// Un PDF protégé s'ouvre avec le mot de passe de l'entrée ; sans lui, ou
+/// avec un mauvais, il est refusé **par son nom** — dans une liste de vingt
+/// fichiers, « mot de passe incorrect » ne dirait pas lequel. Un PDF dont
+/// les permissions interdisent d'en extraire le contenu est refusé de même,
+/// sauf ouvert avec le mot de passe des permissions : combiner, c'est
+/// recopier ses pages ailleurs, où ces permissions ne vaudraient plus.
 fn convert(input: &CombineInput, options: &CombineOptions) -> Result<Document> {
     match &input.source {
-        CombineSource::Pdf(bytes) => Document::from_bytes(bytes.clone()),
+        CombineSource::Pdf(bytes) => {
+            let doc = Document::from_bytes(bytes.clone())?;
+            if let Some(password) = &input.password {
+                // Un mauvais mot de passe laisse le document fermé : c'est
+                // `needs_password`, juste après, qui le dit.
+                let _ = doc.authenticate(password);
+            }
+            if doc.needs_password() {
+                return Err(Error::Unsupported(format!(
+                    "« {} » est protégé par un mot de passe",
+                    input.name
+                )));
+            }
+            if !crate::pages::extraction_allowed(&doc) {
+                return Err(Error::Unsupported(format!(
+                    "les permissions de « {} » interdisent d'en extraire les pages",
+                    input.name
+                )));
+            }
+            Ok(doc)
+        }
         CombineSource::Image(bytes) => {
             let image = ImageInput {
                 data: bytes.clone(),
@@ -466,22 +553,13 @@ mod tests {
 
     fn inputs() -> Vec<CombineInput> {
         vec![
-            CombineInput {
-                name: "rapport.pdf".into(),
-                source: CombineSource::Pdf(pdf_of(2)),
-            },
-            CombineInput {
-                name: "photo.png".into(),
-                source: CombineSource::Image(png()),
-            },
-            CombineInput {
-                name: "notes.md".into(),
-                source: CombineSource::Markdown("# Notes\n\nDu texte.".into()),
-            },
-            CombineInput {
-                name: "brut.txt".into(),
-                source: CombineSource::Text("Une ligne.".into()),
-            },
+            CombineInput::new("rapport.pdf", CombineSource::Pdf(pdf_of(2))),
+            CombineInput::new("photo.png", CombineSource::Image(png())),
+            CombineInput::new(
+                "notes.md",
+                CombineSource::Markdown("# Notes\n\nDu texte.".into()),
+            ),
+            CombineInput::new("brut.txt", CombineSource::Text("Une ligne.".into())),
         ]
     }
 
@@ -578,9 +656,11 @@ mod tests {
     #[test]
     fn a_long_table_of_contents_takes_several_pages_and_stays_consistent() {
         let many: Vec<CombineInput> = (0..80)
-            .map(|i| CombineInput {
-                name: format!("fichier-{i:03}.txt"),
-                source: CombineSource::Text(format!("Contenu {i}")),
+            .map(|i| {
+                CombineInput::new(
+                    format!("fichier-{i:03}.txt"),
+                    CombineSource::Text(format!("Contenu {i}")),
+                )
             })
             .collect();
         let options = CombineOptions {
@@ -602,5 +682,130 @@ mod tests {
             total += page_links(&reread, page, &index).unwrap().len();
         }
         assert_eq!(total, 80);
+    }
+
+    /// Un fichier du corpus, lu en mémoire (jamais modifié).
+    fn corpus(dir: &str, name: &str) -> Vec<u8> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/corpus")
+            .join(dir)
+            .join(name);
+        std::fs::read(&path).unwrap_or_else(|e| panic!("{} : {e}", path.display()))
+    }
+
+    #[test]
+    fn from_bytes_recognises_every_image_format() {
+        for name in [
+            "motif.png",
+            "motif-24.bmp",
+            "damier-24.bmp",
+            "motif.gif",
+            "motif-lzw.tif",
+            "deux-pages.tif",
+        ] {
+            let input = CombineInput::from_bytes(name.into(), corpus("images", name), "").unwrap();
+            assert!(
+                matches!(input.source, CombineSource::Image(_)),
+                "{name} : {:?}",
+                std::mem::discriminant(&input.source)
+            );
+        }
+        // Le nom ne compte pas : un PNG nommé `.txt` reste une image.
+        let png = CombineInput::from_bytes("x.txt".into(), png(), "txt").unwrap();
+        assert!(matches!(png.source, CombineSource::Image(_)));
+        // Un texte qui commence comme un TIFF ou un BMP reste du texte.
+        for text in ["II faut lire", "BM : bilan mensuel"] {
+            let input = CombineInput::from_bytes("a.txt".into(), text.into(), "txt").unwrap();
+            assert_eq!(input.source, CombineSource::Text(text.into()));
+        }
+        let md = CombineInput::from_bytes("a.MD".into(), b"# Titre".to_vec(), "MD").unwrap();
+        assert!(matches!(md.source, CombineSource::Markdown(_)));
+        // Ni PDF, ni image, ni texte : le message dit ce qui est accepté.
+        let e = CombineInput::from_bytes("x.bin".into(), vec![0xFF, 0xFE, 0x00, 0x80], "bin")
+            .unwrap_err();
+        assert!(e.to_string().contains("PNG/JPEG/BMP/GIF/TIFF"), "{e}");
+    }
+
+    #[test]
+    fn a_pdf_with_leading_garbage_is_still_a_pdf() {
+        let mut data = vec![b'x'; 200];
+        data.extend_from_slice(&pdf_of(1));
+        let input = CombineInput::from_bytes("sale.pdf".into(), data, "pdf").unwrap();
+        assert!(matches!(input.source, CombineSource::Pdf(_)));
+        let doc = combine(&[input], &CombineOptions::default()).unwrap();
+        assert_eq!(collect_pages(&doc).unwrap().len(), 1);
+        // Au-delà de 1024 octets, ce n'est plus un en-tête.
+        let mut far = vec![b' '; 1100];
+        far.extend_from_slice(b"%PDF-1.7");
+        assert!(!looks_like_pdf(&far));
+    }
+
+    #[test]
+    fn combine_accepts_bmp_gif_and_a_multipage_tiff() {
+        let inputs: Vec<CombineInput> = ["damier-24.bmp", "motif.gif", "deux-pages.tif"]
+            .iter()
+            .map(|name| {
+                CombineInput::from_bytes((*name).into(), corpus("images", name), "").unwrap()
+            })
+            .collect();
+        let doc = combine(&inputs, &CombineOptions::default()).unwrap();
+        let reread = Document::from_bytes(doc.save_full().unwrap()).unwrap();
+        let pages = collect_pages(&reread).unwrap();
+        assert_eq!(pages.len(), 4, "1 + 1 + 2 : une page par feuille du TIFF");
+        let index = PageIndex::new(&pages);
+        let targets: Vec<Option<usize>> = outline(&reread, &index)
+            .unwrap()
+            .iter()
+            .map(target)
+            .collect();
+        assert_eq!(targets, [Some(0), Some(1), Some(2)]);
+    }
+
+    #[test]
+    fn keep_forms_decides_whether_the_fields_follow() {
+        let form = corpus("synthese", "formulaire-acroform-champs.pdf");
+        let alone = crate::forms::list_fields(&Document::from_bytes(form.clone()).unwrap())
+            .unwrap()
+            .len();
+        assert!(alone > 0);
+        let inputs = vec![
+            CombineInput::new("a.pdf", CombineSource::Pdf(form.clone())),
+            CombineInput::new("b.pdf", CombineSource::Pdf(form)),
+        ];
+        let kept = combine(&inputs, &CombineOptions::default()).unwrap();
+        let kept = Document::from_bytes(kept.save_full().unwrap()).unwrap();
+        assert_eq!(crate::forms::list_fields(&kept).unwrap().len(), 2 * alone);
+        let options = CombineOptions {
+            keep_forms: false,
+            ..CombineOptions::default()
+        };
+        let dropped = combine(&inputs, &options).unwrap();
+        assert!(!dropped
+            .catalog()
+            .unwrap()
+            .contains_key(&Name::new("AcroForm")));
+        assert!(crate::forms::list_fields(&dropped).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_protected_pdf_without_password_is_refused_by_name() {
+        let locked = corpus("synthese", "chiffre-aes256-r6-mdp-secret.pdf");
+        let mut input = CombineInput::from_bytes("coffre.pdf".into(), locked, "pdf").unwrap();
+        let e = combine(std::slice::from_ref(&input), &CombineOptions::default()).unwrap_err();
+        assert!(e.to_string().contains("« coffre.pdf »"), "{e}");
+        input.password = Some(b"mauvais".to_vec());
+        assert!(combine(std::slice::from_ref(&input), &CombineOptions::default()).is_err());
+        // Le mot de passe d'ouverture ouvre, mais ce fichier interdit la
+        // copie : ses pages ne partent pas ailleurs.
+        input.password = Some(b"secret".to_vec());
+        let e = combine(std::slice::from_ref(&input), &CombineOptions::default()).unwrap_err();
+        assert!(
+            e.to_string().contains("permissions de « coffre.pdf »"),
+            "{e}"
+        );
+        // Le mot de passe des permissions lève la restriction.
+        input.password = Some(b"chef".to_vec());
+        let doc = combine(&[input], &CombineOptions::default()).unwrap();
+        assert_eq!(collect_pages(&doc).unwrap().len(), 2);
     }
 }

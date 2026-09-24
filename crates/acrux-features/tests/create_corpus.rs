@@ -358,22 +358,10 @@ fn combining_every_kind_of_input_gives_a_sound_document() {
     .save_full()
     .unwrap();
     let inputs = vec![
-        CombineInput {
-            name: "vierge.pdf".into(),
-            source: CombineSource::Pdf(pdf),
-        },
-        CombineInput {
-            name: "photo.jpg".into(),
-            source: CombineSource::Image(jpeg(40, 30)),
-        },
-        CombineInput {
-            name: "notes.md".into(),
-            source: CombineSource::Markdown(MARKDOWN.into()),
-        },
-        CombineInput {
-            name: "brut.txt".into(),
-            source: CombineSource::Text(SAMPLE.into()),
-        },
+        CombineInput::new("vierge.pdf", CombineSource::Pdf(pdf)),
+        CombineInput::new("photo.jpg", CombineSource::Image(jpeg(40, 30))),
+        CombineInput::new("notes.md", CombineSource::Markdown(MARKDOWN.into())),
+        CombineInput::new("brut.txt", CombineSource::Text(SAMPLE.into())),
     ];
     let options = CombineOptions {
         bookmarks: true,
@@ -532,4 +520,133 @@ fn bmp_gif_et_tiff_donnent_un_document_sain() {
         check(&doc, name);
         renders_cleanly(&doc, name);
     }
+}
+
+// --- Combiner des fichiers du corpus ----------------------------------------
+
+/// Un fichier du corpus, lu en mémoire : les originaux ne sont jamais
+/// modifiés.
+fn corpus_bytes(dir: &str, name: &str) -> Vec<u8> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("tests")
+        .join("corpus")
+        .join(dir)
+        .join(name);
+    std::fs::read(&path).unwrap_or_else(|e| panic!("{} : {e}", path.display()))
+}
+
+/// Une entrée de combinaison reconnue à ses octets, comme dans
+/// l'application.
+fn input(dir: &str, name: &str) -> CombineInput {
+    CombineInput::from_bytes(name.into(), corpus_bytes(dir, name), "").unwrap()
+}
+
+/// Un formulaire, un GIF, un BMP et un TIFF : un document sain, avec les
+/// champs du formulaire, et deux formulaires identiques donnent deux jeux de
+/// champs distincts.
+#[test]
+fn combining_a_form_and_images_keeps_the_fields() {
+    use acrux_features::forms::{list_fields, set_field_value, FieldValue};
+    let form = "formulaire-acroform-champs.pdf";
+    let alone = list_fields(&Document::from_bytes(corpus_bytes("synthese", form)).unwrap())
+        .unwrap()
+        .len();
+    let inputs = vec![
+        input("synthese", form),
+        input("images", "motif.gif"),
+        input("images", "damier-24.bmp"),
+        input("images", "motif-lzw.tif"),
+    ];
+    for i in &inputs[1..] {
+        assert!(matches!(i.source, CombineSource::Image(_)), "{}", i.name);
+    }
+    let doc = combine(&inputs, &CombineOptions::default()).unwrap();
+    let reread = sound(&doc, "formulaire et images");
+    assert_eq!(collect_pages(&reread).unwrap().len(), 4);
+    assert_eq!(list_fields(&reread).unwrap().len(), alone);
+
+    // Le même formulaire deux fois : deux jeux de champs, le second renommé.
+    let twice = vec![input("synthese", form), input("synthese", form)];
+    let doc = combine(&twice, &CombineOptions::default()).unwrap();
+    let reread = sound(&doc, "formulaire deux fois");
+    let fields = list_fields(&reread).unwrap();
+    assert_eq!(fields.len(), 2 * alone);
+    let renamed = fields
+        .iter()
+        .find(|f| f.kind == acrux_features::forms::FieldType::Text && f.name.contains("_2"))
+        .unwrap_or_else(|| panic!("aucun champ renommé : {fields:?}"));
+    let original = renamed.name.replacen("_2", "", 1);
+    set_field_value(&reread, &renamed.name, FieldValue::Text("copie".into())).unwrap();
+    let after = list_fields(&reread).unwrap();
+    let value = |name: &str| {
+        after
+            .iter()
+            .find(|f| f.name == name)
+            .map(|f| f.value.clone())
+    };
+    assert_eq!(
+        value(&renamed.name),
+        Some(Some(FieldValue::Text("copie".into())))
+    );
+    assert_ne!(
+        value(&original),
+        Some(Some(FieldValue::Text("copie".into()))),
+        "l'original n'a pas changé"
+    );
+
+    // Sans les formulaires, plus aucun champ.
+    let options = CombineOptions {
+        keep_forms: false,
+        ..CombineOptions::default()
+    };
+    let doc = combine(&twice, &options).unwrap();
+    assert!(list_fields(&sound(&doc, "sans formulaires"))
+        .unwrap()
+        .is_empty());
+}
+
+/// Un document à liens internes combiné deux fois avec lui-même : chaque
+/// lien de chaque copie mène à une page de l'arbre, et ceux de la seconde
+/// copie à ses propres pages — les destinations nommées comprises, rendues
+/// explicites à la copie.
+#[test]
+fn combined_internal_links_lead_to_their_own_copy() {
+    use acrux_features::navigation::Action;
+    let name = "liens-destinations-signets.pdf";
+    let original = Document::from_bytes(corpus_bytes("synthese", name)).unwrap();
+    let pages = collect_pages(&original).unwrap();
+    let index = PageIndex::new(&pages);
+    let go_to = |doc: &Document, pages: &[acrux_document::Page], index: &PageIndex| {
+        let mut out = Vec::new();
+        for (i, page) in pages.iter().enumerate() {
+            for link in page_links(doc, page, index).unwrap() {
+                if let Action::GoTo(d) = link.action {
+                    out.push((i, d.page));
+                }
+            }
+        }
+        out
+    };
+    let before = go_to(&original, &pages, &index);
+    assert!(!before.is_empty(), "le corpus a des liens internes");
+    let n = pages.len();
+    let options = CombineOptions {
+        bookmarks: false,
+        ..CombineOptions::default()
+    };
+    let doc = combine(
+        &[input("synthese", name), input("synthese", name)],
+        &options,
+    )
+    .unwrap();
+    let reread = sound(&doc, "liens combinés");
+    let pages = collect_pages(&reread).unwrap();
+    assert_eq!(pages.len(), 2 * n);
+    let index = PageIndex::new(&pages);
+    let after = go_to(&reread, &pages, &index);
+    let mut expected = before.clone();
+    expected.extend(before.iter().map(|(from, to)| (from + n, to + n)));
+    assert_eq!(after, expected);
 }

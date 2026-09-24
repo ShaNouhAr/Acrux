@@ -25,6 +25,9 @@ use acrux_document::{collect_pages, writer, Dict, Document, Name, Object, Object
 
 use crate::annotations::encode_text;
 
+mod merge;
+pub(crate) use merge::merge_acroform;
+
 // Drapeaux de champ (§12.7.4.1 table 227, §12.7.5.2 table 229, §12.7.5.3
 // table 232, §12.7.5.4 table 234). Le bit n vaut 1 << (n - 1).
 const FF_READ_ONLY: i64 = 1;
@@ -336,7 +339,7 @@ fn catalog_ref(doc: &Document) -> Result<ObjectRef> {
 }
 
 /// Dictionnaire `/AcroForm` et sa référence (si indirect).
-fn acroform(doc: &Document) -> Result<Option<(Dict, Option<ObjectRef>)>> {
+pub(crate) fn acroform(doc: &Document) -> Result<Option<(Dict, Option<ObjectRef>)>> {
     let catalog = doc.catalog()?;
     let Some(entry) = catalog.get(&Name::new("AcroForm")) else {
         return Ok(None);

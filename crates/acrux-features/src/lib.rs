@@ -9,7 +9,7 @@
 //! | `annotations` | inventaire, création avec apparences (carré, ellipse, ligne et flèche, polygone, ligne brisée, encre, zone de texte et légende, surlignage, soulignement, barré, ondulé, insertion, remplacement groupé, note, lien), identifiant `/NM` et date de création, suppression (groupes, réponses et états compris) ; modification (`set_annotation_properties` : place, taille, couleurs, opacité, trait, texte, apparence régénérée par `appearance`) ; réponses, statuts et fils de discussion (`review`) ; géométrie pure des formes (`shapes`) et mise en lignes du texte (`freetext`) | §8 |
 //! | `attach` | pièces jointes : arbre `/Names /EmbeddedFiles`, annotations `/FileAttachment`, ajout, extraction, retrait | §11 |
 //! | `docinfo` | propriétés du document : `/Info`, paquet XMP, propriétés d'ouverture, assainissement | §12.2, §14.3 |
-//! | `create` | création de documents : page blanche, images, texte, Markdown, combinaison | §1 |
+//! | `create` | création de documents : page blanche, images, texte, Markdown, combinaison (PDF, images PNG / JPEG / BMP / GIF / TIFF, textes) | §1 |
 //! | `compare` | comparaison de deux documents : appariement des pages, différences de texte, différences de pixels, rapport PDF côte à côte | §8 |
 //! | `export` | conversion : pages en PNG / JPEG, images incorporées, HTML, DOCX, XLSX, texte, Markdown | §6 |
 //! | `fillsign` | remplir et signer : signature tracée, tapée ou importée, texte et marques, aplatissement | §9 |
@@ -21,7 +21,7 @@
 //! | `navigation` | destinations, liens, actions, signets                   | §1            |
 //! | `ocr`    | lecture du texte d'une image : seuillage, découpe en lignes et en lettres, reconnaissance par gabarits | §2 |
 //! | `outline_edit` | écriture des signets : arbre complet, ajout, retrait, déplacement, signets automatiques | §1 |
-//! | `pages`  | pivoter, supprimer, réordonner (un bloc de pages), dupliquer, extraire, insérer, pages vierges, remplacer, fusionner ; fractionner (`split` : tranches, signets, taille maximale) | §5 |
+//! | `pages`  | pivoter, supprimer, réordonner (un bloc de pages), dupliquer, extraire, insérer, pages vierges, remplacer, fusionner (formulaires compris) ; fractionner (`split` : tranches, signets, taille maximale) | §5 |
 //! | `pagelabels` | étiquettes de page `/PageLabels` (i, ii, 1, 2, Annexe-A…), lecture, écriture, recherche par étiquette | §1 |
 //! | `preflight` | contrôle en amont PDF/A, PDF/X, PDF/UA, correctifs, aperçu de sortie | §10 |
 //! | `signature` | signatures numériques (§12.8) : inventaire, vérification (condensé, RSA, chaîne X.509, couverture, modifications), pose d'une signature CMS détachée | §9 |

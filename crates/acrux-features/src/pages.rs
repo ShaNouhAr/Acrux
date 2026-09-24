@@ -20,7 +20,19 @@
 //! ([`Importer::map_ref`]) et quelles pages restent derrière
 //! ([`Importer::drop_ref`]) : un lien vers une page copiée vise sa copie,
 //! un lien vers une page laissée de côté devient `null` (le lien reste, sans
-//! destination, comme le fait Acrobat).
+//! destination, comme le fait Acrobat). Les annotations des pages laissées de
+//! côté sont écartées de même : une fenêtre `/Popup` ou un widget qui les
+//! désigne ne les ramène pas.
+//!
+//! # Les formulaires
+//!
+//! Par défaut, les champs de formulaire ne suivent pas les pages : leurs
+//! widgets restent dessinés sur la page copiée, sans être des champs. Avec
+//! [`InsertOptions::forms`] (insertion, fusion, combinaison de l'application),
+//! chaque widget garde son `/Parent` — le champ qu'il remplit — et les champs
+//! copiés rejoignent le `/AcroForm` de la destination
+//! ([`crate::forms::merge_acroform`]) : un champ dont le nom existe déjà est
+//! renommé (`nom_2`), une signature perd sa valeur.
 
 pub mod split;
 
@@ -52,6 +64,31 @@ const CONTENT_KEYS: [&str; 15] = [
     "SeparationInfo",
     "OutputIntents",
 ];
+
+/// Réglages d'une insertion ou d'une fusion de pages venues d'un autre
+/// document.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InsertOptions {
+    /// Les champs de formulaire suivent leurs pages : ils rejoignent le
+    /// formulaire de la destination, renommés s'ils y ont un homonyme — sans
+    /// quoi deux copies d'un même formulaire partageraient leurs valeurs sans
+    /// que personne l'ait voulu. Les champs de signature perdent leur valeur
+    /// et l'apparence de la signature : une signature ne survit pas à la
+    /// copie de ses pages (Acrobat fait de même).
+    pub forms: bool,
+}
+
+/// Vrai si les permissions de `doc` permettent d'en recopier les pages dans
+/// un autre document : document en clair, ouvert avec le mot de passe des
+/// permissions, ou qui accorde la copie de son contenu (ISO 32000-2
+/// §7.6.4.2, bit 5). Insérer ou combiner ses pages, c'est les emporter là
+/// où ses permissions ne vaudraient plus.
+#[must_use]
+pub fn extraction_allowed(doc: &Document) -> bool {
+    doc.security().is_none_or(|h| {
+        h.is_owner() || acrux_document::protect::Permissions::from_p(h.permissions()).copy
+    })
+}
 
 /// Pages actuelles avec leurs références (les pages directes, sans référence,
 /// sont rendues indirectes).
@@ -284,6 +321,10 @@ pub struct Importer<'a> {
     /// Objets sources à ne pas copier : une référence vers eux devient
     /// `null`.
     dropped: HashSet<u32>,
+    /// Les dictionnaires autres que les nœuds de l'arbre des pages gardent
+    /// leur `/Parent` : celui d'un widget est le champ qu'il remplit (voir
+    /// [`InsertOptions::forms`]).
+    keep_field_parents: bool,
 }
 
 impl<'a> Importer<'a> {
@@ -295,7 +336,24 @@ impl<'a> Importer<'a> {
             dst,
             map: HashMap::new(),
             dropped: HashSet::new(),
+            keep_field_parents: false,
         }
+    }
+
+    /// Document d'où l'on copie.
+    pub(crate) fn source(&self) -> &'a Document {
+        self.src
+    }
+
+    /// Document où l'on copie.
+    pub(crate) fn destination(&self) -> &'a Document {
+        self.dst
+    }
+
+    /// Place, dans la destination, de l'objet source `src` s'il a été copié
+    /// (ou annoncé par [`Importer::map_ref`]).
+    pub(crate) fn mapped(&self, src: ObjectRef) -> Option<ObjectRef> {
+        self.map.get(&src.number).copied()
     }
 
     /// Annonce que l'objet source `src` a déjà sa place dans `dst`, sous
@@ -358,12 +416,24 @@ impl<'a> Importer<'a> {
     }
 
     fn import_dict(&mut self, d: &Dict, depth: usize) -> Result<Dict> {
+        // `/Parent` des pages est réécrit par `rebuild_tree` ; on l'ignore pour
+        // ne pas importer tout l'arbre source. Celui d'un widget désigne son
+        // champ : il n'est gardé que si les formulaires suivent les pages.
+        let skip_parent = !self.keep_field_parents || is_page_node(d);
+        let go_to = matches!(d.get(&Name::new("S")), Some(Object::Name(n)) if n.0 == b"GoTo");
         let mut out = Dict::new();
         for (k, v) in d {
-            // `/Parent` des pages est réécrit par `rebuild_tree` ; on l'ignore pour
-            // ne pas importer tout l'arbre source.
-            if k.0 == b"Parent" {
+            if skip_parent && k.0 == b"Parent" {
                 continue;
+            }
+            // La destination nommée d'un lien ou d'une action `/GoTo` devient
+            // explicite : son nom ne dirait rien dans la destination (voir
+            // `navigation::named_to_explicit`), la page qu'il vise, si.
+            if k.0 == b"Dest" || (go_to && k.0 == b"D") {
+                if let Some(explicit) = crate::navigation::named_to_explicit(self.src, v) {
+                    out.insert(k.clone(), self.import_depth(&explicit, depth + 1)?);
+                    continue;
+                }
             }
             out.insert(k.clone(), self.import_depth(v, depth + 1)?);
         }
@@ -371,8 +441,19 @@ impl<'a> Importer<'a> {
     }
 }
 
+/// Vrai pour un nœud de l'arbre des pages (`/Type /Page` ou `/Pages`, ou,
+/// sans `/Type`, un dictionnaire qui compte des pages) : son `/Parent` est
+/// celui de l'arbre, jamais celui d'un champ.
+fn is_page_node(d: &Dict) -> bool {
+    match d.get(&Name::new("Type")) {
+        Some(Object::Name(n)) if n.0 == b"Page" || n.0 == b"Pages" => true,
+        _ => d.contains_key(&Name::new("Count")),
+    }
+}
+
 /// Réserve dans `dst` la place des pages `wanted` de `src_pages`, et écarte
-/// toutes les autres (voir l'explication en tête du module).
+/// toutes les autres, ainsi que leurs annotations (voir l'explication en
+/// tête du module).
 ///
 /// Rend, pour chaque entrée de `wanted`, la référence réservée à sa
 /// **première** occurrence, `None` pour une répétition : une page demandée
@@ -400,6 +481,36 @@ fn prepare_page_refs(
         if let Some(r) = p.reference.filter(|_| !reserved.contains(&i)) {
             importer.drop_ref(r);
         }
+    }
+    // Les annotations des pages laissées de côté : un champ copié avec ses
+    // widgets ne doit pas ramener, par ses `/Kids`, ceux des autres pages —
+    // ils deviendraient des annotations sans page. Une annotation qui figure
+    // aussi sur une page copiée reste.
+    let annots_of = |p: &Page| -> Vec<ObjectRef> {
+        ref_list(importer.src, &p.dict, "Annots")
+            .into_iter()
+            .filter_map(|o| match o {
+                Object::Reference(r) => Some(r),
+                _ => None,
+            })
+            .collect()
+    };
+    let kept: HashSet<u32> = src_pages
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| reserved.contains(i))
+        .flat_map(|(_, p)| annots_of(p))
+        .map(|r| r.number)
+        .collect();
+    let left: Vec<ObjectRef> = src_pages
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !reserved.contains(i))
+        .flat_map(|(_, p)| annots_of(p))
+        .filter(|r| !kept.contains(&r.number))
+        .collect();
+    for r in left {
+        importer.drop_ref(r);
     }
     out
 }
@@ -457,7 +568,7 @@ fn import_pages(importer: &mut Importer<'_>, indices: &[usize]) -> Result<Vec<(O
 /// pages d'index `indices` de `src`. Ressources, annotations et contenus
 /// sont copiés, et les calques qu'elles emploient rejoignent ceux de `dst`
 /// ([`merge_layers`]) ; les champs de formulaire (`/AcroForm`) ne sont pas
-/// fusionnés.
+/// fusionnés (voir [`insert_pages_with`]).
 ///
 /// # Errors
 /// Index ou position invalide, objets illisibles.
@@ -467,18 +578,38 @@ pub fn insert_pages_from(
     indices: &[usize],
     at: usize,
 ) -> Result<()> {
+    insert_pages_with(dst, src, indices, at, &InsertOptions::default())
+}
+
+/// [`insert_pages_from`], avec ses réglages : les champs de formulaire des
+/// pages copiées suivent quand `options.forms` est vrai.
+///
+/// # Errors
+/// Index ou position invalide, objets illisibles.
+pub fn insert_pages_with(
+    dst: &Document,
+    src: &Document,
+    indices: &[usize],
+    at: usize,
+    options: &InsertOptions,
+) -> Result<()> {
     let dst_pages = page_refs(dst)?;
     if at > dst_pages.len() {
         return Err(Error::Corrupt(format!("position {at} hors du document")));
     }
     let mut importer = Importer::new(src, dst);
+    importer.keep_field_parents = options.forms;
     let new_pages = import_pages(&mut importer, indices)?;
     let mut all = dst_pages;
     let tail = all.split_off(at);
     all.extend(new_pages);
     all.extend(tail);
     rebuild_tree(dst, &all)?;
-    merge_layers(&importer)
+    merge_layers(&importer)?;
+    if options.forms {
+        crate::forms::merge_acroform(&mut importer)?;
+    }
+    Ok(())
 }
 
 /// Nouveau document ne contenant que les pages d'index `indices` de `src`,
@@ -492,6 +623,12 @@ pub fn insert_pages_from(
 /// # Errors
 /// Index invalide ou objets illisibles.
 pub fn extract_pages(src: &Document, indices: &[usize]) -> Result<Document> {
+    extract_with(src, indices, InsertOptions::default())
+}
+
+/// [`extract_pages`], avec ses réglages (les champs de formulaire suivent
+/// quand `options.forms` est vrai).
+fn extract_with(src: &Document, indices: &[usize], options: InsertOptions) -> Result<Document> {
     if indices.is_empty() {
         return Err(Error::Corrupt("aucune page à extraire".into()));
     }
@@ -509,9 +646,13 @@ pub fn extract_pages(src: &Document, indices: &[usize]) -> Result<Document> {
         dst.set_trailer_entry("Info", Object::Reference(r));
     }
     let mut importer = Importer::new(src, &dst);
+    importer.keep_field_parents = options.forms;
     let pages = import_pages(&mut importer, indices)?;
     rebuild_tree(&dst, &pages)?;
     copy_layers(&mut importer)?;
+    if options.forms {
+        crate::forms::merge_acroform(&mut importer)?;
+    }
     Ok(dst)
 }
 
@@ -645,21 +786,32 @@ fn merge_layers(importer: &Importer<'_>) -> Result<()> {
 }
 
 /// Fusionne plusieurs documents en un nouveau document (toutes leurs pages, dans l'ordre).
+/// Les champs de formulaire ne suivent pas (voir [`merge_with`]).
 ///
 /// # Errors
 /// Documents illisibles.
 pub fn merge(docs: &[&Document]) -> Result<Document> {
-    let Some(first) = docs.first() else {
+    merge_with(docs, &InsertOptions::default())
+}
+
+/// [`merge`], avec ses réglages : avec `options.forms`, les champs de
+/// formulaire de chaque document rejoignent le formulaire du résultat, un
+/// champ homonyme d'un document précédent étant renommé.
+///
+/// # Errors
+/// Documents illisibles.
+pub fn merge_with(docs: &[&Document], options: &InsertOptions) -> Result<Document> {
+    let Some((first, rest)) = docs.split_first() else {
         return Err(Error::Corrupt("rien à fusionner".into()));
     };
     let n = collect_pages(first)?.len();
     let all: Vec<usize> = (0..n).collect();
-    let out = extract_pages(first, &all)?;
-    for d in &docs[1..] {
+    let out = extract_with(first, &all, *options)?;
+    for d in rest {
         let n = collect_pages(d)?.len();
         let all: Vec<usize> = (0..n).collect();
         let at = collect_pages(&out)?.len();
-        insert_pages_from(&out, d, &all, at)?;
+        insert_pages_with(&out, d, &all, at, options)?;
     }
     Ok(out)
 }
@@ -1311,5 +1463,218 @@ mod tests {
         assert!(parse_page_spec("11", 10).is_err());
         assert!(parse_page_spec("a", 10).is_err());
         assert!(parse_page_spec("", 10).is_err());
+    }
+
+    /// Fusionner un document avec lui-même : les liens internes de la
+    /// seconde copie visent ses propres pages, et aucune page n'est copiée
+    /// hors de l'arbre.
+    #[test]
+    fn merged_internal_links_point_inside_the_tree() {
+        let doc = from_objects(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Annots [5 0 R] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 101 100] >>".into(),
+            "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /P 3 0 R /Dest [4 0 R /Fit] >>"
+                .into(),
+        ]);
+        let merged = roundtrip(&merge(&[&doc, &doc]).unwrap());
+        let pages = collect_pages(&merged).unwrap();
+        assert_eq!(pages.len(), 4);
+        assert_eq!(page_objects(&merged), 4, "aucune page hors de l'arbre");
+        let dest_of = |page: &Page| -> Object {
+            let annots = merged.dict_get(&page.dict, "Annots").unwrap().unwrap();
+            let link = merged.resolve(&annots.as_array().unwrap()[0]).unwrap();
+            let dest = merged
+                .dict_get(link.as_dict().unwrap(), "Dest")
+                .unwrap()
+                .unwrap();
+            dest.as_array().unwrap()[0].clone()
+        };
+        assert_eq!(
+            dest_of(&pages[0]),
+            Object::Reference(pages[1].reference.unwrap())
+        );
+        assert_eq!(
+            dest_of(&pages[2]),
+            Object::Reference(pages[3].reference.unwrap()),
+            "le lien de la seconde copie vise la page 4, pas la page 2"
+        );
+    }
+
+    /// Un formulaire de deux pages : « nom » a un widget sur chaque page,
+    /// « adresse » a deux sous-champs (« rue » page 1, « ville » page 2), et
+    /// « signature », page 2, est signé.
+    fn form_document() -> Document {
+        from_objects(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm 12 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R 9 0 R] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [6 0 R 10 0 R 11 0 R] >>"
+                .into(),
+            "<< /Type /Annot /Subtype /Widget /Rect [10 10 100 30] /P 3 0 R /Parent 7 0 R >>".into(),
+            "<< /Type /Annot /Subtype /Widget /Rect [10 10 100 30] /P 4 0 R /Parent 7 0 R >>".into(),
+            "<< /FT /Tx /T (nom) /V (Alice) /Kids [5 0 R 6 0 R] >>".into(),
+            "<< /T (adresse) /Kids [9 0 R 10 0 R] >>".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (rue) /Parent 8 0 R /Rect [10 40 100 60] /P 3 0 R >>"
+                .into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (ville) /Parent 8 0 R /Rect [10 40 100 60] /P 4 0 R >>"
+                .into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Sig /T (signature) /V 13 0 R /Rect [10 70 100 90] /P 4 0 R /AP << /N 14 0 R >> >>"
+                .into(),
+            "<< /Fields [7 0 R 8 0 R 11 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 15 0 R >> >> /NeedAppearances true >>"
+                .into(),
+            "<< /Type /Sig /Filter /Adobe.PPKLite /Contents <00> >>".into(),
+            "<< /Length 0 >>\nstream\n\nendstream".into(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        ])
+    }
+
+    /// Noms des champs d'un document, dans l'ordre du formulaire.
+    fn field_names(doc: &Document) -> Vec<String> {
+        crate::forms::list_fields(doc)
+            .unwrap()
+            .into_iter()
+            .map(|f| f.name)
+            .collect()
+    }
+
+    /// Nombre de widgets du fichier, qu'ils soient sur une page ou orphelins.
+    fn widget_objects(doc: &Document) -> usize {
+        doc.object_numbers()
+            .into_iter()
+            .filter(|&number| {
+                doc.get(ObjectRef {
+                    number,
+                    generation: 0,
+                })
+                .is_ok_and(|o| {
+                    o.as_dict()
+                        .and_then(|d| d.get(&Name::new("Subtype")))
+                        .and_then(Object::as_name)
+                        .is_some_and(|n| n.0 == b"Widget")
+                })
+            })
+            .count()
+    }
+
+    #[test]
+    fn insert_pages_with_forms_keeps_widget_parents_and_fields() {
+        let src = form_document();
+        let dst = pdf_with_pages(1);
+        let options = InsertOptions { forms: true };
+        insert_pages_with(&dst, &src, &[0, 1], 1, &options).unwrap();
+        let dst = roundtrip(&dst);
+        assert_eq!(
+            field_names(&dst),
+            ["nom", "adresse.rue", "adresse.ville", "signature"]
+        );
+        let fields = crate::forms::list_fields(&dst).unwrap();
+        let nom = &fields[0];
+        assert_eq!(
+            nom.value,
+            Some(crate::forms::FieldValue::Text("Alice".into()))
+        );
+        // Les deux widgets de « nom », sur les pages insérées (2 et 3).
+        let on: Vec<Option<usize>> = nom.widgets.iter().map(|w| w.page).collect();
+        assert_eq!(on, [Some(1), Some(2)]);
+        assert_eq!(widget_objects(&dst), 5, "aucun widget en double");
+        assert_eq!(page_objects(&dst), 3);
+        // Les ressources du formulaire suivent.
+        let (form, _) = crate::forms::acroform(&dst).unwrap().unwrap();
+        assert_eq!(
+            dst.dict_get(&form, "NeedAppearances").unwrap().as_deref(),
+            Some(&Object::Bool(true))
+        );
+        let dr = dst.dict_get(&form, "DR").unwrap().unwrap();
+        let fonts = dst
+            .dict_get(dr.as_dict().unwrap(), "Font")
+            .unwrap()
+            .unwrap();
+        assert!(fonts.as_dict().unwrap().contains_key(&Name::new("Helv")));
+        // Sans l'option, rien ne suit : le comportement d'avant.
+        let plain = pdf_with_pages(1);
+        insert_pages_from(&plain, &src, &[0, 1], 1).unwrap();
+        assert!(field_names(&roundtrip(&plain)).is_empty());
+    }
+
+    #[test]
+    fn inserting_a_subset_leaves_the_other_widgets_behind() {
+        let src = form_document();
+        let dst = pdf_with_pages(1);
+        insert_pages_with(&dst, &src, &[0], 0, &InsertOptions { forms: true }).unwrap();
+        let dst = roundtrip(&dst);
+        // « ville » et « signature » sont sur la page 2, restée derrière ;
+        // « nom » n'y garde que son widget de la page 1.
+        assert_eq!(field_names(&dst), ["nom", "adresse.rue"]);
+        let fields = crate::forms::list_fields(&dst).unwrap();
+        assert_eq!(fields[0].widgets.len(), 1);
+        assert_eq!(fields[0].widgets[0].page, Some(0));
+        assert_eq!(widget_objects(&dst), 2, "aucun widget sans page");
+        assert_eq!(page_objects(&dst), 2);
+    }
+
+    #[test]
+    fn duplicate_field_names_are_renamed() {
+        let src = form_document();
+        let merged = merge_with(&[&src, &src], &InsertOptions { forms: true }).unwrap();
+        let merged = roundtrip(&merged);
+        assert_eq!(
+            field_names(&merged),
+            [
+                "nom",
+                "adresse.rue",
+                "adresse.ville",
+                "signature",
+                "nom_2",
+                "adresse_2.rue",
+                "adresse_2.ville",
+                "signature_2"
+            ]
+        );
+        // Les deux copies ne partagent plus leur valeur.
+        crate::forms::set_field_value(
+            &merged,
+            "nom_2",
+            crate::forms::FieldValue::Text("Bob".into()),
+        )
+        .unwrap();
+        let fields = crate::forms::list_fields(&merged).unwrap();
+        let value = |name: &str| {
+            fields
+                .iter()
+                .find(|f| f.name == name)
+                .and_then(|f| f.value.clone())
+        };
+        assert_eq!(
+            value("nom"),
+            Some(crate::forms::FieldValue::Text("Alice".into()))
+        );
+        assert_eq!(
+            value("nom_2"),
+            Some(crate::forms::FieldValue::Text("Bob".into()))
+        );
+        // `merge` seul, celui de `acr merge`, ne garde aucun champ.
+        assert!(field_names(&roundtrip(&merge(&[&src, &src]).unwrap())).is_empty());
+    }
+
+    #[test]
+    fn signature_values_are_dropped() {
+        let src = form_document();
+        let merged = roundtrip(&merge_with(&[&src], &InsertOptions { forms: true }).unwrap());
+        let fields = crate::forms::list_fields(&merged).unwrap();
+        let signature = fields.iter().find(|f| f.name == "signature").unwrap();
+        assert_eq!(signature.kind, crate::forms::FieldType::Signature);
+        assert!(signature.value.is_none(), "la signature ne suit pas");
+        let widget = merged.get(signature.widgets[0].reference.unwrap()).unwrap();
+        assert!(
+            !widget.as_dict().unwrap().contains_key(&Name::new("AP")),
+            "son apparence non plus"
+        );
+        // L'original, lui, est intact.
+        let original = crate::forms::list_fields(&src).unwrap();
+        assert!(original
+            .iter()
+            .any(|f| f.name == "signature" && f.value.is_some()));
     }
 }

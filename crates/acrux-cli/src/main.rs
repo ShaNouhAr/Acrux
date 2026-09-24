@@ -4,7 +4,7 @@
 //! benchmarks) et aux utilisateurs avancés (conversion par lots).
 //!
 //! Commandes : inspection (`info`, `pages`, `dump`, `check`), modification
-//! (`rotate`, `delete`, `reorder`, `extract`, `merge`, `split`,
+//! (`rotate`, `delete`, `reorder`, `extract`, `merge`, `split`, `insert`,
 //! `insert-blank`, `replace`, `rewrite`), création
 //! (`create`, `combine`), rendu,
 //! texte et conversion (`render`, `export`, `text`, `bench`), annotations (`annots`, `annotate`),
@@ -66,6 +66,13 @@ fn usage() {
     eprintln!("                                  niveau (son titre entre dans le nom), parties d'au plus 2M (K, M, G ;");
     eprintln!("                                  sans unité : octets), ou une page par fichier ; fichiers <nom>-01.pdf…");
     eprintln!("                                  dans le dossier du document ; rien n'est écrasé sans --force");
+    eprintln!(
+        "  insert  <fichier> <source> [--pages 1-3,5] [--at debut|fin|N] [--no-forms] -o <sortie>"
+    );
+    eprintln!("                                  insère les pages d'un PDF, ou une image (PNG, JPEG, BMP, GIF,");
+    eprintln!("                                  TIFF : une page par feuille), en tête, à la fin (par défaut) ou");
+    eprintln!("                                  en position N ; les champs de formulaire suivent (renommés s'ils");
+    eprintln!("                                  existent déjà), sauf --no-forms");
     eprintln!("  insert-blank <fichier> <position> [--like <page>] -o <sortie>");
     eprintln!("                                  page vierge en <position> (1 = en tête), au format de la page qui");
     eprintln!("                                  occupait cette place (ou de --like)");
@@ -97,12 +104,12 @@ fn usage() {
     eprintln!("  create --markdown <fichier.md> [mêmes options] -o <sortie>");
     eprintln!("                                  titres, gras, italique, code, listes, citations, règles,");
     eprintln!("                                  tableaux et liens cliquables ; les titres deviennent des signets");
-    eprintln!("  combine <fichier>... [--bookmarks] [--toc] [--numbers] [--toc-title <titre>] -o <sortie>");
-    eprintln!("                                  réunit PDF, images et fichiers texte ou Markdown ; --bookmarks :");
-    eprintln!("                                  un signet par fichier, --toc : sommaire cliquable en tête,");
-    eprintln!(
-        "                                  --numbers : numérotation continue en pied de page"
-    );
+    eprintln!("  combine <fichier>... [--bookmarks] [--toc] [--numbers] [--toc-title <titre>] [--no-forms]");
+    eprintln!("          -o <sortie>");
+    eprintln!("                                  réunit PDF, images (PNG, JPEG, BMP, GIF, TIFF) et fichiers texte");
+    eprintln!("                                  ou Markdown ; --bookmarks : un signet par fichier, --toc : sommaire");
+    eprintln!("                                  cliquable en tête, --numbers : numérotation continue en pied de");
+    eprintln!("                                  page ; les champs de formulaire suivent, sauf --no-forms");
     eprintln!("  rewrite <fichier> [--compress] [--compact] -o <sortie>");
     eprintln!("                                  réécriture complète et propre ; --compress : flux Flate, --objstm : flux d'objets et xref");
     eprintln!("                                  compressé, --gc : objets inatteignables retirés, --compact : les trois");
@@ -409,6 +416,7 @@ fn main() -> ExitCode {
         (Some("extract"), Some(f)) => cmd_extract(f, &args[2..]),
         (Some("merge"), Some(_)) => cmd_merge(&args[1..]),
         (Some("split"), Some(f)) => cmd_split(f, &args[2..]),
+        (Some("insert"), Some(f)) => cmd_insert(f, &args[2..]),
         (Some("insert-blank"), Some(f)) => cmd_insert_blank(f, &args[2..]),
         (Some("replace"), Some(f)) => cmd_replace(f, &args[2..]),
         (Some("create"), Some(_)) => cmd_create(&args[1..]),
@@ -2004,6 +2012,87 @@ fn cmd_split(path: &str, rest: &[String]) -> acrux_core::Result<()> {
     let (doc, _) = open(path)?;
     let (dir, stem) = split_target(path, rest);
     write_split(&doc, &plan, &dir, &stem, has("--force"))
+}
+
+/// `insert` : les pages d'un PDF, ou une image, insérées dans le document.
+fn cmd_insert(path: &str, rest: &[String]) -> acrux_core::Result<()> {
+    let out = output_arg(rest)?;
+    let pos = positional(rest);
+    let Some(source) = pos.first() else {
+        return Err(acrux_core::Error::Corrupt(
+            "usage : insert <fichier> <source> [--pages 1-3,5] [--at debut|fin|N] [--no-forms] -o <sortie>"
+                .into(),
+        ));
+    };
+    let (doc, _) = open(path)?;
+    let count = collect_pages(&doc)?.len();
+    let at = insert_position(option_value(rest, "--at").map(String::as_str), count)?;
+    let data = std::fs::read(source.as_str())
+        .map_err(|e| acrux_core::Error::Io(format!("{source}: {e}")))?;
+    // Comme `combine` : la nature de la source se lit dans ses octets.
+    let src = if acrux_features::create::looks_like_pdf(&data) {
+        open(source)?.0
+    } else if acrux_features::create::is_image(&data) {
+        let name = Path::new(source.as_str())
+            .file_stem()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        acrux_features::create::from_images(
+            &[acrux_features::create::ImageInput { data, name }],
+            &acrux_features::create::ImageLayout::default(),
+        )?
+    } else {
+        return Err(acrux_core::Error::Unsupported(format!(
+            "{source} : ni PDF, ni image PNG/JPEG/BMP/GIF/TIFF"
+        )));
+    };
+    if !acrux_features::pages::extraction_allowed(&src) {
+        return Err(acrux_core::Error::Unsupported(format!(
+            "{source} : ses permissions interdisent d'en extraire les pages (--password <mot de passe des permissions>)"
+        )));
+    }
+    let pages = match option_value(rest, "--pages") {
+        Some(spec) => pages_arg(&src, spec)?,
+        None => (0..collect_pages(&src)?.len()).collect(),
+    };
+    let options = acrux_features::pages::InsertOptions {
+        forms: !rest.iter().any(|a| a == "--no-forms"),
+    };
+    acrux_features::pages::insert_pages_with(&doc, &src, &pages, at, &options)?;
+    println!(
+        "{} page(s) insérée(s) en position {} ({} page(s) en tout)",
+        pages.len(),
+        at + 1,
+        count + pages.len()
+    );
+    save(&doc, &out, rest)
+}
+
+/// Position d'insertion lue dans `--at` : `debut` (en tête), `fin` (après
+/// la dernière page, ce que vaut l'option absente) ou un numéro N — les
+/// pages insérées commencent alors en page N, comme la position
+/// d'`insert-blank`.
+///
+/// # Errors
+/// Numéro illisible, ou hors de 1 à `count + 1`.
+fn insert_position(value: Option<&str>, count: usize) -> acrux_core::Result<usize> {
+    let Some(value) = value.map(str::trim) else {
+        return Ok(count);
+    };
+    match value.to_lowercase().as_str() {
+        "debut" | "début" | "start" => Ok(0),
+        "fin" | "end" => Ok(count),
+        other => other
+            .parse::<usize>()
+            .ok()
+            .filter(|&n| n >= 1 && n <= count + 1)
+            .map(|n| n - 1)
+            .ok_or_else(|| {
+                acrux_core::Error::Corrupt(format!(
+                    "position invalide : {value} (debut, fin, ou 1 à {})",
+                    count + 1
+                ))
+            }),
+    }
 }
 
 fn cmd_insert_blank(path: &str, rest: &[String]) -> acrux_core::Result<()> {
@@ -5526,6 +5615,7 @@ fn cmd_combine(rest: &[String]) -> acrux_core::Result<()> {
         page_numbers: rest.iter().any(|a| a == "--numbers"),
         image_layout: create_image_layout(rest)?,
         text_layout: create_text_layout(rest)?,
+        keep_forms: !rest.iter().any(|a| a == "--no-forms"),
     };
     let doc = acrux_features::create::combine(&inputs, &options)?;
     let bytes = doc.save_full()?;
@@ -5546,6 +5636,20 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    /// La position d'`insert` : début, fin, ou un numéro de 1 à N + 1.
+    #[test]
+    fn insert_lit_sa_position() {
+        assert_eq!(insert_position(None, 4).unwrap(), 4);
+        assert_eq!(insert_position(Some("debut"), 4).unwrap(), 0);
+        assert_eq!(insert_position(Some("Début"), 4).unwrap(), 0);
+        assert_eq!(insert_position(Some("fin"), 4).unwrap(), 4);
+        assert_eq!(insert_position(Some("1"), 4).unwrap(), 0);
+        assert_eq!(insert_position(Some(" 5 "), 4).unwrap(), 4);
+        assert!(insert_position(Some("0"), 4).is_err());
+        assert!(insert_position(Some("6"), 4).is_err());
+        assert!(insert_position(Some("milieu"), 4).is_err());
     }
 
     /// Les traits d'encre, les terminaisons, les polices et les sauts de

@@ -188,6 +188,43 @@ pub fn image_size(data: &[u8]) -> Result<(u32, u32)> {
     Ok((image.width, image.height))
 }
 
+/// Format d'une image que nous savons lire, reconnu à sa signature :
+/// `"PNG"`, `"JPEG"`, `"BMP"`, `"GIF"` ou `"TIFF"` ; `None` pour tout le
+/// reste.
+///
+/// La signature vaut mieux que l'extension : un fichier mal nommé est
+/// reconnu quand même, et un PDF nommé `.png` reste un PDF. Chaque format
+/// est reconnu à ses octets **exacts** — la signature entière du PNG,
+/// `GIF87a` ou `GIF89a`, les quatre octets d'un TIFF (`II*\0`, `MM\0*`) et
+/// non ses deux premiers seuls, un en-tête BMP au complet : un texte qui
+/// commence par « II » ou par « BM » n'est pas une image, et c'est ce qui
+/// décide, dans une combinaison, entre une image et un fichier texte.
+#[must_use]
+pub fn image_format(data: &[u8]) -> Option<&'static str> {
+    if data.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        Some("PNG")
+    } else if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("JPEG")
+    } else if data.starts_with(b"BM") && data.len() >= 26 {
+        // En-tête de fichier (14 octets), puis au moins l'en-tête d'image
+        // le plus court (12 octets) : en deçà, rien ne se décode.
+        Some("BMP")
+    } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+        Some("GIF")
+    } else if data.starts_with(b"II*\0") || data.starts_with(b"MM\0*") {
+        Some("TIFF")
+    } else {
+        None
+    }
+}
+
+/// Vrai si ces octets sont ceux d'une image que nous savons lire (voir
+/// [`image_format`]).
+#[must_use]
+pub fn is_supported(data: &[u8]) -> bool {
+    image_format(data).is_some()
+}
+
 /// Décode une image fournie en octets (PNG, JPEG, BMP, GIF ou TIFF).
 ///
 /// D'un TIFF multipage, seule la **première page** est rendue ; voir
@@ -655,6 +692,34 @@ pub(crate) mod tests {
     fn unknown_format_is_refused() {
         assert!(decode(b"GIF89a").is_err());
         assert!(decode(&[]).is_err());
+    }
+
+    #[test]
+    fn chaque_format_se_reconnait_a_sa_signature_exacte() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus/images");
+        let read = |name: &str| std::fs::read(dir.join(name)).unwrap();
+        for (name, format) in [
+            ("motif.png", "PNG"),
+            ("motif-24.bmp", "BMP"),
+            ("motif.gif", "GIF"),
+            ("motif-lzw.tif", "TIFF"),
+            ("deux-pages.tif", "TIFF"),
+        ] {
+            assert_eq!(image_format(&read(name)), Some(format), "{name}");
+        }
+        assert_eq!(image_format(&[0xFF, 0xD8, 0xFF, 0xE0]), Some("JPEG"));
+        // Les TIFF des deux boutismes.
+        assert!(is_supported(b"II*\0\x08\0\0\0"));
+        assert!(is_supported(b"MM\0*\0\0\0\x08"));
+        // Ce qui y ressemble sans en être.
+        assert!(!is_supported(b"BMx"), "BMP tronqué");
+        assert!(!is_supported(b"IIxx un texte qui commence par II"));
+        assert!(!is_supported(b"MM. le maire"));
+        assert!(!is_supported(b"GIF8"));
+        assert!(!is_supported(b"%PDF-1.7\n"));
+        assert!(!is_supported(&[0x89, b'P', b'N', b'G']));
+        assert!(!is_supported(&[]));
     }
 
     #[test]
