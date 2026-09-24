@@ -142,6 +142,14 @@ note `historique : vue retenue (page N), saut vers la page M` à chaque saut ret
 précédente` quand la pile est vide, et `vue pivotée : 90°` à chaque rotation de la vue. Pour
 ouvrir deux onglets d'un coup, `Start-App "a.pdf b.pdf"` (chemins sans espace).
 
+Les commentaires notent leurs gestes : `commentaire : sélection page 1 #4 Square`, `commentaire :
+déplacé page 1 #4 [x0 y0 x1 y1]`, `redimensionné`, `couleur`, `opacité`, `supprimé`, `bulle`,
+`réponse publiée`, `Marked(true)` ou `Review(Accepted)` pour une case ou un statut. Le harnais n'a
+pas de double-clic tout fait : on poste `0x0201`, `0x0202`, puis `0x0203` (`WM_LBUTTONDBLCLK`) et
+`0x0202` au même point — c'est ce qui ouvre la bulle d'un surlignage. Une question de
+l'application (« Supprimer le commentaire et ses 2 réponse(s) ? ») se répond au clavier, `Entrée`
+pour le bouton principal : `ACRUX_CONFIRM` ne vaut que pour les dialogues du système.
+
 Codes de touches utiles : `0x72` F3, `0x73` F4, `0x74` F5, `0x75` F6, `0x7A` F11, `0x0D` Entrée, `0x1B` Échap,
 `0x09` Tab, `0x20` Espace, `0x25` à `0x28` flèches gauche, haut, droite, bas, `0x21`/`0x22` page
 précédente et suivante, `0x24`/`0x23` Origine et Fin.

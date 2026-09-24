@@ -130,7 +130,10 @@ ajoutent des annotations (carré, surlignage, `underline`, `strikeout`, `squiggl
 `caret`, remplacement `replace` groupé, note, lien ; formes `circle`, `line`, `arrow`, `polygon`,
 `polyline` et dessin `ink --points` avec `--color`, `--fill`, `--width`, `--opacity` ; zone de texte
 `text` et légende `callout` avec `--font`, `--size`, `--align`, `--border` ; `annots -v` montre
-l'identifiant `/NM` de chacune et le barré qui suit un remplacement) ; `protect` chiffre en AES-256 avec une clé tirée d'un générateur
+l'identifiant `/NM` de chacune et le barré qui suit un remplacement ; sous chaque commentaire, sa date,
+son statut, sa case cochée et ses réponses) ; `annot-set` modifie une annotation (`--rect`,
+`--move dx,dy`, `--color RRGGBB`, `--fill`, `--opacity`, `--width`, `--text`, statut `--state`,
+case `--marked`), `annot-remove` la retire avec ses réponses, `reply` y répond ; `protect` chiffre en AES-256 avec une clé tirée d'un générateur
 cryptographique (mot de passe d'ouverture `--user`, mot de passe des permissions `--owner`,
 permissions `--print none|low|high`, `--no-modify`, `--no-copy`, `--no-annotate`, `--no-fill`,
 `--no-accessibility`, `--no-assemble` ; force des mots de passe affichée) et `unprotect` retire le
@@ -346,6 +349,10 @@ une page par feuille, et `Ctrl+S` demande où ranger le document obtenu.
 | `N` | poser une note à la position de la souris |
 | « Outils de commentaire » (colonne de droite, palette) | **barre des commentaires** : surligner, souligner, barrer, souligner d'un trait ondulé, **insérer du texte** (signe « ^ » là où l'on clique), **remplacer le texte** (passage barré et texte proposé, un seul commentaire), poser une note ; `Échap` éteint l'outil, puis ferme la barre. Un passage de plusieurs lignes fait une seule annotation par page, et se défait d'un seul `Ctrl+Z` |
 | « Dessiner », « Zone de texte » (colonne de droite, palette, barre des commentaires) | **rectangle, ellipse, ligne, flèche, crayon** : on glisse, l'aperçu suit, `Maj` donne un carré, un cercle, un angle de 45° ; le crayon fait plusieurs traits en un dessin (`Ctrl+Z` retire le dernier, `Échap` le pose). **Zone de texte** et **légende** : un clic, et l'on tape sur place (`Entrée` passe à la ligne, `Ctrl+Z` défait la frappe, `Échap` ou un clic ailleurs la pose). Couleur, remplissage, épaisseur, opacité, corps, police, cadre et fond se règlent dans la barre |
+| clic sur un commentaire | **le sélectionner** : glisser le déplace, les poignées le redimensionnent, `Suppr` le supprime, les flèches le décalent ; barre de propriétés (couleur, fond, épaisseur, opacité, texte, répondre, supprimer). Un surlignage se sélectionne au relâchement, sans voler la sélection du texte |
+| clic sur une note, double-clic sur un commentaire | sa **bulle** : auteur, date, statut, texte et réponses ; « Répondre » puis `Entrée` publie une réponse |
+| clic droit sur un commentaire | répondre, modifier le texte, statut (Accepté, Refusé, Annulé, Terminé), cocher, supprimer |
+| onglet « Notes » du panneau | les commentaires avec leurs réponses, leur statut et leur case ; trier, filtrer par type ou auteur, chercher |
 | clic sur une vidéo ou un son | lecture ; re-clic pour mettre en pause, clic sur la ligne de temps pour se déplacer |
 | `Maj+F4` | barre des outils, à droite (modifier, commenter, signer, pages, biffer) |
 | `Ctrl+Maj+E` | **modifier le PDF** : on clique dans un texte et on tape ; ailleurs, on pose une zone |

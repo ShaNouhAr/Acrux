@@ -449,3 +449,214 @@ fn collect_replies(
         }
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)] // générateur de corpus : une erreur est l'échec cherché
+mod tests {
+    use super::*;
+    use crate::annotations::freetext;
+    use crate::annotations::{add_annotation_with, MarkupKind, NewAnnotation, ShapeStyle};
+    use crate::stamp::StandardFont;
+    use acrux_document::{collect_pages, Dict};
+
+    fn meta(author: &str, date: &str, id: &str) -> AnnotMeta {
+        AnnotMeta {
+            author: Some(author.into()),
+            name: Some(format!("acrux-corpus-{id}")),
+            date: Some(date.into()),
+        }
+    }
+
+    /// Une page de relecture : du texte, trois notes de deux auteurs avec
+    /// des dates différentes, deux réponses dont une imbriquée, un statut
+    /// « Accepté », une case cochée, un rectangle rouge avec sa fenêtre
+    /// contextuelle et un surlignage sur une ligne. Toutes les dates et tous
+    /// les identifiants sont figés : c'est le document sur lequel s'exercent
+    /// la bulle, le panneau des commentaires et `acr annots`.
+    #[test]
+    #[ignore = "génère le fichier de corpus"]
+    #[allow(clippy::too_many_lines)] // le document, annotation par annotation
+    fn generate_comment_threads_corpus() {
+        let lines = [
+            (16.0, "F1", 262.0, r"Relecture du chapitre 2"),
+            (
+                11.0,
+                "F2",
+                228.0,
+                r"Le projet avance selon le calendrier pr\351vu pour ce trimestre.",
+            ),
+            (
+                11.0,
+                "F2",
+                210.0,
+                r"Les essais de la semaine derni\350re ont confirm\351 les r\351sultats.",
+            ),
+            (
+                11.0,
+                "F2",
+                192.0,
+                r"Il reste \340 valider le budget et \340 relire la conclusion.",
+            ),
+            (
+                11.0,
+                "F2",
+                174.0,
+                r"Merci de noter vos remarques directement dans ce document.",
+            ),
+        ];
+        let mut content = String::from("0.12 0.14 0.20 rg\n");
+        for (size, font, y, text) in lines {
+            let _ = std::fmt::Write::write_fmt(
+                &mut content,
+                format_args!("BT /{font} {size} Tf 40 {y} Td ({text}) Tj ET\n"),
+            );
+        }
+        content.push_str("0.55 0.57 0.62 RG 1 w 40 252 m 380 252 l S\n");
+        let objects = vec![
+            (1, "<< /Type /Catalog /Pages 2 0 R >>".to_string()),
+            (2, "<< /Type /Pages /Kids [5 0 R] /Count 1 >>".to_string()),
+            (
+                3,
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>"
+                    .to_string(),
+            ),
+            (
+                4,
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"
+                    .to_string(),
+            ),
+            (
+                5,
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 300] /Contents 6 0 R \
+                 /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> >>"
+                    .to_string(),
+            ),
+            (
+                6,
+                format!(
+                    "<< /Length {} >>\nstream\n{content}\nendstream",
+                    content.len()
+                ),
+            ),
+        ];
+        let doc = Document::from_bytes(crate::docinfo::tests::build_pdf(&objects, "")).unwrap();
+        let page = || collect_pages(&doc).unwrap().remove(0);
+        // Le surlignage couvre « Les essais de la semaine dernière ».
+        let passage = "Les essais de la semaine derni\u{e8}re";
+        let width = freetext::layout(passage, StandardFont::Helvetica, 11.0, 1000.0)[0].width;
+        let annotations = [
+            (
+                NewAnnotation::Note {
+                    x: 390.0,
+                    y: 238.0,
+                    contents: "Préciser la date exacte de fin.".into(),
+                    color: [1.0, 0.85, 0.0],
+                },
+                meta("Alice", "D:20240110093000Z", "note-date"),
+            ),
+            (
+                NewAnnotation::Note {
+                    x: 390.0,
+                    y: 202.0,
+                    contents: "Chiffres à vérifier avec la comptabilité.".into(),
+                    color: [0.35, 0.75, 1.0],
+                },
+                meta("Bruno", "D:20240109141500Z", "note-chiffres"),
+            ),
+            (
+                NewAnnotation::Note {
+                    x: 390.0,
+                    y: 150.0,
+                    contents: "Conclusion trop courte ?".into(),
+                    color: [1.0, 0.85, 0.0],
+                },
+                meta("Alice", "D:20240115170000Z", "note-conclusion"),
+            ),
+            (
+                NewAnnotation::Square {
+                    rect: Rect::new(34.0, 168.0, 352.0, 186.0),
+                    style: ShapeStyle::default(),
+                    contents: Some("Formulation à revoir.".into()),
+                },
+                meta("Bruno", "D:20240108110000Z", "rectangle"),
+            ),
+            (
+                NewAnnotation::Markup {
+                    kind: MarkupKind::Highlight,
+                    quads: vec![Rect::new(39.0, 207.0, 41.0 + width, 220.0)],
+                    color: MarkupKind::Highlight.default_color(),
+                    contents: Some("Bon résultat.".into()),
+                },
+                meta("Alice", "D:20240112080000Z", "surlignage"),
+            ),
+        ];
+        for (a, m) in &annotations {
+            add_annotation_with(&doc, &page(), a, m).unwrap();
+        }
+        // Les réponses et les états de la première note, puis la case de
+        // la deuxième.
+        add_reply(
+            &doc,
+            &page(),
+            0,
+            "Fin mars, je l\u{2019}ajoute.",
+            &meta("Bruno", "D:20240111101500Z", "reponse-1"),
+        )
+        .unwrap();
+        add_reply(
+            &doc,
+            &page(),
+            5,
+            "Parfait, merci !",
+            &meta("Alice", "D:20240112090000Z", "reponse-2"),
+        )
+        .unwrap();
+        set_state(
+            &doc,
+            &page(),
+            0,
+            StateChange::Review(ReviewState::Accepted),
+            &meta("Bruno", "D:20240113100000Z", "etat-accepte"),
+        )
+        .unwrap();
+        set_state(
+            &doc,
+            &page(),
+            1,
+            StateChange::Marked(true),
+            &meta("Alice", "D:20240114100000Z", "etat-coche"),
+        )
+        .unwrap();
+        // La fenêtre contextuelle du rectangle, fermée (§12.5.6.14).
+        let p = page();
+        let list = crate::annotations::list_annotations(&doc, &p).unwrap();
+        let square = list[3].reference.unwrap();
+        let mut popup = Dict::new();
+        popup.insert(Name::new("Type"), Object::Name(Name::new("Annot")));
+        popup.insert(Name::new("Subtype"), Object::Name(Name::new("Popup")));
+        popup.insert(Name::new("Parent"), Object::Reference(square));
+        popup.insert(
+            Name::new("Rect"),
+            rect_object(Rect::new(250.0, 60.0, 410.0, 150.0)),
+        );
+        popup.insert(Name::new("Open"), Object::Bool(false));
+        let popup = doc.add(Object::Dict(popup));
+        let mut sq = doc.get(square).unwrap().as_dict().unwrap().clone();
+        sq.insert(Name::new("Popup"), Object::Reference(popup));
+        doc.set(square, Object::Dict(sq));
+        push_to_annots(&doc, &p, &[popup]).unwrap();
+        let threads = comment_threads(&doc, &collect_pages(&doc).unwrap());
+        assert_eq!(threads.len(), 5);
+        assert_eq!(threads[0].replies.len(), 2);
+        assert_eq!(
+            threads[0].review.as_ref().map(|r| r.0),
+            Some(ReviewState::Accepted)
+        );
+        assert!(threads[1].marked);
+        let saved = doc.save_full().unwrap();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/corpus/synthese/commentaires-fils-etats.pdf");
+        std::fs::write(&path, saved).unwrap();
+        println!("écrit : {}", path.display());
+    }
+}

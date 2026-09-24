@@ -6,7 +6,7 @@
 //! | Module   | Rôle                                                   | Inventaire Acrobat |
 //! |----------|--------------------------------------------------------|--------------------|
 //! | `accessibility` | arbre de structure (§14.7), vérificateur PDF/UA, balisage automatique | §10 |
-//! | `annotations` | inventaire, création avec apparences (carré, ellipse, ligne et flèche, polygone, ligne brisée, encre, zone de texte et légende, surlignage, soulignement, barré, ondulé, insertion, remplacement groupé, note, lien), identifiant `/NM` et date de création, suppression (groupes compris) ; géométrie pure des formes (`shapes`) et mise en lignes du texte (`freetext`) | §8 |
+//! | `annotations` | inventaire, création avec apparences (carré, ellipse, ligne et flèche, polygone, ligne brisée, encre, zone de texte et légende, surlignage, soulignement, barré, ondulé, insertion, remplacement groupé, note, lien), identifiant `/NM` et date de création, suppression (groupes, réponses et états compris) ; modification (`set_annotation_properties` : place, taille, couleurs, opacité, trait, texte, apparence régénérée par `appearance`) ; réponses, statuts et fils de discussion (`review`) ; géométrie pure des formes (`shapes`) et mise en lignes du texte (`freetext`) | §8 |
 //! | `attach` | pièces jointes : arbre `/Names /EmbeddedFiles`, annotations `/FileAttachment`, ajout, extraction, retrait | §11 |
 //! | `docinfo` | propriétés du document : `/Info`, paquet XMP, propriétés d'ouverture, assainissement | §12.2, §14.3 |
 //! | `create` | création de documents : page blanche, images, texte, Markdown, combinaison | §1 |

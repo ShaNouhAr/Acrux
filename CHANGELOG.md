@@ -9,6 +9,46 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 
 ## 0.23.0 — non publiée
 
+- **Gérer les commentaires sur la page, comme dans Acrobat.** Un clic sur une
+  annotation — une des nôtres ou celle d'un autre logiciel — la sélectionne :
+  cadre d'accent, poignées, et au-dessus une **barre de propriétés** (couleur,
+  fond, épaisseur, opacité, texte, répondre, supprimer). On la **déplace** en
+  la glissant (elle suit le pointeur telle qu'elle est), on la
+  **redimensionne** par ses poignées — le trait garde son épaisseur —, `Suppr`
+  la supprime, les flèches la décalent d'un point (dix avec `Maj`), `Échap` la
+  désélectionne. Chaque geste est **une** modification : `Ctrl+Z` le défait
+  entier. Un surlignage, un soulignement ou un barré suivent le texte : un
+  clic dessus ne vole pas la sélection du texte, son relâchement le
+  sélectionne, et un double-clic ouvre sa bulle. « Remplir et signer »,
+  « Modifier les objets » et « Modifier le PDF » gardent leurs propres
+  sélections.
+- **La bulle d'un commentaire** s'ouvre d'un clic sur une note (ou d'un
+  double-clic sur une forme, d'Entrée, du menu) : auteur, date, statut, case
+  cochée, texte, et les **réponses**, indentées sous ce à quoi elles répondent.
+  « Répondre » ouvre un champ dans la bulle : `Entrée` publie. Les réponses ne
+  se dessinent plus en double sur la note.
+- **Le panneau Notes** montre pour chaque commentaire sa pastille, son auteur,
+  sa date, son texte, ses réponses, son **statut** (Accepté, Refusé, Annulé,
+  Terminé — un clic le change) et sa **case à cocher**. La liste se **trie**
+  (page, auteur, date, type), se **filtre** (par type, par auteur) et se
+  **cherche** (texte, auteur, réponses, sans tenir compte de la casse ni des
+  accents). Un clic sur un commentaire y mène et le sélectionne.
+- **Clic droit sur un commentaire** : répondre, modifier le texte, statut,
+  cocher, supprimer. Les mêmes commandes sont dans la palette quand un
+  commentaire est sélectionné.
+- Supprimer un commentaire emporte ses réponses, ses statuts et sa fenêtre
+  contextuelle ; s'il a des réponses, la question est posée d'abord.
+- Une petite modification (un commentaire déplacé, une réponse, un statut) ne
+  fait plus passer les pages au blanc le temps de leur rendu : l'image d'avant
+  reste jusqu'à ce que la nouvelle arrive.
+- `acr annot-set <fichier> <page> <n°>` modifie une annotation : `--rect`,
+  `--move dx,dy`, `--color RRGGBB`, `--fill RRGGBB|none`, `--opacity`,
+  `--width`, `--text`, et le statut `--state accepted|rejected|cancelled|completed|none`
+  ou la case `--marked oui|non` ; l'apparence est redessinée. `acr
+  annot-remove` retire une annotation et son fil, `acr reply` y répond.
+  `acr annots` montre sous chaque commentaire sa date, son statut, sa case et
+  ses réponses (`↳`).
+
 - **Dessiner sur la page : rectangle, ellipse, ligne, flèche, crayon.** La
   barre des commentaires a un second groupe d'outils, après un filet. On
   glisse, la forme suit le pointeur telle qu'elle sera posée, et se pose au

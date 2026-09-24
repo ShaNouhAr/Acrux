@@ -48,6 +48,30 @@ Le corpus réel `reels/chrome-skia-2pages-texte-tableau-svg.pdf` sert
 d'épreuve (`tests/text_markup_corpus.rs`) : un mot souligné, un autre
 remplacé, relus après enregistrement, et le texte de la page inchangé.
 
+## Gérer les commentaires (`annotations::{edit, appearance, review}`)
+
+Une annotation posée — ici ou par un autre logiciel — se modifie, se
+commente et se supprime :
+
+| Fonction | Ce qu'elle fait |
+| --- | --- |
+| `set_annotation_properties` | `AnnotChanges` : nouveau rectangle (la géométrie `/QuadPoints`, `/InkList`, `/Vertices`, `/L`, `/CL` suit, la `/Popup` se décale), couleur, fond, opacité, épaisseur, texte, date `/M` fixée d'avance ; refuse champs, liens, fenêtres, éléments de « remplir et signer », et le déplacement d'un balisage |
+| `appearance::regenerate` | redessine l'apparence avec le code qui l'a créée (`shapes`, balisage, icône de note, `freetext` d'après `/DA`) ; un simple déplacement garde l'apparence, un type inconnu (tampon) est enveloppé pour l'opacité |
+| `review::add_reply` | réponse : une note `/IRT` `/RT /R` sans apparence |
+| `review::set_state` | statut (`/StateModel (Review)` : Accepté, Refusé, Annulé, Terminé, aucun) ou case (`Marked`) : une note d'état cachée, ajoutée aux précédentes ; la plus récente fait foi |
+| `review::comment_threads` | les fils du document : chaque commentaire, ses réponses (profondeur), son statut, sa case ; membres de groupe et états exclus, cycles d'`/IRT` bornés |
+| `remove_annotation` | emporte réponses, états, membres du groupe et fenêtre contextuelle |
+| `set_hidden`, `readable_date` | cacher une annotation (bit 2 de `/F`) ; une date `D:…` lisible |
+
+L'opacité est écrite dans l'apparence **et** dans `/CA`, comme Acrobat. Le
+moteur de rendu ne dessine pas les réponses (une note `/IRT` partage le
+rectangle de sa mère) et sait rendre une annotation seule
+(`acrux_render::render_annotation`), pour l'aperçu d'un geste. Corpus :
+`synthese/commentaires-fils-etats.pdf` (trois notes de deux auteurs, deux
+réponses dont une imbriquée, un statut, une case, un rectangle et sa fenêtre,
+un surlignage), écrit par `cargo test -p acrux-features --lib -- --ignored
+generate_comment_threads_corpus`.
+
 ## Dessiner et écrire (`annotations::shapes`, `annotations::freetext`)
 
 Les formes et les zones de texte ont leur géométrie dans deux sous-modules
