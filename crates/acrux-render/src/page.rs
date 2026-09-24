@@ -27,12 +27,44 @@ pub struct RenderedPage {
 /// rotation comprise.
 #[must_use]
 pub fn page_pixel_size(doc: &Document, page: &Page, scale: f64) -> (u32, u32) {
-    let b = page.crop_box(doc);
+    page_pixel_size_rotated(doc, page, scale, 0)
+}
+
+/// Comme [`page_pixel_size`], la page tournée **en plus** de `extra` degrés
+/// dans le sens horaire (un multiple de 90, négatif permis).
+///
+/// C'est la rotation de la **vue** d'un lecteur (Ctrl+Maj+Plus dans
+/// Acrobat) : elle change ce qu'on voit, jamais le document. Elle ne passe
+/// pas par [`RenderOptions`], que l'interpréteur construit par littéral
+/// complet pour chaque groupe de transparence et chaque motif : une rotation
+/// n'y aurait aucun sens, elle ne vaut que pour la page entière.
+#[must_use]
+pub fn page_pixel_size_rotated(doc: &Document, page: &Page, scale: f64, extra: i32) -> (u32, u32) {
+    pixel_size(
+        &page.crop_box(doc),
+        scale,
+        add_rotation(page.rotate(doc), extra),
+    )
+}
+
+/// Rotation d'une page (`/Rotate`, déjà ramenée entre 0 et 359) augmentée de
+/// `extra` degrés, ramenée elle aussi entre 0 et 359.
+///
+/// La normalisation n'est pas une coquetterie : [`base_matrix`] ne reconnaît
+/// que 90, 180 et 270, et une page à `/Rotate 270` tournée de 180 donnerait
+/// sinon 450 — dessinée droite, mais à la taille d'une page couchée.
+#[must_use]
+pub fn add_rotation(rotate: i32, extra: i32) -> i32 {
+    (rotate + extra).rem_euclid(360)
+}
+
+/// Dimensions en pixels d'une boîte à une échelle et une rotation données.
+fn pixel_size(b: &Rect, scale: f64, rotate: i32) -> (u32, u32) {
     let w = (b.width() * scale).round().max(1.0);
     let h = (b.height() * scale).round().max(1.0);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let (w, h) = (w.min(65535.0) as u32, h.min(65535.0) as u32);
-    match page.rotate(doc) {
+    match rotate {
         90 | 270 => (h, w),
         _ => (w, h),
     }
@@ -68,9 +100,24 @@ pub fn render_page(
     scale: f64,
     options: &RenderOptions,
 ) -> RenderedPage {
-    let (width, height) = page_pixel_size(doc, page, scale);
+    render_page_rotated(doc, page, scale, 0, options)
+}
+
+/// Comme [`render_page`], la page tournée en plus de `extra` degrés dans le
+/// sens horaire : la rotation de la vue (voir [`page_pixel_size_rotated`]).
+/// Le document n'est pas touché.
+#[must_use]
+pub fn render_page_rotated(
+    doc: &Document,
+    page: &Page,
+    scale: f64,
+    extra: i32,
+    options: &RenderOptions,
+) -> RenderedPage {
     let bounds = page.crop_box(doc);
-    let base_ctm = base_matrix(&bounds, scale, page.rotate(doc), width, height);
+    let rotate = add_rotation(page.rotate(doc), extra);
+    let (width, height) = pixel_size(&bounds, scale, rotate);
+    let base_ctm = base_matrix(&bounds, scale, rotate, width, height);
     let mut renderer = Renderer::new(doc, width, height, options.clone());
     let resources = doc
         .dict_get(&page.dict, "Resources")

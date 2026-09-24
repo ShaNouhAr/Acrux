@@ -92,7 +92,7 @@ fn usage() {
     eprintln!("  3d      <fichier> [--extract <dossier>]");
     eprintln!("                                  les modèles 3D du document : format, rectangle, géométrie lue ;");
     eprintln!("                                  --extract écrit les fichiers U3D tels quels");
-    eprintln!("  render  <fichier> [pages] [--dpi N] [--no-annots] -o <sortie.png>");
+    eprintln!("  render  <fichier> [pages] [--dpi N] [--rotate deg] [--no-annots] -o <sortie.png>");
     eprintln!("                                  rend les pages en PNG (96 dpi par défaut ; plusieurs pages → sortie-N.png)");
     eprintln!("  export  <fichier> --format png|jpeg|images|html|docx|xlsx|md|txt [--dpi N] [--quality N]");
     eprintln!("          [--pages 1,3-5] [--flow] -o <sortie>");
@@ -1592,6 +1592,23 @@ fn cmd_rewrite(path: &str, rest: &[String]) -> acrux_core::Result<()> {
     Ok(())
 }
 
+/// Valeur de `--rotate` pour `render` : un quart de tour entier, dans le sens
+/// horaire (négatif : l'autre sens) ; 0 sans l'option.
+///
+/// # Errors
+/// Angle illisible ou qui n'est pas un multiple de 90.
+fn view_rotation_arg(rest: &[String]) -> acrux_core::Result<i32> {
+    let Some(value) = option_value(rest, "--rotate") else {
+        return Ok(0);
+    };
+    match value.parse::<i32>() {
+        Ok(degrees) if degrees % 90 == 0 => Ok(degrees),
+        _ => Err(acrux_core::Error::Corrupt(format!(
+            "--rotate attend un multiple de 90 degrés, pas « {value} »"
+        ))),
+    }
+}
+
 fn cmd_render(path: &str, rest: &[String]) -> acrux_core::Result<()> {
     let (doc, _) = open(path)?;
     let pages = collect_pages(&doc)?;
@@ -1606,6 +1623,10 @@ fn cmd_render(path: &str, rest: &[String]) -> acrux_core::Result<()> {
         .and_then(|i| rest.get(i + 1))
         .and_then(|v| v.parse().ok())
         .unwrap_or(96.0);
+    // Tourner l'image, pas le document : c'est la rotation de la vue de
+    // l'application (Ctrl+Maj+Plus), pour voir debout une page couchée sans
+    // rien réécrire. `acr rotate` écrit `/Rotate`, lui.
+    let extra = view_rotation_arg(rest)?;
     let out = output_arg(rest).unwrap_or_else(|_| {
         let stem = std::path::Path::new(path)
             .file_stem()
@@ -1621,7 +1642,7 @@ fn cmd_render(path: &str, rest: &[String]) -> acrux_core::Result<()> {
     for &i in &indices {
         let page = &pages[i];
         let t = Instant::now();
-        let rendered = acrux_render::render_page(&doc, page, dpi / 72.0, &options);
+        let rendered = acrux_render::render_page_rotated(&doc, page, dpi / 72.0, extra, &options);
         let png = acrux_graphics::encode_png(&rendered.bitmap);
         let file = if indices.len() == 1 {
             out.clone()
@@ -4433,5 +4454,15 @@ mod tests {
         let p = parse_permissions(&args(&["--no-modify"])).unwrap();
         assert!(!p.modify && p.assemble, "l'assemblage reste");
         assert!(parse_permissions(&args(&[])).unwrap().is_all());
+    }
+
+    #[test]
+    fn render_tourne_par_quarts_de_tour() {
+        assert_eq!(view_rotation_arg(&args(&[])).unwrap(), 0);
+        assert_eq!(view_rotation_arg(&args(&["--rotate", "90"])).unwrap(), 90);
+        assert_eq!(view_rotation_arg(&args(&["--rotate", "-90"])).unwrap(), -90);
+        assert_eq!(view_rotation_arg(&args(&["--rotate", "540"])).unwrap(), 540);
+        assert!(view_rotation_arg(&args(&["--rotate", "45"])).is_err());
+        assert!(view_rotation_arg(&args(&["--rotate", "droite"])).is_err());
     }
 }
