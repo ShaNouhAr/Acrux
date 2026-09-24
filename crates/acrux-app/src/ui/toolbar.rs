@@ -106,7 +106,7 @@ impl ToolAction {
 }
 
 /// Ce que la barre affiche.
-// Six états indépendants que la barre ne fait que lire : une énumération les
+// Sept états indépendants que la barre ne fait que lire : une énumération les
 // multiplierait sans rien apprendre de plus.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Default)]
@@ -132,17 +132,22 @@ pub struct ToolbarInfo {
     pub panel_open: bool,
     /// La colonne des outils est ouverte : son bouton est « allumé ».
     pub tools_open: bool,
+    /// La colonne des outils tiendrait dans la fenêtre. Sinon son bouton
+    /// est grisé : il ne pourrait rien montrer.
+    pub tools_fit: bool,
     /// Le thème en vigueur est sombre : le bouton du thème montre le soleil
     /// (on passera au clair), sinon la lune.
     pub dark_theme: bool,
 }
 
-/// Le bouton répond-il ? « Annuler » et « Rétablir » suivent l'historique ;
-/// les autres, la présence d'un document quand ils en ont besoin.
+/// Le bouton répond-il ? « Annuler » et « Rétablir » suivent l'historique,
+/// « Outils » la place qu'a sa colonne ; les autres, la présence d'un
+/// document quand ils en ont besoin.
 fn enabled(action: &ToolAction, needs_document: bool, info: &ToolbarInfo) -> bool {
     match action {
         ToolAction::Undo => info.has_document && info.can_undo,
         ToolAction::Redo => info.has_document && info.can_redo,
+        ToolAction::ToggleTools => info.has_document && info.tools_fit,
         _ => info.has_document || !needs_document,
     }
 }
@@ -1162,6 +1167,14 @@ mod tests {
         assert!(!active(&outils, &accueil));
         // Les autres boutons ne s'allument jamais.
         assert!(!active(&ToolAction::Save, &ouvert));
+        // Fenêtre trop étroite pour la colonne : le bouton ne pourrait rien
+        // montrer, il est grisé plutôt que de basculer la préférence en vain.
+        assert!(!enabled(&outils, true, &with_document()));
+        let place = ToolbarInfo {
+            tools_fit: true,
+            ..with_document()
+        };
+        assert!(enabled(&outils, true, &place));
         // L'info-bulle dit ce que le clic fera, et le raccourci.
         let masquer = tip_text(&panneau, &ouvert).unwrap_or_default();
         let afficher = tip_text(&panneau, &with_document()).unwrap_or_default();

@@ -2688,8 +2688,11 @@ impl Viewer {
             .hover_tip(&info)
             .or_else(|| self.tab_tip())
             .or_else(|| self.recent_tip());
+        // Même texte ne veut pas dire même élément : les croix des onglets
+        // disent toutes « Fermer l'onglet ». Sans le rectangle, passer de
+        // l'une à l'autre laissait la bulle sous la première.
         let same = match (&self.tip, &tip) {
-            (Some((a, _, _)), Some((b, _))) => a == b,
+            (Some((a, ra, _)), Some((b, rb))) => a == b && ra == rb,
             (None, None) => true,
             _ => false,
         };
@@ -3485,17 +3488,26 @@ impl Viewer {
 
     /// Largeur que la colonne d'outils devrait avoir.
     fn wanted_tools_width(&self) -> f64 {
-        if !self.tools_open || self.reading || self.fullscreen || self.showing_home() {
+        if !self.tools_open
+            || self.reading
+            || self.fullscreen
+            || self.showing_home()
+            || !self.tools_fit()
+        {
             return 0.0;
         }
+        f64::from(crate::ui::tools::WIDTH) * self.dpi_scale
+    }
+
+    /// Vrai si la colonne d'outils tient dans la fenêtre, ouverte ou non.
+    ///
+    /// La barre d'outils grise son bouton quand elle ne tient pas : il
+    /// basculait alors la préférence sans rien montrer, un clic mort.
+    fn tools_fit(&self) -> bool {
         let width = f64::from(crate::ui::tools::WIDTH) * self.dpi_scale;
         let reste = f64::from(self.width) - self.wanted_left() - width;
         // Il faut au moins de quoi afficher une page lisible à côté.
-        if reste < f64::from(MIN_PAGE_WIDTH) * self.dpi_scale {
-            0.0
-        } else {
-            width
-        }
+        reste >= f64::from(MIN_PAGE_WIDTH) * self.dpi_scale
     }
 
     /// Fait avancer les animations de `dt` secondes ; rend vrai s'il reste du
@@ -3675,6 +3687,7 @@ impl Viewer {
             // outils s'efface d'une fenêtre trop étroite pour elle.
             panel_open: self.panel_open && self.sign_panel.is_none() && !self.reading,
             tools_open: self.wanted_tools_width() > 0.0,
+            tools_fit: self.tools_fit(),
             dark_theme: self.theme.is_dark(),
         }
     }

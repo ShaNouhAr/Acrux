@@ -34,10 +34,12 @@ c'est la section correspondante de ce fichier qui devient la page de version.
 - **Fenêtre étroite** : les boutons secondaires (disposition, ajustement,
   imprimer, pivoter, accueil, puis le zoom et les pages, par paires)
   s'effacent au lieu de repousser la recherche, les outils, les paramètres et
-  le thème hors de la fenêtre.
+  le thème hors de la fenêtre. Quand la colonne des outils n'y tient plus, son
+  bouton se grise au lieu de basculer la préférence sans rien montrer.
 - **Onglets** : le survol montre le chemin complet du document (deux
   « facture.pdf » se distinguent enfin) et « modifications non enregistrées »
-  s'il y a lieu ; la croix dit « Fermer l'onglet ». Le **clic du milieu ferme
+  s'il y a lieu ; la croix dit « Fermer l'onglet », sous la croix survolée même
+  quand on passe directement de l'une à l'autre. Le **clic du milieu ferme
   l'onglet**, en proposant d'abord d'enregistrer un document modifié ; il ne
   fait plus glisser la page quand on l'emploie dans les barres.
 - Le harnais invisible gagne `MiddleClick` et `Resize` (fenêtre étroite, sans
